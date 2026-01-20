@@ -18,3 +18,4 @@ server
 
 # Logs
 *.log
+/static/*
