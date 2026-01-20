@@ -39,7 +39,7 @@ func NewServer(lc fx.Lifecycle, logger *zap.Logger, userHandler *handler.UserHan
 	e.Static("/static", "static")
 
 	// Templates
-	renderer, err := templates.NewTemplateRenderer("views/*.html", "static/.vite/manifest.json")
+	renderer, err := templates.NewTemplateRenderer(cfg.Server.TemplateGlob, cfg.Server.ManifestPath)
 	if err != nil {
 		logger.Fatal("Failed to parse templates", zap.Error(err))
 	}

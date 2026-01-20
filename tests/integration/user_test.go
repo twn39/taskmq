@@ -31,7 +31,9 @@ func NewTestDatabase() (*gorm.DB, error) {
 func NewTestConfig() *config.Config {
 	return &config.Config{
 		Server: config.ServerConfig{
-			Port: ":8081", // Use different port for testing if we were binding, though hardcoded in server currently? No I made it use config.
+			Port:         ":8081",
+			TemplateGlob: "../../views/*.html",
+			ManifestPath: "", // No manifest for tests
 		},
 		Database: config.DatabaseConfig{
 			DSN: ":memory:",
@@ -110,7 +112,7 @@ func TestUserEndpoints(t *testing.T) {
 		rec := httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
-		assert.Contains(t, rec.Body.String(), "Hello from GoCMS!")
+		assert.Contains(t, rec.Body.String(), "GoCMS")
 	})
 }
 

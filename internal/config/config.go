@@ -15,7 +15,9 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Port string `mapstructure:"port"`
+	Port         string `mapstructure:"port"`
+	TemplateGlob string `mapstructure:"template_glob"`
+	ManifestPath string `mapstructure:"manifest_path"`
 }
 
 type DatabaseConfig struct {
@@ -32,6 +34,8 @@ func NewConfig() (*Config, error) {
 
 	// Set default values
 	v.SetDefault("server.port", ":8080")
+	v.SetDefault("server.template_glob", "views/*.html")
+	v.SetDefault("server.manifest_path", "static/.vite/manifest.json")
 	v.SetDefault("database.dsn", "gocms.db")
 	v.SetDefault("logger.level", "info")
 
