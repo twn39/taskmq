@@ -1,6 +1,5 @@
 # Binaries
 main
-server
 *.exe
 *.test
 
