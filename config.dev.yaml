@@ -1,0 +1,7 @@
+# Dev Environment Configuration
+server:
+  port: ":8080"
+database:
+  dsn: "gocms_dev.db" # Separate DB for dev
+logger:
+  level: "debug" # More verbose logging

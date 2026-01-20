@@ -1,0 +1,7 @@
+# UAT Environment Configuration
+server:
+  port: ":8081"
+database:
+  dsn: "gocms_uat.db"
+logger:
+  level: "info"

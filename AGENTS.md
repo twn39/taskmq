@@ -4,7 +4,11 @@
 - **Run Server**: Use `go run cmd/server/main.go` to start the application. (Default port: 8080)
 - **Dependencies**: Run `go mod tidy` to ensure `go.mod` and `go.sum` are up to date.
 - **Linting**: Run `golangci-lint run` to check for code style and potential errors. Ensure your `golangci-lint` binary matches the configuration version (v2).
-- **Configuration**: `config.yaml` is the default config file. Environment variables with prefix `GOCMS_` can override settings (e.g., `GOCMS_SERVER_PORT=:3000`).
+- **Configuration**:
+    - `config.yaml` is the default config file.
+    - Set `APP_ENV` environment variable to load specific configs (e.g., `export APP_ENV=dev` loads `config.dev.yaml`).
+    - Supported environments: `dev`, `uat`, `prod` (create corresponding `config.<env>.yaml` files).
+    - Environment variables with prefix `GOCMS_` can override settings (e.g., `GOCMS_SERVER_PORT=:3000`).
 
 ## Testing instructions
 - **Run All Tests**: `go test ./...`

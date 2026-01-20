@@ -1,6 +1,7 @@
 package config
 
 import (
+	"os"
 	"strings"
 
 	"github.com/spf13/viper"
@@ -40,9 +41,18 @@ func NewConfig() (*Config, error) {
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 
+	// Determine config file name based on APP_ENV
+	// Default: config.yaml
+	// If APP_ENV=prod, looks for config.prod.yaml
+	env := os.Getenv("APP_ENV")
+	configName := "config"
+	if env != "" {
+		configName = "config." + env
+	}
+
 	// Optionally look for a config file
 	v.AddConfigPath(".")
-	v.SetConfigName("config")
+	v.SetConfigName(configName)
 	v.SetConfigType("yaml")
 
 	// Attempt to read the config file, ignore error if not found

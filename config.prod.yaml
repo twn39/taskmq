@@ -1,0 +1,7 @@
+# Prod Environment Configuration
+server:
+  port: ":3000"
+database:
+  dsn: "gocms.db"
+logger:
+  level: "error" # Reduce noise in prod
