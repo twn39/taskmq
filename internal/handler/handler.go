@@ -38,8 +38,9 @@ func NewUserHandler(db *gorm.DB, logger *zap.Logger) *UserHandler {
 // GetHello returns a simple hello message
 func (h *UserHandler) GetHello(c echo.Context) error {
 	h.logger.Info("Hello endpoint called")
-	return c.JSON(http.StatusOK, map[string]string{
-		"message": "Hello from GoCMS!",
+	return c.Render(http.StatusOK, "index.html", map[string]interface{}{
+		"Title":   "GoCMS",
+		"Message": "Welcome to the GoCMS API!",
 	})
 }
 

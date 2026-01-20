@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>GoCMS</title>
+    <!-- Tailwind CSS -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Google Fonts -->
+    <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;700&display=swap" rel="stylesheet">
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Outfit', 'sans-serif'],
+                    },
+                    colors: {
+                        primary: '#4F46E5', // Indigo 600
+                        secondary: '#8B5CF6', // Violet 500
+                    }
+                }
+            }
+        }
+    </script>
+</head>
+
+<body
+    class="bg-indigo-50/50 text-slate-800 min-h-screen flex flex-col items-center justify-center overflow-hidden relative selection:bg-indigo-100 selection:text-indigo-700">
+
+    <!-- Background Elements -->
+    <div class="absolute top-0 left-0 w-full h-full overflow-hidden z-0 pointer-events-none">
+        <!-- Top Left Blob -->
+        <div
+            class="absolute top-[-20%] left-[-10%] w-[50%] h-[50%] bg-blue-200/60 rounded-full blur-[100px] mix-blend-multiply animate-blob">
+        </div>
+        <!-- Bottom Right Blob -->
+        <div
+            class="absolute bottom-[-20%] right-[-10%] w-[50%] h-[50%] bg-purple-200/60 rounded-full blur-[100px] mix-blend-multiply animate-blob animation-delay-2000">
+        </div>
+        <!-- Center Blob (Subtle) -->
+        <div
+            class="absolute top-[20%] left-[30%] w-[40%] h-[40%] bg-pink-200/60 rounded-full blur-[100px] mix-blend-multiply animate-blob animation-delay-4000 opacity-70">
+        </div>
+    </div>
+
+    <!-- Main Content -->
+    <div class="z-10 text-center space-y-8 p-6 max-w-4xl mx-auto">
+
+        <!-- Badge -->
+        <div
+            class="inline-flex items-center px-4 py-2 rounded-full bg-white/60 backdrop-blur-md border border-white/40 shadow-sm mb-4 animate-fade-in-up">
+            <span class="flex h-2 w-2 relative mr-2">
+                <span
+                    class="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
+                <span class="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+            </span>
+            <span class="text-xs font-semibold uppercase tracking-wider text-slate-600">API v1.0 Ready</span>
+        </div>
+
+        <!-- Logo / Title -->
+        <h1 class="text-7xl md:text-9xl font-bold pb-2 tracking-tight">
+            <span
+                class="bg-clip-text text-transparent bg-gradient-to-r from-blue-600 via-indigo-600 to-purple-600 drop-shadow-sm">
+                {{.Title}}
+            </span>
+        </h1>
+
+        <!-- Description -->
+        <p class="text-xl md:text-2xl text-slate-600 font-light max-w-2xl mx-auto leading-relaxed">
+            A friendly, modular way to build web services with
+            <span class="text-blue-600 font-medium">Go</span>,
+            <span class="text-indigo-600 font-medium">Echo</span>, and
+            <span class="text-purple-600 font-medium">Fx</span>.
+        </p>
+
+        <!-- CTA Buttons -->
+        <div class="flex flex-col md:flex-row gap-5 justify-center mt-12 items-center">
+            <a href="https://github.com/twn39/gocms" target="_blank"
+                class="px-8 py-4 bg-white text-slate-700 border border-slate-200 rounded-full font-semibold text-lg transition-all hover:bg-slate-50 hover:border-slate-300 hover:shadow-sm">
+                View on GitHub
+            </a>
+        </div>
+    </div>
+
+    <!-- Cards / Features Preview (Optional - keeping it clean for now, maybe add later) -->
+
+    <!-- Footer -->
+    <div class="absolute bottom-8 text-slate-400 text-sm z-10 font-medium tracking-wide">
+        &copy; 2026 GoCMS Project
+    </div>
+
+    <!-- Custom Animations -->
+    <style>
+        @keyframes blob {
+            0% {
+                transform: translate(0px, 0px) scale(1);
+            }
+
+            33% {
+                transform: translate(30px, -50px) scale(1.1);
+            }
+
+            66% {
+                transform: translate(-20px, 20px) scale(0.9);
+            }
+
+            100% {
+                transform: translate(0px, 0px) scale(1);
+            }
+        }
+
+        .animate-blob {
+            animation: blob 7s infinite;
+        }
+
+        .animation-delay-2000 {
+            animation-delay: 2s;
+        }
+
+        .animation-delay-4000 {
+            animation-delay: 4s;
+        }
+
+        @keyframes fadeInUp {
+            from {
+                opacity: 0;
+                transform: translateY(20px);
+            }
+
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .animate-fade-in-up {
+            animation: fadeInUp 0.8s ease-out forwards;
+        }
+    </style>
+
+</body>
+
+</html>
