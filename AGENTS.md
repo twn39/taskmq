@@ -4,7 +4,8 @@
 - **Run Server**: Use `go run cmd/server/main.go` to start the application. (Default port: 8080)
 - **Dependencies**: Run `go mod tidy` to ensure `go.mod` and `go.sum` are up to date.
 - **Linting**: Run `golangci-lint run` to check for code style and potential errors. Ensure your `golangci-lint` binary matches the configuration version (v2).
-- **Configuration**:
+- **Frontend Dev**: Run `npm run dev` in `web/` directory to watch for CSS changes. Ensure `npm run build` is run before deployment.
+    - **Configuration**:
     - `config.yaml` is the default config file.
     - Set `APP_ENV` environment variable to load specific configs (e.g., `export APP_ENV=dev` loads `config.dev.yaml`).
     - Supported environments: `dev`, `uat`, `prod` (create corresponding `config.<env>.yaml` files).
@@ -24,4 +25,8 @@
     - `handler`: HTTP handlers and routing logic (Echo).
     - `logger`: Structured logging setup (Zap).
     - `server`: Server lifecycle and Fx dependency injection setup.
+- `web/`: Frontend assets (Tailwind CSS, Vite config).
+    - `main.css`: Main CSS file with Tailwind directives.
+    - `views/`: HTML templates.
+    - `static/`: Generated static assets (do not edit manually).
 - `tests/integration`: Integration tests folder.

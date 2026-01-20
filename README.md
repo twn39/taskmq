@@ -10,6 +10,7 @@ A simple HTTP API built with Go, featuring dependency injection, modular structu
 -   **ORM**: [GORM](https://gorm.io/) (SQLite)
 -   **Logging**: [Zap](https://github.com/uber-go/zap)
 -   **Configuration**: [Viper](https://github.com/spf13/viper)
+-   **Frontend**: HTML Templates, Tailwind CSS (via Vite)
 
 ## Features
 
@@ -18,12 +19,14 @@ A simple HTTP API built with Go, featuring dependency injection, modular structu
 -   Structured logging
 -   Graceful shutdown
 -   Integration tests
+-   Modern UI with Tailwind CSS
 
 ## Getting Started
 
 ### Prerequisites
 
 -   Go 1.25 or higher installed
+-   Node.js & npm (for frontend assets)
 
 ### Installation
 
@@ -38,6 +41,23 @@ A simple HTTP API built with Go, featuring dependency injection, modular structu
     go mod tidy
     ```
 
+### Frontend Development
+2.  Install dependencies:
+    ```bash
+    cd web
+    npm install
+    ```
+
+3.  Build assets (development with watch):
+    ```bash
+    npm run dev
+    ```
+
+4.  Build assets (production):
+    ```bash
+    npm run build
+    ```
+
 ### Running the Application
 
 Run the server:
@@ -45,7 +65,7 @@ Run the server:
 go run cmd/server/main.go
 ```
 
-The server will start on port `8080` (default).
+The server will start on port `8080` (default). Access the updated UI at `http://localhost:8080`.
 
 ### Configuration
 
