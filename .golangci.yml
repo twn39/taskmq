@@ -1,3 +1,5 @@
+version: 2
+
 run:
   concurrency: 4
   timeout: 5m
@@ -7,22 +9,17 @@ run:
 linters:
   enable:
     - errcheck
-    - gosimple
     - govet
     - ineffassign
     - staticcheck
-    - typecheck
     - unused
     - revive
     - goconst
-    - gofmt
     - gosec
 
 linters-settings:
   govet:
     check-shadowing: true
-  gofmt:
-    simplify: true
   revive:
     rules:
       - name: exported
