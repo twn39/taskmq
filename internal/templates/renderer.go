@@ -7,6 +7,7 @@ import (
 	"html/template"
 	"io"
 	"os"
+	"strings"
 
 	"github.com/labstack/echo/v4"
 )
@@ -59,6 +60,7 @@ func (t *TemplateRenderer) loadManifest(path string) error {
 }
 
 func (t *TemplateRenderer) assetPath(key string) string {
+	key = strings.TrimSpace(key)
 	if entry, ok := t.manifest[key]; ok {
 		return "/static/" + entry.File
 	}
