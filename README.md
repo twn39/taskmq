@@ -79,3 +79,11 @@ Run integration tests:
 ```bash
 go test ./tests/integration/... -v
 ```
+
+## Linting
+
+To run static code analysis, install [golangci-lint](https://golangci-lint.run/usage/install/) and run:
+```bash
+golangci-lint run
+```
+

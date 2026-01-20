@@ -1,0 +1,42 @@
+run:
+  concurrency: 4
+  timeout: 5m
+  issues-exit-code: 1
+  tests: true
+
+linters:
+  enable:
+    - errcheck
+    - gosimple
+    - govet
+    - ineffassign
+    - staticcheck
+    - typecheck
+    - unused
+    - revive
+    - goconst
+    - gofmt
+    - gosec
+
+linters-settings:
+  govet:
+    check-shadowing: true
+  gofmt:
+    simplify: true
+  revive:
+    rules:
+      - name: exported
+        arguments:
+          - disableStuttering: false
+      - name: package-comments
+      - name: error-naming
+      - name: error-strings
+  gosec:
+     excludes:
+       - G104 # Cancel function of context.WithTimeout/WithCancel is not used. Common in tests or simple apps.
+       - G304 # File path included in file system.
+
+issues:
+  exclude-use-default: false
+  max-issues-per-linter: 0
+  max-same-issues: 0
