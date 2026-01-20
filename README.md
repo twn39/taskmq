@@ -57,7 +57,17 @@ A simple HTTP API built with Go, featuring dependency injection, modular structu
     ```bash
     npm run build
     ```
+### Database Migrations
 
+Run migrations to set up the database schema:
+
+```bash
+# Apply migrations (Up)
+go run cmd/migrate/main.go
+
+# Rollback migrations (Down)
+go run cmd/migrate/main.go -direction=down
+```
 ### Running the Application
 
 Run the server:

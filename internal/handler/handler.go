@@ -23,11 +23,6 @@ type UserHandler struct {
 
 // NewUserHandler creates a new UserHandler
 func NewUserHandler(db *gorm.DB, logger *zap.Logger) *UserHandler {
-	// Auto migrate the User model for simplicity
-	err := db.AutoMigrate(&User{})
-	if err != nil {
-		logger.Error("Failed to auto migrate User model", zap.Error(err))
-	}
 
 	return &UserHandler{
 		db:     db, // Start with a default connection

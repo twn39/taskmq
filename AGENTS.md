@@ -5,6 +5,10 @@
 - **Dependencies**: Run `go mod tidy` to ensure `go.mod` and `go.sum` are up to date.
 - **Linting**: Run `golangci-lint run` to check for code style and potential errors. Ensure your `golangci-lint` binary matches the configuration version (v2).
 - **Frontend Dev**: Run `npm run dev` in `web/` directory to watch for CSS changes. Ensure `npm run build` is run before deployment.
+- **Database Migrations**:
+    - Run `go run cmd/migrate/main.go` to apply migrations (defaults to `up`).
+    - Use `go run cmd/migrate/main.go -direction=down` to rollback.
+    - Migration files are located in `migrations/`.
     - **Configuration**:
     - `config.yaml` is the default config file.
     - Set `APP_ENV` environment variable to load specific configs (e.g., `export APP_ENV=dev` loads `config.dev.yaml`).
@@ -19,6 +23,8 @@
 
 ## Project Structure
 - `cmd/server/main.go`: Application entry point.
+- `cmd/migrate/main.go`: Database migration tool entry point.
+- `migrations/`: SQL migration files (`.up.sql`, `.down.sql`).
 - `internal/`:
     - `config`: Configuration loading via Viper.
     - `database`: Database connection and GORM setup (SQLite).
