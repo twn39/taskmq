@@ -1,4 +1,4 @@
-module github.com/twn39/gocms
+module github.com/twn39/taskmq
 
 go 1.25.6
 

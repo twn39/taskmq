@@ -35,8 +35,8 @@ func NewUserHandler(logger *zap.Logger) *UserHandler {
 func (h *UserHandler) GetHello(c *echo.Context) error {
 	h.logger.Info("Hello endpoint called")
 	return c.JSON(http.StatusOK, map[string]interface{}{
-		"Title":   "GoCMS",
-		"Message": "Welcome to the GoCMS API!",
+		"Title":   "TaskMQ",
+		"Message": "Welcome to the TaskMQ API!",
 	})
 }
 

@@ -8,7 +8,7 @@
     - `config.yaml` is the default config file.
     - Set `APP_ENV` environment variable to load specific configs (e.g., `export APP_ENV=dev` loads `config.dev.yaml`).
     - Supported environments: `dev`, `uat`, `prod` (create corresponding `config.<env>.yaml` files).
-    - Environment variables with prefix `GOCMS_` can override settings (e.g., `GOCMS_SERVER_PORT=:3000`).
+    - Environment variables with prefix `TASKMQ_` can override settings (e.g., `TASKMQ_SERVER_PORT=:3000`).
 
 ## Testing instructions
 - **Run All Tests**: `go test ./...`

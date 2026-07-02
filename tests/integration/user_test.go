@@ -8,10 +8,10 @@ import (
 
 	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
-	"github.com/twn39/gocms/internal/config"
-	"github.com/twn39/gocms/internal/handler"
-	"github.com/twn39/gocms/internal/logger"
-	"github.com/twn39/gocms/internal/server"
+	"github.com/twn39/taskmq/internal/config"
+	"github.com/twn39/taskmq/internal/handler"
+	"github.com/twn39/taskmq/internal/logger"
+	"github.com/twn39/taskmq/internal/server"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 )
@@ -75,6 +75,6 @@ func TestUserEndpoints(t *testing.T) {
 		rec := httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
-		assert.Contains(t, rec.Body.String(), "GoCMS")
+		assert.Contains(t, rec.Body.String(), "TaskMQ")
 	})
 }

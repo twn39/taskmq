@@ -6,8 +6,8 @@ import (
 
 	"github.com/labstack/echo/v5"
 	"github.com/labstack/echo/v5/middleware"
-	"github.com/twn39/gocms/internal/config"
-	"github.com/twn39/gocms/internal/handler"
+	"github.com/twn39/taskmq/internal/config"
+	"github.com/twn39/taskmq/internal/handler"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 )

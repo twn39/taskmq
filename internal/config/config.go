@@ -30,8 +30,8 @@ func NewConfig() (*Config, error) {
 	v.SetDefault("logger.level", "info")
 
 	// Enable environment variable support
-	// This makes env vars like GOCMS_SERVER_PORT map to server.port
-	v.SetEnvPrefix("GOCMS")
+	// This makes env vars like TASKMQ_SERVER_PORT map to server.port
+	v.SetEnvPrefix("TASKMQ")
 	v.SetEnvKeyReplacer(strings.NewReplacer(".", "_"))
 	v.AutomaticEnv()
 

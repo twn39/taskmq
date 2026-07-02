@@ -1,7 +1,7 @@
 package logger
 
 import (
-	"github.com/twn39/gocms/internal/config"
+	"github.com/twn39/taskmq/internal/config"
 	"go.uber.org/zap"
 )
 
