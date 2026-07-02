@@ -63,7 +63,7 @@ func (w *WorkerPool) Register(taskName string, handler HandlerFunc) {
 	w.handlers[taskName] = handler
 }
 
-// Start starts the worker pool consumers
+// Start starts the worker pool consumers, scheduler, and janitor loops
 func (w *WorkerPool) Start(ctx context.Context) error {
 	streamKey := fmt.Sprintf("taskmq:queue:%s", w.queue)
 
@@ -82,11 +82,19 @@ func (w *WorkerPool) Start(ctx context.Context) error {
 	// Create a long-running context for the worker loop, independent of the short startup ctx
 	w.ctx, w.cancel = context.WithCancel(context.Background())
 
-	// Start workers
+	// 1. Start workers
 	for i := 0; i < w.concurrency; i++ {
 		w.wg.Add(1)
 		go w.worker(streamKey)
 	}
+
+	// 2. Start Scheduler loop (ZSET -> Stream)
+	w.wg.Add(1)
+	go w.schedulerLoop(streamKey)
+
+	// 3. Start Janitor loop (PEL Recovery)
+	w.wg.Add(1)
+	go w.janitorLoop(streamKey)
 
 	return nil
 }
@@ -144,11 +152,97 @@ func (w *WorkerPool) worker(streamKey string) {
 	}
 }
 
+func (w *WorkerPool) schedulerLoop(streamKey string) {
+	defer w.wg.Done()
+
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
+
+	delayedKey := fmt.Sprintf("taskmq:delayed:%s", w.queue)
+
+	// Lua script moves ready tasks from ZSET to Stream and removes them from ZSET
+	luaScript := `
+		local elements = redis.call('ZRANGEBYSCORE', KEYS[1], ARGV[1], ARGV[2], 'LIMIT', 0, ARGV[3])
+		if #elements > 0 then
+			for i, member in ipairs(elements) do
+				redis.call('XADD', KEYS[2], '*', 'task', member)
+			end
+			for i, member in ipairs(elements) do
+				redis.call('ZREM', KEYS[1], member)
+			end
+		end
+		return #elements
+	`
+
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case <-ticker.C:
+			nowMs := time.Now().UnixMilli()
+
+			res, err := w.rdb.Eval(w.ctx, luaScript, []string{delayedKey, streamKey}, 0, nowMs, 100).Result()
+			if err != nil {
+				w.logger.Error("Scheduler failed to poll delayed tasks", zap.Error(err))
+				continue
+			}
+
+			count, _ := res.(int64)
+			if count > 0 {
+				w.logger.Debug("Scheduler moved tasks from delayed to active", zap.Int64("count", count))
+			}
+		}
+	}
+}
+
+func (w *WorkerPool) janitorLoop(streamKey string) {
+	defer w.wg.Done()
+
+	// Scan every 3 seconds for test sensitivity, in production this can be 10-30 seconds
+	ticker := time.NewTicker(3 * time.Second)
+	defer ticker.Stop()
+
+	// Min idle time before considering a task stalled (e.g. 5 seconds for tests)
+	minIdleTime := 5 * time.Second
+
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case <-ticker.C:
+			// Claim stalled messages via XAutoClaim
+			claimed, _, err := w.rdb.XAutoClaim(w.ctx, &redis.XAutoClaimArgs{
+				Stream:   streamKey,
+				Group:    w.group,
+				Consumer: w.consumer,
+				MinIdle:  minIdleTime,
+				Start:    "0-0",
+				Count:    10,
+			}).Result()
+
+			if err != nil {
+				if err == redis.Nil {
+					continue
+				}
+				w.logger.Error("Janitor failed to auto-claim stalled messages", zap.Error(err))
+				continue
+			}
+
+			if len(claimed) > 0 {
+				w.logger.Warn("Janitor reclaimed stalled active tasks from PEL", zap.Int("count", len(claimed)))
+				for _, msg := range claimed {
+					// Run handler in its own goroutine to avoid blocking the Janitor loop
+					go w.processMessage(w.ctx, streamKey, msg)
+				}
+			}
+		}
+	}
+}
+
 func (w *WorkerPool) processMessage(ctx context.Context, streamKey string, msg redis.XMessage) {
 	taskData, ok := msg.Values["task"].(string)
 	if !ok {
 		w.logger.Error("Invalid message payload format, missing 'task' field")
-		// Acknowledge corrupt messages so they don't block the queue
 		_ = w.rdb.XAck(ctx, streamKey, w.group, msg.ID).Err()
 		return
 	}
@@ -163,21 +257,46 @@ func (w *WorkerPool) processMessage(ctx context.Context, streamKey string, msg r
 	handler, exists := w.handlers[task.Name]
 	if !exists {
 		w.logger.Warn("No handler registered for task", zap.String("task_name", task.Name))
-		// Acknowledge unknown tasks so they don't block the queue
 		_ = w.rdb.XAck(ctx, streamKey, w.group, msg.ID).Err()
 		return
 	}
 
-	// Execute handler
-	err = handler(ctx, task)
-	if err != nil {
-		w.logger.Error("Task handler failed",
+	// 1. Enforce timeout context
+	timeout := time.Duration(task.TimeoutMs) * time.Millisecond
+	if timeout <= 0 {
+		timeout = 30 * time.Second // Default fallback timeout
+	}
+
+	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+
+	// Channel must be buffered to prevent goroutine leak if we return early due to timeout
+	errChan := make(chan error, 1)
+
+	go func() {
+		errChan <- handler(timeoutCtx, task)
+	}()
+
+	select {
+	case err = <-errChan:
+		if err != nil {
+			w.logger.Error("Task handler failed",
+				zap.String("task_id", task.ID),
+				zap.String("task_name", task.Name),
+				zap.Error(err),
+			)
+			w.handleFailure(ctx, streamKey, msg, task, err)
+			return
+		}
+	case <-timeoutCtx.Done():
+		err = timeoutCtx.Err() // context.DeadlineExceeded
+		w.logger.Error("Task handler timed out",
 			zap.String("task_id", task.ID),
 			zap.String("task_name", task.Name),
+			zap.Duration("timeout", timeout),
 			zap.Error(err),
 		)
-		// In Stage 1 (MVP), we don't acknowledge failed tasks so they stay in PEL.
-		// Future stages will implement retry and janitor reclamation logic.
+		w.handleFailure(ctx, streamKey, msg, task, err)
 		return
 	}
 
@@ -186,6 +305,102 @@ func (w *WorkerPool) processMessage(ctx context.Context, streamKey string, msg r
 	if err != nil {
 		w.logger.Error("Failed to acknowledge message ID",
 			zap.String("message_id", msg.ID),
+			zap.Error(err),
+		)
+	} else {
+		w.releaseUniqueLock(ctx, task)
+	}
+}
+
+func (w *WorkerPool) handleFailure(ctx context.Context, streamKey string, msg redis.XMessage, task *Task, err error) {
+	task.Retry++
+
+	if task.Retry >= task.MaxRetry {
+		task.LastError = err.Error()
+		w.logger.Error("Task exhausted all retries, moving to DLQ",
+			zap.String("task_id", task.ID),
+			zap.String("task_name", task.Name),
+			zap.Int("retry", task.Retry),
+			zap.String("error", task.LastError),
+		)
+
+		// Serialize and store in DLQ ZSET
+		serialized, _ := task.Serialize()
+		dlqKey := fmt.Sprintf("taskmq:dlq:%s", task.Queue)
+		nowMs := time.Now().UnixMilli()
+
+		pipe := w.rdb.Pipeline()
+		pipe.ZAdd(ctx, dlqKey, redis.Z{
+			Score:  float64(nowMs),
+			Member: serialized,
+		})
+		// Limit to latest 1000 items
+		pipe.ZRemRangeByRank(ctx, dlqKey, 0, -1001)
+		_, zerr := pipe.Exec(ctx)
+		if zerr != nil {
+			w.logger.Error("Failed to write task to DLQ ZSET", zap.Error(zerr))
+		}
+
+		// Acknowledge task to remove it from PEL
+		_ = w.rdb.XAck(ctx, streamKey, w.group, msg.ID).Err()
+		w.releaseUniqueLock(ctx, task)
+		return
+	}
+
+	// Exponential backoff: 2^retry * 100ms (faster for tests, scalable for prod)
+	backoff := time.Millisecond * time.Duration(100*(1<<uint(task.Retry)))
+
+	w.logger.Info("Scheduling task retry with exponential backoff",
+		zap.String("task_id", task.ID),
+		zap.String("task_name", task.Name),
+		zap.Int("retry", task.Retry),
+		zap.Duration("backoff", backoff),
+	)
+
+	// Serialize updated task state
+	serialized, err := task.Serialize()
+	if err != nil {
+		w.logger.Error("Failed to serialize retry task", zap.Error(err))
+		return
+	}
+
+	delayedKey := fmt.Sprintf("taskmq:delayed:%s", task.Queue)
+	at := time.Now().Add(backoff)
+
+	err = w.rdb.ZAdd(ctx, delayedKey, redis.Z{
+		Score:  float64(at.UnixMilli()),
+		Member: serialized,
+	}).Err()
+
+	if err != nil {
+		w.logger.Error("Failed to write retry task to delayed ZSET", zap.Error(err))
+		return
+	}
+
+	// Acknowledge the old stream message to clear it from the active stream's PEL
+	err = w.rdb.XAck(ctx, streamKey, w.group, msg.ID).Err()
+	if err != nil {
+		w.logger.Error("Failed to ACK failed task after re-scheduling", zap.Error(err))
+	}
+}
+
+func (w *WorkerPool) releaseUniqueLock(ctx context.Context, task *Task) {
+	if task.UniqueKey == "" {
+		return
+	}
+	uniqueKey := fmt.Sprintf("taskmq:unique:%s:%s", task.Queue, task.UniqueKey)
+	luaUnlock := `
+		if redis.call("get", KEYS[1]) == ARGV[1] then
+			return redis.call("del", KEYS[1])
+		else
+			return 0
+		end
+	`
+	err := w.rdb.Eval(ctx, luaUnlock, []string{uniqueKey}, task.ID).Err()
+	if err != nil {
+		w.logger.Error("Failed to release task uniqueness lock",
+			zap.String("task_id", task.ID),
+			zap.String("unique_key", task.UniqueKey),
 			zap.Error(err),
 		)
 	}
