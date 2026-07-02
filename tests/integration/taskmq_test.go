@@ -4,7 +4,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -25,7 +24,7 @@ func TestTaskMQ_MVPFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "mvp_test_queue"
-	streamKey := fmt.Sprintf("taskmq:queue:%s", queueName)
+	streamKey := taskmq.StreamKey(queueName)
 
 	type WelcomeEmail struct {
 		Email string `json:"email"`
@@ -35,8 +34,8 @@ func TestTaskMQ_MVPFlow(t *testing.T) {
 	runChan := make(chan *WelcomeEmail, 1)
 
 	var rdb *goredis.Client
-	var client *taskmq.Client
-	var worker *taskmq.WorkerPool
+	var client taskmq.Client
+	var worker taskmq.Worker
 
 	app := fxtest.New(t,
 		fx.Provide(
@@ -44,7 +43,7 @@ func TestTaskMQ_MVPFlow(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) *taskmq.WorkerPool {
+			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
 				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
 					Group:       "test-group",
 					Consumer:    "test-consumer",
@@ -106,13 +105,13 @@ func TestTaskMQ_DelayedFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "delayed_test_queue"
-	streamKey := fmt.Sprintf("taskmq:queue:%s", queueName)
-	delayedKey := fmt.Sprintf("taskmq:delayed:%s", queueName)
+	streamKey := taskmq.StreamKey(queueName)
+	delayedKey := taskmq.DelayedKey(queueName)
 
 	runChan := make(chan time.Time, 1)
 
 	var rdb *goredis.Client
-	var client *taskmq.Client
+	var client taskmq.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
@@ -120,7 +119,7 @@ func TestTaskMQ_DelayedFlow(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) *taskmq.WorkerPool {
+			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
 				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
 					Group:       "delayed-group",
 					Consumer:    "delayed-consumer",
@@ -168,14 +167,14 @@ func TestTaskMQ_RetryFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "retry_test_queue"
-	streamKey := fmt.Sprintf("taskmq:queue:%s", queueName)
-	delayedKey := fmt.Sprintf("taskmq:delayed:%s", queueName)
+	streamKey := taskmq.StreamKey(queueName)
+	delayedKey := taskmq.DelayedKey(queueName)
 
 	var execCount int64
 	doneChan := make(chan bool, 1)
 
 	var rdb *goredis.Client
-	var client *taskmq.Client
+	var client taskmq.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
@@ -183,7 +182,7 @@ func TestTaskMQ_RetryFlow(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) *taskmq.WorkerPool {
+			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
 				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
 					Group:       "retry-group",
 					Consumer:    "retry-consumer",
@@ -240,13 +239,13 @@ func TestTaskMQ_JanitorRecoveryFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "janitor_test_queue"
-	streamKey := fmt.Sprintf("taskmq:queue:%s", queueName)
+	streamKey := taskmq.StreamKey(queueName)
 
 	var runCount int64
 	doneChan := make(chan bool, 1)
 
 	var rdb *goredis.Client
-	var client *taskmq.Client
+	var client taskmq.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
@@ -254,7 +253,7 @@ func TestTaskMQ_JanitorRecoveryFlow(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) *taskmq.WorkerPool {
+			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
 				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
 					Group:       "janitor-group",
 					Consumer:    "janitor-consumer",
@@ -321,13 +320,13 @@ func TestTaskMQ_TimeoutCancellationFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "timeout_test_queue"
-	streamKey := fmt.Sprintf("taskmq:queue:%s", queueName)
-	delayedKey := fmt.Sprintf("taskmq:delayed:%s", queueName)
+	streamKey := taskmq.StreamKey(queueName)
+	delayedKey := taskmq.DelayedKey(queueName)
 
 	var execCount int64
 
 	var rdb *goredis.Client
-	var client *taskmq.Client
+	var client taskmq.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
@@ -335,7 +334,7 @@ func TestTaskMQ_TimeoutCancellationFlow(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) *taskmq.WorkerPool {
+			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
 				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
 					Group:       "timeout-group",
 					Consumer:    "timeout-consumer",
@@ -396,13 +395,13 @@ func TestTaskMQ_UniquenessFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "unique_test_queue"
-	streamKey := fmt.Sprintf("taskmq:queue:%s", queueName)
-	uniqueLockKey := fmt.Sprintf("taskmq:unique:%s:my-unique-key", queueName)
+	streamKey := taskmq.StreamKey(queueName)
+	uniqueLockKey := taskmq.UniqueKey(queueName, "my-unique-key")
 
 	runChan := make(chan bool, 1)
 
 	var rdb *goredis.Client
-	var client *taskmq.Client
+	var client taskmq.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
@@ -410,7 +409,7 @@ func TestTaskMQ_UniquenessFlow(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) *taskmq.WorkerPool {
+			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
 				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
 					Group:       "unique-group",
 					Consumer:    "unique-consumer",
@@ -480,14 +479,14 @@ func TestTaskMQ_DLQFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "dlq_test_queue"
-	streamKey := fmt.Sprintf("taskmq:queue:%s", queueName)
-	dlqKey := fmt.Sprintf("taskmq:dlq:%s", queueName)
+	streamKey := taskmq.StreamKey(queueName)
+	dlqKey := taskmq.DLQKey(queueName)
 
 	runChan := make(chan error, 2)
 	var attempt int64
 
 	var rdb *goredis.Client
-	var client *taskmq.Client
+	var client taskmq.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
@@ -495,7 +494,7 @@ func TestTaskMQ_DLQFlow(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) *taskmq.WorkerPool {
+			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
 				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
 					Group:       "dlq-group",
 					Consumer:    "dlq-consumer",

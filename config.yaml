@@ -9,3 +9,4 @@ logger:
 # Redis configuration
 redis:
   addr: "localhost:6379"
+  pool_size: 0 # Maximum number of socket connections (0 resolved dynamically)

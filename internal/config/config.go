@@ -26,6 +26,7 @@ type RedisConfig struct {
 	Addr     string `mapstructure:"addr"`
 	Password string `mapstructure:"password"`
 	DB       int    `mapstructure:"db"`
+	PoolSize int    `mapstructure:"pool_size"`
 }
 
 // NewConfig loads the configuration from environment variables and/or config files
@@ -38,6 +39,7 @@ func NewConfig() (*Config, error) {
 	v.SetDefault("redis.addr", "localhost:6379")
 	v.SetDefault("redis.password", "")
 	v.SetDefault("redis.db", 0)
+	v.SetDefault("redis.pool_size", 0)
 
 	// Enable environment variable support
 	// This makes env vars like TASKMQ_SERVER_PORT map to server.port

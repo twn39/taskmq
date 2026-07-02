@@ -5,3 +5,4 @@ logger:
   level: "debug" # More verbose logging
 redis:
   addr: "localhost:6379"
+  pool_size: 0

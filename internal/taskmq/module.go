@@ -12,8 +12,8 @@ import (
 var Module = fx.Module("taskmq",
 	fx.Provide(
 		NewClient,
-		// Provide WorkerPool with a default queue named "default"
-		func(rdb *redis.Client, logger *zap.Logger) *WorkerPool {
+		// Provide Worker with a default queue named "default"
+		func(rdb *redis.Client, logger *zap.Logger) Worker {
 			return NewWorkerPool(rdb, logger, "default")
 		},
 	),
@@ -21,7 +21,7 @@ var Module = fx.Module("taskmq",
 )
 
 // RegisterWorkerPoolLifecycle registers worker pool startup and shutdown inside Fx container lifecycle hooks.
-func RegisterWorkerPoolLifecycle(lc fx.Lifecycle, worker *WorkerPool) {
+func RegisterWorkerPoolLifecycle(lc fx.Lifecycle, worker Worker) {
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
 			return worker.Start(ctx)

@@ -12,7 +12,13 @@ import (
 
 type HandlerFunc func(ctx context.Context, task *Task) error
 
-type WorkerPool struct {
+type Worker interface {
+	Register(taskName string, handler HandlerFunc)
+	Start(ctx context.Context) error
+	Stop()
+}
+
+type workerPool struct {
 	rdb         *redis.Client
 	logger      *zap.Logger
 	queue       string
@@ -31,8 +37,8 @@ type WorkerOptions struct {
 	Concurrency int
 }
 
-func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...WorkerOptions) *WorkerPool {
-	pool := &WorkerPool{
+func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...WorkerOptions) Worker {
+	pool := &workerPool{
 		rdb:         rdb,
 		logger:      logger,
 		queue:       queue,
@@ -59,13 +65,13 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 }
 
 // Register registers a handler function for a specific task name
-func (w *WorkerPool) Register(taskName string, handler HandlerFunc) {
+func (w *workerPool) Register(taskName string, handler HandlerFunc) {
 	w.handlers[taskName] = handler
 }
 
 // Start starts the worker pool consumers, scheduler, and janitor loops
-func (w *WorkerPool) Start(ctx context.Context) error {
-	streamKey := fmt.Sprintf("taskmq:queue:%s", w.queue)
+func (w *workerPool) Start(ctx context.Context) error {
+	streamKey := StreamKey(w.queue)
 
 	// Create Consumer Group. Ignore BUSYGROUP error if it already exists.
 	err := w.rdb.XGroupCreateMkStream(ctx, streamKey, w.group, "$").Err()
@@ -100,7 +106,7 @@ func (w *WorkerPool) Start(ctx context.Context) error {
 }
 
 // Stop stops the worker pool gracefully
-func (w *WorkerPool) Stop() {
+func (w *workerPool) Stop() {
 	w.logger.Info("Stopping TaskMQ worker pool gracefully")
 	if w.cancel != nil {
 		w.cancel()
@@ -109,7 +115,7 @@ func (w *WorkerPool) Stop() {
 	w.logger.Info("TaskMQ worker pool stopped")
 }
 
-func (w *WorkerPool) worker(streamKey string) {
+func (w *workerPool) worker(streamKey string) {
 	defer w.wg.Done()
 
 	for {
@@ -152,13 +158,13 @@ func (w *WorkerPool) worker(streamKey string) {
 	}
 }
 
-func (w *WorkerPool) schedulerLoop(streamKey string) {
+func (w *workerPool) schedulerLoop(streamKey string) {
 	defer w.wg.Done()
 
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
-	delayedKey := fmt.Sprintf("taskmq:delayed:%s", w.queue)
+	delayedKey := DelayedKey(w.queue)
 
 	// Lua script moves ready tasks from ZSET to Stream and removes them from ZSET
 	luaScript := `
@@ -195,7 +201,7 @@ func (w *WorkerPool) schedulerLoop(streamKey string) {
 	}
 }
 
-func (w *WorkerPool) janitorLoop(streamKey string) {
+func (w *workerPool) janitorLoop(streamKey string) {
 	defer w.wg.Done()
 
 	// Scan every 3 seconds for test sensitivity, in production this can be 10-30 seconds
@@ -239,7 +245,7 @@ func (w *WorkerPool) janitorLoop(streamKey string) {
 	}
 }
 
-func (w *WorkerPool) processMessage(ctx context.Context, streamKey string, msg redis.XMessage) {
+func (w *workerPool) processMessage(ctx context.Context, streamKey string, msg redis.XMessage) {
 	taskData, ok := msg.Values["task"].(string)
 	if !ok {
 		w.logger.Error("Invalid message payload format, missing 'task' field")
@@ -312,7 +318,37 @@ func (w *WorkerPool) processMessage(ctx context.Context, streamKey string, msg r
 	}
 }
 
-func (w *WorkerPool) handleFailure(ctx context.Context, streamKey string, msg redis.XMessage, task *Task, err error) {
+const luaHandleFailure = `
+	local op = ARGV[1]
+	local msgID = ARGV[2]
+	local group = ARGV[3]
+	local score = tonumber(ARGV[4])
+	local serializedTask = ARGV[5]
+
+	-- Safety Check: Perform ZADD (reschedule/archive) BEFORE XACK.
+	-- Since Redis Lua has no rollback, if ZADD fails, the script aborts
+	-- and the message remains in the stream's PEL to prevent task loss.
+	redis.call('ZADD', KEYS[1], score, serializedTask)
+
+	if op == 'dlq' then
+		-- Limit DLQ size to latest 1000 items
+		redis.call('ZREMRANGEBYRANK', KEYS[1], 0, -1001)
+		
+		-- Release unique lock if provided
+		local uniqueKey = KEYS[3]
+		local uniqueKeyVal = ARGV[6]
+		if uniqueKey ~= '' and uniqueKeyVal ~= '' then
+			if redis.call('GET', uniqueKey) == uniqueKeyVal then
+				redis.call('DEL', uniqueKey)
+			end
+		end
+	end
+
+	-- ACK the message in the stream to remove it from PEL
+	return redis.call('XACK', KEYS[2], group, msgID)
+`
+
+func (w *workerPool) handleFailure(ctx context.Context, streamKey string, msg redis.XMessage, task *Task, err error) {
 	task.Retry++
 
 	if task.Retry >= task.MaxRetry {
@@ -326,24 +362,21 @@ func (w *WorkerPool) handleFailure(ctx context.Context, streamKey string, msg re
 
 		// Serialize and store in DLQ ZSET
 		serialized, _ := task.Serialize()
-		dlqKey := fmt.Sprintf("taskmq:dlq:%s", task.Queue)
+		dlqKey := DLQKey(task.Queue)
 		nowMs := time.Now().UnixMilli()
 
-		pipe := w.rdb.Pipeline()
-		pipe.ZAdd(ctx, dlqKey, redis.Z{
-			Score:  float64(nowMs),
-			Member: serialized,
-		})
-		// Limit to latest 1000 items
-		pipe.ZRemRangeByRank(ctx, dlqKey, 0, -1001)
-		_, zerr := pipe.Exec(ctx)
-		if zerr != nil {
-			w.logger.Error("Failed to write task to DLQ ZSET", zap.Error(zerr))
+		var uniqueLockKey string
+		var uniqueLockVal string
+		if task.UniqueKey != "" {
+			uniqueLockKey = UniqueKey(task.Queue, task.UniqueKey)
+			uniqueLockVal = task.ID
 		}
 
-		// Acknowledge task to remove it from PEL
-		_ = w.rdb.XAck(ctx, streamKey, w.group, msg.ID).Err()
-		w.releaseUniqueLock(ctx, task)
+		// Execute atomic DLQ move, lock release, and ACK
+		_, zerr := w.rdb.Eval(ctx, luaHandleFailure, []string{dlqKey, streamKey, uniqueLockKey}, "dlq", msg.ID, w.group, nowMs, serialized, uniqueLockVal).Result()
+		if zerr != nil {
+			w.logger.Error("Failed to move task to DLQ atomically", zap.Error(zerr))
+		}
 		return
 	}
 
@@ -364,31 +397,21 @@ func (w *WorkerPool) handleFailure(ctx context.Context, streamKey string, msg re
 		return
 	}
 
-	delayedKey := fmt.Sprintf("taskmq:delayed:%s", task.Queue)
+	delayedKey := DelayedKey(task.Queue)
 	at := time.Now().Add(backoff)
 
-	err = w.rdb.ZAdd(ctx, delayedKey, redis.Z{
-		Score:  float64(at.UnixMilli()),
-		Member: serialized,
-	}).Err()
-
-	if err != nil {
-		w.logger.Error("Failed to write retry task to delayed ZSET", zap.Error(err))
-		return
-	}
-
-	// Acknowledge the old stream message to clear it from the active stream's PEL
-	err = w.rdb.XAck(ctx, streamKey, w.group, msg.ID).Err()
-	if err != nil {
-		w.logger.Error("Failed to ACK failed task after re-scheduling", zap.Error(err))
+	// Execute atomic retry schedule and ACK
+	_, zerr := w.rdb.Eval(ctx, luaHandleFailure, []string{delayedKey, streamKey, ""}, "retry", msg.ID, w.group, at.UnixMilli(), serialized, "").Result()
+	if zerr != nil {
+		w.logger.Error("Failed to schedule task retry atomically", zap.Error(zerr))
 	}
 }
 
-func (w *WorkerPool) releaseUniqueLock(ctx context.Context, task *Task) {
+func (w *workerPool) releaseUniqueLock(ctx context.Context, task *Task) {
 	if task.UniqueKey == "" {
 		return
 	}
-	uniqueKey := fmt.Sprintf("taskmq:unique:%s:%s", task.Queue, task.UniqueKey)
+	uniqueKey := UniqueKey(task.Queue, task.UniqueKey)
 	luaUnlock := `
 		if redis.call("get", KEYS[1]) == ARGV[1] then
 			return redis.call("del", KEYS[1])
