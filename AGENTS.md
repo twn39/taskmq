@@ -1,29 +1,71 @@
-# AGENTS.md
+# AGENTS.md (AI Agent Guidelines)
 
-## Dev environment tips
-- **Run Server**: Use `go run cmd/server/main.go` to start the application. (Default port: 8080)
-- **Dependencies**: Run `go mod tidy` to ensure `go.mod` and `go.sum` are up to date.
-- **Linting**: Run `golangci-lint run` to check for code style and potential errors. Ensure your `golangci-lint` binary matches the configuration version (v2).
-- **Configuration**:
-    - `config.yaml` is the default config file.
-    - Set `APP_ENV` environment variable to load specific configs (e.g., `export APP_ENV=dev` loads `config.dev.yaml`).
-    - Supported environments: `dev`, `uat`, `prod` (create corresponding `config.<env>.yaml` files).
-    - Environment variables with prefix `TASKMQ_` can override settings (e.g., `TASKMQ_SERVER_PORT=:3000`).
+This file serves as the "README for machines" in this repository. It provides context, rules of engagement, and commands for AI Coding Agents (such as Antigravity, Claude Code, Cursor, Roo Code, and Aider).
 
-## Testing instructions
-- **Run All Tests**: `go test ./...`
-- **Integration Tests**: `go test ./tests/integration/... -v`
-- **Linting**: Ensure `golangci-lint run` passes with valid output (exit code 0) before pushing.
-- **Fixing Issues**: if `golangci-lint` fails, fix the reported issues. Note that `gofmt` and `typecheck` are disabled in the current configuration.
+## 🚀 Tech Stack Overview
+- **Language**: Go 1.23
+- **Dependency Injection**: Uber Fx (`go.uber.org/fx`)
+- **HTTP Framework**: Echo v5 (`github.com/labstack/echo/v5`)
+- **Config Management**: Viper (`github.com/spf13/viper`)
+- **Logging**: Zap (`go.uber.org/zap`)
+- **Database / Cache**: Redis Client v9 (`github.com/redis/go-redis/v9`)
+- **Task Queue**: TaskMQ (custom distributed Redis-backed queue)
 
-## Project Structure
-- `cmd/server/main.go`: Application entry point.
+---
+
+## 🛠️ Build, Lint & Test Commands
+
+Run all commands from the workspace root directory:
+
+| Task | Command | Description |
+|---|---|---|
+| **Build** | `go build ./...` | Compile the entire project. |
+| **Run Server** | `go run cmd/server/main.go` | Start the HTTP & gRPC server (default port `8080`). |
+| **Mod Tidy** | `go mod tidy` | Ensure `go.mod` and `go.sum` are up to date. |
+| **Lint** | `/Users/2342184/go/bin/golangci-lint run` | Run lints. Ensure `golangci-lint` passes before any commit. |
+| **All Tests** | `go test ./...` | Run all test suites. |
+| **Integration Tests** | `go test ./tests/integration/... -v` | Run integration tests with verbose output. |
+| **Update Graph** | `codegraph build . -e third_party/` | Rebuild the codebase knowledge graph. |
+
+---
+
+## 📂 Project Structure
+- `api/proto/taskmq/v1/`: Protobuf API definition for the distributed queue.
+- `cmd/server/main.go`: Application entrypoint.
 - `internal/`:
-    - `config`: Configuration loading via Viper.
-    - `handler`: HTTP handlers and routing logic (Echo).
-    - `logger`: Structured logging setup (Zap).
-    - `server`: Server lifecycle and Fx dependency injection setup.
-- `tests/integration`: Integration tests folder.
+  - `config/`: Configuration manager utilizing Viper.
+  - `handler/`: HTTP Echo request handlers.
+  - `logger/`: Zap structured logger.
+  - `redis/`: Redis connection client initialization.
+  - `server/`: HTTP Echo server lifecycle setup.
+  - `taskmq/`: Distributed task queue (worker pool, scheduler, janitor, cron manager).
+- `tests/integration/`: Integration and flow tests.
+
+---
+
+## ⚙️ Configuration & Environment
+- **Default Config**: Loaded from `config.yaml` at root.
+- **Environment Overrides**: Set `APP_ENV` to load environment-specific config files (e.g., `APP_ENV=dev` loads `config.dev.yaml`).
+- **Env Variable Override Prefix**: Variables starting with `TASKMQ_` override yaml settings (e.g., `TASKMQ_SERVER_PORT=:3000`).
+
+---
+
+## 🤖 AI Agent Rules of Engagement
+
+### 1. Codebase Knowledge Graph (`.codegraph/`)
+This project maintains a codebase knowledge graph at `.codegraph/`.
+- **Read First**: Before answering architecture, design, or layout questions, you **MUST** read [.codegraph/README.md](.codegraph/README.md) to understand modularity, god nodes, and component structure.
+- **Use Nodes & Components**: Leverage [.codegraph/components/](.codegraph/components/) and [.codegraph/nodes/](.codegraph/nodes/) to navigate boundaries and symbol definitions instead of scanning raw files.
+- **Keep Graph Synced**: Rebuild the graph using `codegraph build . -e third_party/` whenever you create, delete, or modify code files. Proactively remind the user to do the same.
+- **AI Architectural Insights**: Maintain the `## AI Architectural Insights` section in [.codegraph/README.md](.codegraph/README.md). If missing, run a deep review and write findings using Chinese as requested by `.codegraph/AGENT_PROMPT.md`.
+
+### 2. Implementation Guidelines (DOs and DON'Ts)
+- **DO** use Uber Fx lifecycle hooks (`fx.Hook`) to register startups/shutdowns of background loops or servers.
+- **DO** decouple third-party/external calls and sub-components (like queue runners) by declaring them as separate Fx providers and injecting them via constructor options.
+- **DO** use the custom `BinaryCodec` for high-performance and zero-allocation serialization in TaskMQ where performance is critical.
+- **DON'T** introduce circular dependency chains across packages. Keep packages clean and single-purpose.
+- **DON'T** swallow errors. Log them with Zap structured context (`zap.Error(err)`) and return them.
+- **DON'T** ignore lint failures. Although `gofmt` and `typecheck` linters may be disabled or bypassed on external libraries, your Go files must compile cleanly with `go build ./...`.
 
 ## codegraph-gen
 
