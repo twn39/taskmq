@@ -17,6 +17,7 @@ type Task struct {
 	UniqueKey   string    `json:"unique_key"`
 	UniqueTTLMs int       `json:"unique_ttl_ms"`
 	LastError   string    `json:"last_error"`
+	CronSpec    string    `json:"cron_spec,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 

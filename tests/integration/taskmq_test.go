@@ -611,3 +611,109 @@ func TestTaskMQ_DLQFlow(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Len(t, deadTasksAfterDelete, 0)
 }
+
+func TestTaskMQ_CronFlow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	queueName := "cron_test_queue"
+
+	var runCount int64
+	doneChan := make(chan bool, 1)
+
+	var rdb *goredis.Client
+	var client taskmq.Client
+	var worker taskmq.Worker
+
+	app := fxtest.New(t,
+		fx.Provide(
+			NewTestConfig,
+			logger.NewLogger,
+			internalredis.NewRedisClient,
+			taskmq.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+					Concurrency: 2,
+				})
+				// Register handler for the cron job
+				pool.Register("cron:ticker", func(ctx context.Context, task *taskmq.Task) error {
+					val := atomic.AddInt64(&runCount, 1)
+					if val >= 3 {
+						select {
+						case doneChan <- true:
+						default:
+						}
+					}
+					return nil
+				})
+				return pool
+			},
+		),
+		fx.Invoke(taskmq.RegisterWorkerPoolLifecycle),
+		fx.Populate(&rdb, &client, &worker),
+	)
+
+	// Clean up Redis before test
+	err := rdb.Del(ctx,
+		taskmq.StreamKey(queueName),
+		taskmq.DelayedKey(queueName),
+		taskmq.CronConfigsKey(queueName),
+	).Err()
+	assert.NoError(t, err)
+
+	// Register the Cron task before starting the worker
+	task := taskmq.NewTask("cron:ticker", []byte("tick-payload"), taskmq.TaskOptions{
+		Queue: queueName,
+	})
+	// Trigger every 2 seconds
+	err = client.RegisterCron(ctx, "cron:ticker", "*/2 * * * * *", task)
+	assert.NoError(t, err)
+
+	app.RequireStart()
+	defer app.RequireStop()
+
+	// Wait for cron to trigger at least 3 times
+	select {
+	case <-doneChan:
+		// Success!
+	case <-ctx.Done():
+		t.Fatal("Timeout waiting for cron to execute 3 times")
+	}
+
+	// Now verify Self-Healing:
+	// 1. Corrupt/Delete the ZSET entry representing the next scheduled run
+	delayedKey := taskmq.DelayedKey(queueName)
+	err = rdb.Del(ctx, delayedKey).Err()
+	assert.NoError(t, err)
+
+	// Reset run counter
+	atomic.StoreInt64(&runCount, 0)
+
+	// 2. Wait for Self-healing loop to detect the missing scheduled execution and heal it
+	// Self-healing loop runs every 10 seconds. So within 15 seconds, it should heal and execute at least once.
+	healCtx, healCancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer healCancel()
+
+	healChan := make(chan bool, 1)
+	go func() {
+		for {
+			select {
+			case <-healCtx.Done():
+				return
+			default:
+				if atomic.LoadInt64(&runCount) >= 1 {
+					healChan <- true
+					return
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+		}
+	}()
+
+	select {
+	case <-healChan:
+		// Self-healing recovered the scheduler chain successfully!
+	case <-healCtx.Done():
+		t.Fatal("Timeout waiting for self-healing loop to reschedule missing cron task")
+	}
+}

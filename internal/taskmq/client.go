@@ -17,6 +17,7 @@ type Client interface {
 	Enqueue(ctx context.Context, task *Task) error
 	EnqueueIn(ctx context.Context, task *Task, delay time.Duration) error
 	EnqueueAt(ctx context.Context, task *Task, at time.Time) error
+	RegisterCron(ctx context.Context, jobName string, spec string, task *Task) error
 	ListDeadLetters(ctx context.Context, queue string, limit int) ([]*Task, error)
 	DeleteDeadLetter(ctx context.Context, queue string, taskID string) error
 	RetryDeadLetter(ctx context.Context, queue string, taskID string) error
@@ -187,4 +188,50 @@ func (c *client) RetryDeadLetter(ctx context.Context, queue string, taskID strin
 
 	// Remove from DLQ on successful re-enqueue
 	return c.rdb.ZRem(ctx, dlqKey, targetMember).Err()
+}
+
+const luaRegisterCron = `
+	local configsKey = KEYS[1]
+	local delayedKey = KEYS[2]
+	local jobName = ARGV[1]
+	local spec = ARGV[2]
+	local serializedTask = ARGV[3]
+	local firstRunScore = tonumber(ARGV[4])
+
+	local existing = redis.call('HGET', configsKey, jobName)
+	if existing == serializedTask then
+		return 0
+	end
+
+	redis.call('HSET', configsKey, jobName, serializedTask)
+	redis.call('ZADD', delayedKey, firstRunScore, serializedTask)
+	return 1
+`
+
+func (c *client) RegisterCron(ctx context.Context, jobName string, spec string, task *Task) error {
+	sched, err := CronParser.Parse(spec)
+	if err != nil {
+		return fmt.Errorf("taskmq: invalid cron spec: %w", err)
+	}
+
+	task.Name = jobName
+	task.CronSpec = spec
+	if task.Queue == "" {
+		task.Queue = "default"
+	}
+	if task.ID == "" {
+		task.ID = generateUUID()
+	}
+
+	serialized, err := task.Serialize()
+	if err != nil {
+		return err
+	}
+
+	configsKey := CronConfigsKey(task.Queue)
+	delayedKey := DelayedKey(task.Queue)
+	firstRun := sched.Next(time.Now())
+
+	_, err = c.rdb.Eval(ctx, luaRegisterCron, []string{configsKey, delayedKey}, jobName, spec, serialized, firstRun.UnixMilli()).Result()
+	return err
 }

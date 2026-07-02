@@ -102,6 +102,10 @@ func (w *workerPool) Start(ctx context.Context) error {
 	w.wg.Add(1)
 	go w.janitorLoop(streamKey)
 
+	// 4. Start Cron Self-healing loop
+	w.wg.Add(1)
+	go w.selfHealingLoop()
+
 	return nil
 }
 
@@ -166,7 +170,7 @@ func (w *workerPool) schedulerLoop(streamKey string) {
 
 	delayedKey := DelayedKey(w.queue)
 
-	// Lua script moves ready tasks from ZSET to Stream and removes them from ZSET
+	// Lua script moves ready tasks from ZSET to Stream and removes them from ZSET, returning the moved elements
 	luaScript := `
 		local elements = redis.call('ZRANGEBYSCORE', KEYS[1], ARGV[1], ARGV[2], 'LIMIT', 0, ARGV[3])
 		if #elements > 0 then
@@ -177,7 +181,7 @@ func (w *workerPool) schedulerLoop(streamKey string) {
 				redis.call('ZREM', KEYS[1], member)
 			end
 		end
-		return #elements
+		return elements
 	`
 
 	for {
@@ -193,9 +197,23 @@ func (w *workerPool) schedulerLoop(streamKey string) {
 				continue
 			}
 
-			count, _ := res.(int64)
-			if count > 0 {
-				w.logger.Debug("Scheduler moved tasks from delayed to active", zap.Int64("count", count))
+			elements, ok := res.([]interface{})
+			if !ok {
+				continue
+			}
+
+			if len(elements) > 0 {
+				w.logger.Debug("Scheduler moved tasks from delayed to active", zap.Int("count", len(elements)))
+				for _, el := range elements {
+					memberStr, ok := el.(string)
+					if !ok {
+						continue
+					}
+					task, err := DeserializeTask(memberStr)
+					if err == nil && task.CronSpec != "" {
+						w.handleCronReschedule(task)
+					}
+				}
 			}
 		}
 	}
@@ -426,5 +444,125 @@ func (w *workerPool) releaseUniqueLock(ctx context.Context, task *Task) {
 			zap.String("unique_key", task.UniqueKey),
 			zap.Error(err),
 		)
+	}
+}
+
+func (w *workerPool) handleCronReschedule(task *Task) {
+	if task.CronSpec == "" {
+		return
+	}
+
+	sched, err := CronParser.Parse(task.CronSpec)
+	if err != nil {
+		w.logger.Error("Cron: invalid spec in task", zap.String("job_name", task.Name), zap.String("spec", task.CronSpec), zap.Error(err))
+		return
+	}
+
+	nextTime := sched.Next(time.Now())
+
+	// Create a new task instance for the next run (preserving Name, Payload, Queue, MaxRetry, and CronSpec)
+	nextTask := NewTask(task.Name, task.Payload, TaskOptions{
+		Queue:    task.Queue,
+		MaxRetry: task.MaxRetry,
+	})
+	nextTask.CronSpec = task.CronSpec
+
+	serialized, err := nextTask.Serialize()
+	if err != nil {
+		w.logger.Error("Cron: failed to serialize next task", zap.Error(err))
+		return
+	}
+
+	delayedKey := DelayedKey(task.Queue)
+	err = w.rdb.ZAdd(context.Background(), delayedKey, redis.Z{
+		Score:  float64(nextTime.UnixMilli()),
+		Member: serialized,
+	}).Err()
+
+	if err != nil {
+		w.logger.Error("Cron: failed to ZADD next run to ZSET", zap.Error(err))
+	} else {
+		w.logger.Debug("Cron: scheduled next run", zap.String("job_name", task.Name), zap.Time("next_run", nextTime))
+	}
+}
+
+func (w *workerPool) selfHealingLoop() {
+	defer w.wg.Done()
+
+	// Run self-healing check every 10 seconds for test responsiveness (can be 30s in production)
+	ticker := time.NewTicker(10 * time.Second)
+	defer ticker.Stop()
+
+	configsKey := CronConfigsKey(w.queue)
+	delayedKey := DelayedKey(w.queue)
+
+	for {
+		select {
+		case <-w.ctx.Done():
+			return
+		case <-ticker.C:
+			// 1. Fetch all registered cron configs from Redis Hash
+			configs, err := w.rdb.HGetAll(w.ctx, configsKey).Result()
+			if err != nil {
+				w.logger.Error("Cron Self-Healing: failed to get configs", zap.Error(err))
+				continue
+			}
+
+			if len(configs) == 0 {
+				continue
+			}
+
+			// 2. Fetch all delayed tasks in ZSET to check what is already scheduled
+			delayedMembers, err := w.rdb.ZRange(w.ctx, delayedKey, 0, -1).Result()
+			if err != nil {
+				w.logger.Error("Cron Self-Healing: failed to get delayed ZSET", zap.Error(err))
+				continue
+			}
+
+			activeCrons := make(map[string]bool)
+			for _, m := range delayedMembers {
+				task, err := DeserializeTask(m)
+				if err == nil && task.CronSpec != "" {
+					activeCrons[task.Name] = true
+				}
+			}
+
+			// 3. Scan and heal missing schedules
+			for jobName, configStr := range configs {
+				if activeCrons[jobName] {
+					continue
+				}
+
+				task, err := DeserializeTask(configStr)
+				if err != nil {
+					continue
+				}
+
+				sched, err := CronParser.Parse(task.CronSpec)
+				if err != nil {
+					continue
+				}
+
+				nextTime := sched.Next(time.Now())
+				w.logger.Warn("Cron Self-Healing: detected broken chain, rescheduling job", zap.String("job_name", jobName), zap.Time("next_run", nextTime))
+
+				// Generate next task run
+				nextTask := NewTask(task.Name, task.Payload, TaskOptions{
+					Queue:    task.Queue,
+					MaxRetry: task.MaxRetry,
+				})
+				nextTask.CronSpec = task.CronSpec
+
+				serialized, err := nextTask.Serialize()
+				if err != nil {
+					continue
+				}
+
+				_ = w.rdb.ZAdd(w.ctx, delayedKey, redis.Z{
+					Score:  float64(nextTime.UnixMilli()),
+					Member: serialized,
+				}).Err()
+			}
+		}
 	}
 }
