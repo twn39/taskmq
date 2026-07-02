@@ -5,7 +5,9 @@ import (
 	"github.com/twn39/taskmq/internal/config"
 	"github.com/twn39/taskmq/internal/handler"
 	"github.com/twn39/taskmq/internal/logger"
+	"github.com/twn39/taskmq/internal/redis"
 	"github.com/twn39/taskmq/internal/server"
+	"github.com/twn39/taskmq/internal/taskmq"
 	"go.uber.org/fx"
 )
 
@@ -15,10 +17,14 @@ func main() {
 		fx.Provide(
 			config.NewConfig,
 			logger.NewLogger,
+			redis.NewRedisClient,
 			handler.NewUserHandler,
 			server.NewServer,
 		),
 		// Invoke the server to start it
 		fx.Invoke(func(*echo.Echo) {}),
+
+		// TaskMQ Module
+		taskmq.Module,
 	).Run()
 }

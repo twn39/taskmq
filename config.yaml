@@ -5,3 +5,7 @@ server:
 # Logger configuration
 logger:
   level: "info"
+
+# Redis configuration
+redis:
+  addr: "localhost:6379"

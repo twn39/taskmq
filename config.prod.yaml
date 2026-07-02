@@ -3,3 +3,5 @@ server:
   port: ":3000"
 logger:
   level: "error" # Reduce noise in prod
+redis:
+  addr: "localhost:6379"

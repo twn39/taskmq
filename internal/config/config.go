@@ -11,6 +11,7 @@ import (
 type Config struct {
 	Server ServerConfig `mapstructure:"server"`
 	Logger LoggerConfig `mapstructure:"logger"`
+	Redis  RedisConfig  `mapstructure:"redis"`
 }
 
 type ServerConfig struct {
@@ -21,6 +22,12 @@ type LoggerConfig struct {
 	Level string `mapstructure:"level"`
 }
 
+type RedisConfig struct {
+	Addr     string `mapstructure:"addr"`
+	Password string `mapstructure:"password"`
+	DB       int    `mapstructure:"db"`
+}
+
 // NewConfig loads the configuration from environment variables and/or config files
 func NewConfig() (*Config, error) {
 	v := viper.New()
@@ -28,6 +35,9 @@ func NewConfig() (*Config, error) {
 	// Set default values
 	v.SetDefault("server.port", ":8080")
 	v.SetDefault("logger.level", "info")
+	v.SetDefault("redis.addr", "localhost:6379")
+	v.SetDefault("redis.password", "")
+	v.SetDefault("redis.db", 0)
 
 	// Enable environment variable support
 	// This makes env vars like TASKMQ_SERVER_PORT map to server.port

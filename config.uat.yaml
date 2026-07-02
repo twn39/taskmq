@@ -3,3 +3,5 @@ server:
   port: ":8081"
 logger:
   level: "info"
+redis:
+  addr: "localhost:6379"

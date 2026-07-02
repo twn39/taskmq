@@ -25,6 +25,9 @@ func NewTestConfig() *config.Config {
 		Logger: config.LoggerConfig{
 			Level: "error", // Quiet logs during test
 		},
+		Redis: config.RedisConfig{
+			Addr: "localhost:6379",
+		},
 	}
 }
 
