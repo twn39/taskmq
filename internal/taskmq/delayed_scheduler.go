@@ -2,7 +2,6 @@ package taskmq
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -13,11 +12,11 @@ type delayedScheduler struct {
 	rdb         *redis.Client
 	logger      *zap.Logger
 	queue       string
-	cronManager *cronManager
+	cronManager CronManager
 	codec       Codec
 }
 
-func newDelayedScheduler(rdb *redis.Client, logger *zap.Logger, queue string, cronManager *cronManager, codec Codec) *delayedScheduler {
+func newDelayedScheduler(rdb *redis.Client, logger *zap.Logger, queue string, cronManager CronManager, codec Codec) Runner {
 	return &delayedScheduler{
 		rdb:         rdb,
 		logger:      logger,
@@ -27,10 +26,8 @@ func newDelayedScheduler(rdb *redis.Client, logger *zap.Logger, queue string, cr
 	}
 }
 
-// Start launches the delayed task scheduler loop
-func (s *delayedScheduler) Start(ctx context.Context, wg *sync.WaitGroup) {
-	defer wg.Done()
-
+// Run launches the delayed task scheduler loop
+func (s *delayedScheduler) Run(ctx context.Context) error {
 	ticker := time.NewTicker(500 * time.Millisecond)
 	defer ticker.Stop()
 
@@ -54,7 +51,7 @@ func (s *delayedScheduler) Start(ctx context.Context, wg *sync.WaitGroup) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		case <-ticker.C:
 			nowMs := time.Now().UnixMilli()
 

@@ -26,25 +26,28 @@ type workerPool struct {
 	consumer      string
 	concurrency   int
 	handlers      map[string]HandlerFunc
-	scheduler     *delayedScheduler
-	janitor       *pelRecoveryJanitor
-	cronManager   *cronManager
+	scheduler     Runner
+	janitor       Runner
+	cronManager   CronManager
 	codec         Codec
 	syncExecution bool
 	execPoolSize  int
 	execChan      chan taskExecutionRequest
+	sem           chan struct{}
 	ctx           context.Context
 	cancel        context.CancelFunc
 	wg            sync.WaitGroup
 }
 
 type WorkerOptions struct {
-	Group             string
-	Consumer          string
-	Concurrency       int
-	Codec             Codec
-	SyncExecution     bool
-	ExecutionPoolSize int
+	Group               string
+	Consumer            string
+	Concurrency         int
+	Codec               Codec
+	SyncExecution       bool
+	ExecutionPoolSize   int
+	CronHealingInterval time.Duration
+	CronHealingLockTTL  time.Duration
 }
 
 type taskExecutionRequest struct {
@@ -68,6 +71,9 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 		handlers:      make(map[string]HandlerFunc),
 	}
 
+	cronHealingInterval := 1 * time.Minute
+	cronHealingLockTTL := 50 * time.Second
+
 	if len(opts) > 0 {
 		opt := opts[0]
 		if opt.Group != "" {
@@ -87,9 +93,17 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 		if opt.ExecutionPoolSize > 0 {
 			pool.execPoolSize = opt.ExecutionPoolSize
 		}
+		if opt.CronHealingInterval > 0 {
+			cronHealingInterval = opt.CronHealingInterval
+		}
+		if opt.CronHealingLockTTL > 0 {
+			cronHealingLockTTL = opt.CronHealingLockTTL
+		}
 	}
 
-	pool.cronManager = newCronManager(rdb, logger, queue, pool.codec)
+	pool.sem = make(chan struct{}, pool.execPoolSize)
+
+	pool.cronManager = newCronManager(rdb, logger, queue, pool.codec, cronHealingInterval, cronHealingLockTTL)
 	pool.scheduler = newDelayedScheduler(rdb, logger, queue, pool.cronManager, pool.codec)
 	pool.janitor = newPELRecoveryJanitor(rdb, logger, queue, pool.group, pool.consumer, pool.concurrency, func(ctx context.Context, msg redis.XMessage) {
 		pool.processMessage(ctx, StreamKey(queue), msg)
@@ -136,15 +150,15 @@ func (w *workerPool) Start(ctx context.Context) error {
 
 	// 2. Start Scheduler loop (ZSET -> Stream)
 	w.wg.Add(1)
-	go w.scheduler.Start(w.ctx, &w.wg)
+	go w.runBackgroundLoop(w.scheduler, "scheduler")
 
 	// 3. Start Janitor loop (PEL Recovery)
 	w.wg.Add(1)
-	go w.janitor.Start(w.ctx, &w.wg)
+	go w.runBackgroundLoop(w.janitor, "janitor")
 
 	// 4. Start Cron Self-healing loop
 	w.wg.Add(1)
-	go w.cronManager.Start(w.ctx, &w.wg)
+	go w.runBackgroundLoop(w.cronManager, "cron_manager")
 
 	return nil
 }
@@ -175,6 +189,25 @@ func (w *workerPool) startExecutionPool(ctx context.Context) {
 	}
 }
 
+func (w *workerPool) runBackgroundLoop(runner Runner, name string) {
+	defer w.wg.Done()
+	defer func() {
+		if r := recover(); r != nil {
+			w.logger.Error("Panic recovered in background loop",
+				zap.String("loop_name", name),
+				zap.Any("panic", r),
+			)
+		}
+	}()
+	if err := runner.Run(w.ctx); err != nil && err != context.Canceled {
+		w.logger.Error("Background loop returned error",
+			zap.String("loop_name", name),
+			zap.Error(err),
+		)
+	}
+}
+
+
 func (w *workerPool) runHandlerWithRecovery(ctx context.Context, task *Task, handler HandlerFunc) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
@@ -197,6 +230,13 @@ func (w *workerPool) worker(streamKey string) {
 		case <-w.ctx.Done():
 			return
 		default:
+			// 1. Acquire execution slot token before pulling task from Redis
+			select {
+			case <-w.ctx.Done():
+				return
+			case w.sem <- struct{}{}:
+			}
+
 			// Read messages from the stream using the long-running context w.ctx
 			streams, err := w.rdb.XReadGroup(w.ctx, &redis.XReadGroupArgs{
 				Group:    w.group,
@@ -207,6 +247,7 @@ func (w *workerPool) worker(streamKey string) {
 			}).Result()
 
 			if err != nil {
+				w.releaseToken() // Release token since we didn't get any message
 				if err == redis.Nil {
 					// Timeout block, no new messages
 					continue
@@ -223,12 +264,37 @@ func (w *workerPool) worker(streamKey string) {
 				continue
 			}
 
+			msgPulled := false
 			for _, stream := range streams {
 				for _, msg := range stream.Messages {
-					w.processMessage(w.ctx, streamKey, msg)
+					msgPulled = true
+					if w.syncExecution {
+						w.processMessage(w.ctx, streamKey, msg)
+						w.releaseToken()
+					} else {
+						// Spawn a goroutine for async processing so the consumer thread
+						// doesn't block and can immediately pull the next task.
+						w.wg.Add(1)
+						go func(m redis.XMessage) {
+							defer w.wg.Done()
+							defer w.releaseToken()
+							w.processMessage(w.ctx, streamKey, m)
+						}(msg)
+					}
 				}
 			}
+
+			if !msgPulled {
+				w.releaseToken() // Release token if no messages were actually pulled
+			}
 		}
+	}
+}
+
+func (w *workerPool) releaseToken() {
+	select {
+	case <-w.sem:
+	default:
 	}
 }
 

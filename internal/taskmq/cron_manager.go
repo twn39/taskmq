@@ -3,7 +3,6 @@ package taskmq
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -11,26 +10,28 @@ import (
 )
 
 type cronManager struct {
-	rdb    *redis.Client
-	logger *zap.Logger
-	queue  string
-	codec  Codec
+	rdb             *redis.Client
+	logger          *zap.Logger
+	queue           string
+	codec           Codec
+	healingInterval time.Duration
+	healingLockTTL  time.Duration
 }
 
-func newCronManager(rdb *redis.Client, logger *zap.Logger, queue string, codec Codec) *cronManager {
+func newCronManager(rdb *redis.Client, logger *zap.Logger, queue string, codec Codec, healingInterval time.Duration, healingLockTTL time.Duration) CronManager {
 	return &cronManager{
-		rdb:    rdb,
-		logger: logger,
-		queue:  queue,
-		codec:  codec,
+		rdb:             rdb,
+		logger:          logger,
+		queue:           queue,
+		codec:           codec,
+		healingInterval: healingInterval,
+		healingLockTTL:  healingLockTTL,
 	}
 }
 
-// Start launches the self-healing background routine
-func (m *cronManager) Start(ctx context.Context, wg *sync.WaitGroup) {
-	defer wg.Done()
-
-	ticker := time.NewTicker(10 * time.Second)
+// Run launches the self-healing background routine
+func (m *cronManager) Run(ctx context.Context) error {
+	ticker := time.NewTicker(m.healingInterval)
 	defer ticker.Stop()
 
 	configsKey := CronConfigsKey(m.queue)
@@ -40,10 +41,10 @@ func (m *cronManager) Start(ctx context.Context, wg *sync.WaitGroup) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		case <-ticker.C:
 			// Acquire distributed lock to avoid concurrent self-healing scans in clustered deployment
-			ok, err := m.rdb.SetNX(ctx, lockKey, "1", 9*time.Second).Result()
+			ok, err := m.rdb.SetNX(ctx, lockKey, "1", m.healingLockTTL).Result()
 			if err != nil {
 				m.logger.Error("Cron Self-Healing: failed to acquire lock", zap.Error(err))
 				continue
@@ -63,8 +64,31 @@ func (m *cronManager) Start(ctx context.Context, wg *sync.WaitGroup) {
 				continue
 			}
 
-			// Fetch all delayed tasks in ZSET to check what is already scheduled
-			delayedMembers, err := m.rdb.ZRange(ctx, delayedKey, 0, -1).Result()
+			// Determine the upper bound score for ZSET query and parse configs
+			maxNextTime := time.Now()
+			parsedConfigs := make(map[string]*Task)
+			for jobName, configStr := range configs {
+				task := &Task{}
+				if err := m.codec.Unmarshal([]byte(configStr), task); err != nil {
+					continue
+				}
+				parsedConfigs[jobName] = task
+
+				sched, err := CronParser.Parse(task.CronSpec)
+				if err != nil {
+					continue
+				}
+				nextTime := sched.Next(time.Now())
+				if nextTime.After(maxNextTime) {
+					maxNextTime = nextTime
+				}
+			}
+
+			// Fetch only tasks up to the max next execution time to optimize scanning
+			delayedMembers, err := m.rdb.ZRangeByScore(ctx, delayedKey, &redis.ZRangeBy{
+				Min: "0",
+				Max: fmt.Sprintf("%d", maxNextTime.UnixMilli()),
+			}).Result()
 			if err != nil {
 				m.logger.Error("Cron Self-Healing: failed to get delayed ZSET", zap.Error(err))
 				continue
@@ -80,14 +104,8 @@ func (m *cronManager) Start(ctx context.Context, wg *sync.WaitGroup) {
 			}
 
 			// Scan and heal missing schedules
-			for jobName, configStr := range configs {
+			for jobName, task := range parsedConfigs {
 				if activeCrons[jobName] {
-					continue
-				}
-
-				task := &Task{}
-				err := m.codec.Unmarshal([]byte(configStr), task)
-				if err != nil {
 					continue
 				}
 

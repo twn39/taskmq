@@ -2,7 +2,6 @@ package taskmq
 
 import (
 	"context"
-	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -28,7 +27,7 @@ func newPELRecoveryJanitor(
 	consumer string,
 	concurrency int,
 	processFn func(ctx context.Context, msg redis.XMessage),
-) *pelRecoveryJanitor {
+) Runner {
 	return &pelRecoveryJanitor{
 		rdb:         rdb,
 		logger:      logger,
@@ -41,10 +40,8 @@ func newPELRecoveryJanitor(
 	}
 }
 
-// Start launches the PEL auto-claim and recovery loop
-func (j *pelRecoveryJanitor) Start(ctx context.Context, wg *sync.WaitGroup) {
-	defer wg.Done()
-
+// Run launches the PEL auto-claim and recovery loop
+func (j *pelRecoveryJanitor) Run(ctx context.Context) error {
 	ticker := time.NewTicker(3 * time.Second)
 	defer ticker.Stop()
 
@@ -57,7 +54,7 @@ func (j *pelRecoveryJanitor) Start(ctx context.Context, wg *sync.WaitGroup) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
+			return ctx.Err()
 		case <-ticker.C:
 			// Claim stalled messages via XAutoClaim with cursor-based pagination
 			claimed, nextCursor, err := j.rdb.XAutoClaim(ctx, &redis.XAutoClaimArgs{
@@ -93,7 +90,7 @@ func (j *pelRecoveryJanitor) Start(ctx context.Context, wg *sync.WaitGroup) {
 							j.processFn(ctx, m)
 						}(msg)
 					case <-ctx.Done():
-						return
+						return ctx.Err()
 					}
 				}
 			}
