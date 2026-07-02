@@ -2,10 +2,6 @@
 server:
   port: ":8080"
 
-# Database configuration
-database:
-  dsn: "gocms.db"
-
 # Logger configuration
 logger:
   level: "info"

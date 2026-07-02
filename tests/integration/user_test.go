@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/labstack/echo/v4"
+	"github.com/labstack/echo/v5"
 	"github.com/stretchr/testify/assert"
 	"github.com/twn39/gocms/internal/config"
 	"github.com/twn39/gocms/internal/handler"
@@ -14,29 +14,13 @@ import (
 	"github.com/twn39/gocms/internal/server"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
-	"gorm.io/driver/sqlite"
-	"gorm.io/gorm"
 )
-
-// NewTestDatabase creates a new in-memory GORM database connection for testing
-func NewTestDatabase() (*gorm.DB, error) {
-	db, err := gorm.Open(sqlite.Open(":memory:"), &gorm.Config{})
-	if err != nil {
-		return nil, err
-	}
-	return db, nil
-}
 
 // NewTestConfig provides a configuration for testing
 func NewTestConfig() *config.Config {
 	return &config.Config{
 		Server: config.ServerConfig{
-			Port:         ":8081",
-			TemplateGlob: "../../views/*.html",
-			ManifestPath: "", // No manifest for tests
-		},
-		Database: config.DatabaseConfig{
-			DSN: ":memory:",
+			Port: ":8081",
 		},
 		Logger: config.LoggerConfig{
 			Level: "error", // Quiet logs during test
@@ -46,38 +30,17 @@ func NewTestConfig() *config.Config {
 
 func TestUserEndpoints(t *testing.T) {
 	var e *echo.Echo
-	var db *gorm.DB
 
 	// Create the app using fxtest to manage lifecycle and dependencies
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
-			// Override the real database with our test database
-			NewTestDatabase,
 			handler.NewUserHandler,
 			server.NewServer,
 		),
-		// Use fx.Decorate or fx.Replace to swap implementations if needed.
-		// Since NewTestDatabase returns (*gorm.DB, error), it matches the signature of database.NewDatabase.
-		// However, to be safe and explicit, let's just Provide it and NOT provide the original.
-		// NOTE: In the main.go we provided database.NewDatabase. Here we provide NewTestDatabase instead.
-
-		fx.Populate(&e, &db),
+		fx.Populate(&e),
 	)
-
-	// Since NewTestDatabase signature matches, we just need to make sure we are not importing the original module that provides the DB
-	// or we can use fx.Replace if we were using a Module bundle.
-	// In main.go we listed providers manually. Here we can just list our test providers.
-
-	// Start the app (this runs OnStart hooks)
-	// Note: server.NewServer starts the http server in a goroutine on :8080.
-	// For testing, we might not want to bind to a real port, but our NewServer hardcodes it.
-	// However, we can still use httptest with e.ServeHTTP without using the real network call if we want,
-	// BUT e.Start is running.
-	// To avoid port conflict or needing to wait, we can assume it starts fine or ignore the network listener for these tests
-	// by directly invoking handler methods or using `e.ServeHTTP`.
-	// Since we used `go func() { e.Start(...) }`, it shouldn't block.
 
 	app.RequireStart()
 	defer app.RequireStop()
@@ -115,8 +78,3 @@ func TestUserEndpoints(t *testing.T) {
 		assert.Contains(t, rec.Body.String(), "GoCMS")
 	})
 }
-
-// NOTE: Because server.NewServer hardcodes the port connection, running this test
-// might conflict if something is already on 8080.
-// A better approach in `server.go` would be to accept a Config struct or allow disabling the listener.
-// For now, this assumes port 8080 is free.

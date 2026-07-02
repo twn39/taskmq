@@ -1,5 +1,4 @@
 # Binaries
-main
 *.exe
 *.test
 
@@ -18,3 +17,4 @@ main
 # Logs
 *.log
 /static/*
+.codegraph

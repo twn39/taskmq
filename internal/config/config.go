@@ -9,19 +9,12 @@ import (
 
 // Config holds all the global configuration for the application
 type Config struct {
-	Server   ServerConfig   `mapstructure:"server"`
-	Database DatabaseConfig `mapstructure:"database"`
-	Logger   LoggerConfig   `mapstructure:"logger"`
+	Server ServerConfig `mapstructure:"server"`
+	Logger LoggerConfig `mapstructure:"logger"`
 }
 
 type ServerConfig struct {
-	Port         string `mapstructure:"port"`
-	TemplateGlob string `mapstructure:"template_glob"`
-	ManifestPath string `mapstructure:"manifest_path"`
-}
-
-type DatabaseConfig struct {
-	DSN string `mapstructure:"dsn"`
+	Port string `mapstructure:"port"`
 }
 
 type LoggerConfig struct {
@@ -34,9 +27,6 @@ func NewConfig() (*Config, error) {
 
 	// Set default values
 	v.SetDefault("server.port", ":8080")
-	v.SetDefault("server.template_glob", "views/*.html")
-	v.SetDefault("server.manifest_path", "static/.vite/manifest.json")
-	v.SetDefault("database.dsn", "gocms.db")
 	v.SetDefault("logger.level", "info")
 
 	// Enable environment variable support
