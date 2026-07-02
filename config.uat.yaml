@@ -1,6 +1,7 @@
 # UAT Environment Configuration
 server:
   port: ":8081"
+  grpc_port: ":50051"
 logger:
   level: "info"
 redis:

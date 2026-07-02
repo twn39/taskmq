@@ -1,6 +1,7 @@
 # Prod Environment Configuration
 server:
   port: ":3000"
+  grpc_port: ":50051"
 logger:
   level: "error" # Reduce noise in prod
 redis:

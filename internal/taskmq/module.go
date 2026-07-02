@@ -2,10 +2,15 @@ package taskmq
 
 import (
 	"context"
+	"fmt"
+	"net"
 
 	"github.com/redis/go-redis/v9"
+	taskmqv1 "github.com/twn39/taskmq/api/proto/taskmq/v1"
+	"github.com/twn39/taskmq/internal/config"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
+	"google.golang.org/grpc"
 )
 
 // Module is the Fx module for TaskMQ dependencies
@@ -16,8 +21,13 @@ var Module = fx.Module("taskmq",
 		func(rdb *redis.Client, logger *zap.Logger) Worker {
 			return NewWorkerPool(rdb, logger, "default")
 		},
+		// Provide gRPC Server constructor
+		NewGRPCServer,
 	),
-	fx.Invoke(RegisterWorkerPoolLifecycle),
+	fx.Invoke(
+		RegisterWorkerPoolLifecycle,
+		RegisterGRPCServerLifecycle,
+	),
 )
 
 // RegisterWorkerPoolLifecycle registers worker pool startup and shutdown inside Fx container lifecycle hooks.
@@ -28,6 +38,34 @@ func RegisterWorkerPoolLifecycle(lc fx.Lifecycle, worker Worker) {
 		},
 		OnStop: func(ctx context.Context) error {
 			worker.Stop()
+			return nil
+		},
+	})
+}
+
+// RegisterGRPCServerLifecycle registers gRPC server startup and graceful shutdown hooks.
+func RegisterGRPCServerLifecycle(lc fx.Lifecycle, grpcSrv *GRPCServer, cfg *config.Config, logger *zap.Logger) {
+	s := grpc.NewServer()
+	taskmqv1.RegisterTaskMQServiceServer(s, grpcSrv)
+
+	lc.Append(fx.Hook{
+		OnStart: func(ctx context.Context) error {
+			logger.Info("Starting gRPC server", zap.String("port", cfg.Server.GRPCPort))
+			lis, err := net.Listen("tcp", cfg.Server.GRPCPort)
+			if err != nil {
+				return fmt.Errorf("failed to listen on gRPC port: %w", err)
+			}
+
+			go func() {
+				if err := s.Serve(lis); err != nil && err != grpc.ErrServerStopped {
+					logger.Error("gRPC server failed to serve", zap.Error(err))
+				}
+			}()
+			return nil
+		},
+		OnStop: func(ctx context.Context) error {
+			logger.Info("Stopping gRPC server gracefully")
+			s.GracefulStop()
 			return nil
 		},
 	})

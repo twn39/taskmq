@@ -15,7 +15,8 @@ type Config struct {
 }
 
 type ServerConfig struct {
-	Port string `mapstructure:"port"`
+	Port     string `mapstructure:"port"`
+	GRPCPort string `mapstructure:"grpc_port"`
 }
 
 type LoggerConfig struct {
@@ -35,6 +36,7 @@ func NewConfig() (*Config, error) {
 
 	// Set default values
 	v.SetDefault("server.port", ":8080")
+	v.SetDefault("server.grpc_port", ":50051")
 	v.SetDefault("logger.level", "info")
 	v.SetDefault("redis.addr", "localhost:6379")
 	v.SetDefault("redis.password", "")

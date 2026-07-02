@@ -1,6 +1,7 @@
 # Dev Environment Configuration
 server:
   port: ":8080"
+  grpc_port: ":50051"
 logger:
   level: "debug" # More verbose logging
 redis:
