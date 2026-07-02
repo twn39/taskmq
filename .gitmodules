@@ -1,3 +1,6 @@
 [submodule "third_party/bullmq"]
 	path = third_party/bullmq
 	url = https://github.com/taskforcesh/bullmq.git
+[submodule "third_party/taskiq"]
+	path = third_party/taskiq
+	url = https://github.com/taskiq-python/taskiq.git
