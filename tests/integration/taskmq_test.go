@@ -794,3 +794,182 @@ func TestTaskMQ_GRPCFlow(t *testing.T) {
 		t.Fatal("Timeout waiting for task to execute via gRPC Enqueue")
 	}
 }
+
+func TestTaskMQ_BinaryCodec(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	queueName := "binary_codec_test_queue"
+	streamKey := taskmq.StreamKey(queueName)
+
+	runChan := make(chan string, 1)
+
+	var rdb *goredis.Client
+	var client taskmq.Client
+	var worker taskmq.Worker
+
+	binaryCodec := taskmq.BinaryCodec{}
+
+	app := fxtest.New(t,
+		fx.Provide(
+			NewTestConfig,
+			logger.NewLogger,
+			internalredis.NewRedisClient,
+			func(rdb *goredis.Client) taskmq.Client {
+				return taskmq.NewClient(rdb, taskmq.WithClientCodec(binaryCodec))
+			},
+			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+					Concurrency: 2,
+					Codec:       binaryCodec,
+				})
+				pool.Register("task:binary-test", func(ctx context.Context, task *taskmq.Task) error {
+					runChan <- string(task.Payload)
+					return nil
+				})
+				return pool
+			},
+		),
+		fx.Invoke(taskmq.RegisterWorkerPoolLifecycle),
+		fx.Populate(&rdb, &client, &worker),
+	)
+
+	// Clean up Redis
+	err := rdb.Del(ctx, streamKey).Err()
+	assert.NoError(t, err)
+
+	app.RequireStart()
+	defer app.RequireStop()
+
+	task := taskmq.NewTask("task:binary-test", []byte("binary-payload"), taskmq.TaskOptions{
+		Queue: queueName,
+	})
+
+	err = client.Enqueue(ctx, task)
+	assert.NoError(t, err)
+
+	select {
+	case result := <-runChan:
+		assert.Equal(t, "binary-payload", result)
+	case <-ctx.Done():
+		t.Fatal("Timeout waiting for task to execute via BinaryCodec")
+	}
+}
+
+func TestTaskMQ_SyncExecution(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	queueName := "sync_exec_test_queue"
+	streamKey := taskmq.StreamKey(queueName)
+
+	runChan := make(chan string, 1)
+
+	var rdb *goredis.Client
+	var client taskmq.Client
+	var worker taskmq.Worker
+
+	app := fxtest.New(t,
+		fx.Provide(
+			NewTestConfig,
+			logger.NewLogger,
+			internalredis.NewRedisClient,
+			func(rdb *goredis.Client) taskmq.Client {
+				return taskmq.NewClient(rdb)
+			},
+			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+					Concurrency:   2,
+					SyncExecution: true,
+				})
+				pool.Register("task:sync-exec-test", func(ctx context.Context, task *taskmq.Task) error {
+					runChan <- string(task.Payload)
+					return nil
+				})
+				return pool
+			},
+		),
+		fx.Invoke(taskmq.RegisterWorkerPoolLifecycle),
+		fx.Populate(&rdb, &client, &worker),
+	)
+
+	// Clean up Redis
+	err := rdb.Del(ctx, streamKey).Err()
+	assert.NoError(t, err)
+
+	app.RequireStart()
+	defer app.RequireStop()
+
+	task := taskmq.NewTask("task:sync-exec-test", []byte("sync-exec-payload"), taskmq.TaskOptions{
+		Queue: queueName,
+	})
+
+	err = client.Enqueue(ctx, task)
+	assert.NoError(t, err)
+
+	select {
+	case result := <-runChan:
+		assert.Equal(t, "sync-exec-payload", result)
+	case <-ctx.Done():
+		t.Fatal("Timeout waiting for task to execute via SyncExecution")
+	}
+}
+
+func TestTaskMQ_ExecutionPoolPanicRecovery(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	queueName := "pool_panic_test_queue"
+	streamKey := taskmq.StreamKey(queueName)
+	dlqKey := taskmq.DLQKey(queueName)
+
+	var rdb *goredis.Client
+	var client taskmq.Client
+	var worker taskmq.Worker
+
+	app := fxtest.New(t,
+		fx.Provide(
+			NewTestConfig,
+			logger.NewLogger,
+			internalredis.NewRedisClient,
+			func(rdb *goredis.Client) taskmq.Client {
+				return taskmq.NewClient(rdb)
+			},
+			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+					Concurrency: 2,
+				})
+				pool.Register("task:panic-test", func(ctx context.Context, task *taskmq.Task) error {
+					panic("something went terribly wrong")
+				})
+				return pool
+			},
+		),
+		fx.Invoke(taskmq.RegisterWorkerPoolLifecycle),
+		fx.Populate(&rdb, &client, &worker),
+	)
+
+	// Clean up Redis
+	_ = rdb.Del(ctx, streamKey).Err()
+	_ = rdb.Del(ctx, dlqKey).Err()
+
+	app.RequireStart()
+	defer app.RequireStop()
+
+	task := taskmq.NewTask("task:panic-test", []byte("panic-payload"), taskmq.TaskOptions{
+		Queue:    queueName,
+		MaxRetry: 1, // Fail immediately to DLQ
+	})
+
+	err := client.Enqueue(ctx, task)
+	assert.NoError(t, err)
+
+	// Wait for task to fail and end up in DLQ
+	time.Sleep(1 * time.Second)
+
+	// Check DLQ
+	dlqTasks, err := client.ListDeadLetters(ctx, queueName, 10)
+	assert.NoError(t, err)
+	assert.Len(t, dlqTasks, 1)
+	assert.Contains(t, dlqTasks[0].LastError, "task handler panicked: something went terribly wrong")
+}

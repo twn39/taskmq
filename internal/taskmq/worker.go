@@ -19,33 +19,53 @@ type Worker interface {
 }
 
 type workerPool struct {
-	rdb         *redis.Client
-	logger      *zap.Logger
-	queue       string
-	group       string
-	consumer    string
-	concurrency int
-	handlers    map[string]HandlerFunc
-	ctx         context.Context
-	cancel      context.CancelFunc
-	wg          sync.WaitGroup
+	rdb           *redis.Client
+	logger        *zap.Logger
+	queue         string
+	group         string
+	consumer      string
+	concurrency   int
+	handlers      map[string]HandlerFunc
+	scheduler     *delayedScheduler
+	janitor       *pelRecoveryJanitor
+	cronManager   *cronManager
+	codec         Codec
+	syncExecution bool
+	execPoolSize  int
+	execChan      chan taskExecutionRequest
+	ctx           context.Context
+	cancel        context.CancelFunc
+	wg            sync.WaitGroup
 }
 
 type WorkerOptions struct {
-	Group       string
-	Consumer    string
-	Concurrency int
+	Group             string
+	Consumer          string
+	Concurrency       int
+	Codec             Codec
+	SyncExecution     bool
+	ExecutionPoolSize int
+}
+
+type taskExecutionRequest struct {
+	ctx     context.Context
+	task    *Task
+	handler HandlerFunc
+	resChan chan<- error
 }
 
 func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...WorkerOptions) Worker {
 	pool := &workerPool{
-		rdb:         rdb,
-		logger:      logger,
-		queue:       queue,
-		group:       "taskmq-group",
-		consumer:    "taskmq-consumer-1",
-		concurrency: 5,
-		handlers:    make(map[string]HandlerFunc),
+		rdb:           rdb,
+		logger:        logger,
+		queue:         queue,
+		group:         "taskmq-group",
+		consumer:      "taskmq-consumer-1",
+		concurrency:   5,
+		codec:         JSONCodec{},
+		syncExecution: false,
+		execPoolSize:  5,
+		handlers:      make(map[string]HandlerFunc),
 	}
 
 	if len(opts) > 0 {
@@ -58,8 +78,22 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 		}
 		if opt.Concurrency > 0 {
 			pool.concurrency = opt.Concurrency
+			pool.execPoolSize = opt.Concurrency
+		}
+		if opt.Codec != nil {
+			pool.codec = opt.Codec
+		}
+		pool.syncExecution = opt.SyncExecution
+		if opt.ExecutionPoolSize > 0 {
+			pool.execPoolSize = opt.ExecutionPoolSize
 		}
 	}
+
+	pool.cronManager = newCronManager(rdb, logger, queue, pool.codec)
+	pool.scheduler = newDelayedScheduler(rdb, logger, queue, pool.cronManager, pool.codec)
+	pool.janitor = newPELRecoveryJanitor(rdb, logger, queue, pool.group, pool.consumer, pool.concurrency, func(ctx context.Context, msg redis.XMessage) {
+		pool.processMessage(ctx, StreamKey(queue), msg)
+	})
 
 	return pool
 }
@@ -88,6 +122,12 @@ func (w *workerPool) Start(ctx context.Context) error {
 	// Create a long-running context for the worker loop, independent of the short startup ctx
 	w.ctx, w.cancel = context.WithCancel(context.Background())
 
+	// Start execution pool if not in synchronous execution mode
+	if !w.syncExecution {
+		w.execChan = make(chan taskExecutionRequest, w.execPoolSize*2)
+		w.startExecutionPool(w.ctx)
+	}
+
 	// 1. Start workers
 	for i := 0; i < w.concurrency; i++ {
 		w.wg.Add(1)
@@ -96,15 +136,15 @@ func (w *workerPool) Start(ctx context.Context) error {
 
 	// 2. Start Scheduler loop (ZSET -> Stream)
 	w.wg.Add(1)
-	go w.schedulerLoop(streamKey)
+	go w.scheduler.Start(w.ctx, &w.wg)
 
 	// 3. Start Janitor loop (PEL Recovery)
 	w.wg.Add(1)
-	go w.janitorLoop(streamKey)
+	go w.janitor.Start(w.ctx, &w.wg)
 
 	// 4. Start Cron Self-healing loop
 	w.wg.Add(1)
-	go w.selfHealingLoop()
+	go w.cronManager.Start(w.ctx, &w.wg)
 
 	return nil
 }
@@ -115,8 +155,38 @@ func (w *workerPool) Stop() {
 	if w.cancel != nil {
 		w.cancel()
 	}
+	if w.execChan != nil {
+		close(w.execChan)
+	}
 	w.wg.Wait()
 	w.logger.Info("TaskMQ worker pool stopped")
+}
+
+func (w *workerPool) startExecutionPool(ctx context.Context) {
+	w.logger.Info("Starting TaskMQ execution pool", zap.Int("size", w.execPoolSize))
+	for i := 0; i < w.execPoolSize; i++ {
+		w.wg.Add(1)
+		go func() {
+			defer w.wg.Done()
+			for req := range w.execChan {
+				req.resChan <- w.runHandlerWithRecovery(req.ctx, req.task, req.handler)
+			}
+		}()
+	}
+}
+
+func (w *workerPool) runHandlerWithRecovery(ctx context.Context, task *Task, handler HandlerFunc) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("task handler panicked: %v", r)
+			w.logger.Error("Panic recovered in task handler execution",
+				zap.String("task_id", task.ID),
+				zap.String("task_name", task.Name),
+				zap.Any("panic", r),
+			)
+		}
+	}()
+	return handler(ctx, task)
 }
 
 func (w *workerPool) worker(streamKey string) {
@@ -162,107 +232,6 @@ func (w *workerPool) worker(streamKey string) {
 	}
 }
 
-func (w *workerPool) schedulerLoop(streamKey string) {
-	defer w.wg.Done()
-
-	ticker := time.NewTicker(500 * time.Millisecond)
-	defer ticker.Stop()
-
-	delayedKey := DelayedKey(w.queue)
-
-	// Lua script moves ready tasks from ZSET to Stream and removes them from ZSET, returning the moved elements
-	luaScript := `
-		local elements = redis.call('ZRANGEBYSCORE', KEYS[1], ARGV[1], ARGV[2], 'LIMIT', 0, ARGV[3])
-		if #elements > 0 then
-			for i, member in ipairs(elements) do
-				redis.call('XADD', KEYS[2], '*', 'task', member)
-			end
-			for i, member in ipairs(elements) do
-				redis.call('ZREM', KEYS[1], member)
-			end
-		end
-		return elements
-	`
-
-	for {
-		select {
-		case <-w.ctx.Done():
-			return
-		case <-ticker.C:
-			nowMs := time.Now().UnixMilli()
-
-			res, err := w.rdb.Eval(w.ctx, luaScript, []string{delayedKey, streamKey}, 0, nowMs, 100).Result()
-			if err != nil {
-				w.logger.Error("Scheduler failed to poll delayed tasks", zap.Error(err))
-				continue
-			}
-
-			elements, ok := res.([]interface{})
-			if !ok {
-				continue
-			}
-
-			if len(elements) > 0 {
-				w.logger.Debug("Scheduler moved tasks from delayed to active", zap.Int("count", len(elements)))
-				for _, el := range elements {
-					memberStr, ok := el.(string)
-					if !ok {
-						continue
-					}
-					task, err := DeserializeTask(memberStr)
-					if err == nil && task.CronSpec != "" {
-						w.handleCronReschedule(task)
-					}
-				}
-			}
-		}
-	}
-}
-
-func (w *workerPool) janitorLoop(streamKey string) {
-	defer w.wg.Done()
-
-	// Scan every 3 seconds for test sensitivity, in production this can be 10-30 seconds
-	ticker := time.NewTicker(3 * time.Second)
-	defer ticker.Stop()
-
-	// Min idle time before considering a task stalled (e.g. 5 seconds for tests)
-	minIdleTime := 5 * time.Second
-
-	for {
-		select {
-		case <-w.ctx.Done():
-			return
-		case <-ticker.C:
-			// Claim stalled messages via XAutoClaim
-			claimed, _, err := w.rdb.XAutoClaim(w.ctx, &redis.XAutoClaimArgs{
-				Stream:   streamKey,
-				Group:    w.group,
-				Consumer: w.consumer,
-				MinIdle:  minIdleTime,
-				Start:    "0-0",
-				Count:    10,
-			}).Result()
-
-			if err != nil {
-				if err == redis.Nil {
-					continue
-				}
-				w.logger.Error("Janitor failed to auto-claim stalled messages", zap.Error(err))
-				continue
-			}
-
-			if len(claimed) > 0 {
-				w.logger.Warn("Janitor reclaimed stalled active tasks from PEL", zap.Int("count", len(claimed)))
-				for _, msg := range claimed {
-					// Run handler in its own goroutine to avoid blocking the Janitor loop
-					go w.processMessage(w.ctx, streamKey, msg)
-				}
-			}
-		}
-	}
-}
-
 func (w *workerPool) processMessage(ctx context.Context, streamKey string, msg redis.XMessage) {
 	taskData, ok := msg.Values["task"].(string)
 	if !ok {
@@ -271,7 +240,8 @@ func (w *workerPool) processMessage(ctx context.Context, streamKey string, msg r
 		return
 	}
 
-	task, err := DeserializeTask(taskData)
+	task := &Task{}
+	err := w.codec.Unmarshal([]byte(taskData), task)
 	if err != nil {
 		w.logger.Error("Failed to deserialize task", zap.Error(err))
 		_ = w.rdb.XAck(ctx, streamKey, w.group, msg.ID).Err()
@@ -294,15 +264,8 @@ func (w *workerPool) processMessage(ctx context.Context, streamKey string, msg r
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	// Channel must be buffered to prevent goroutine leak if we return early due to timeout
-	errChan := make(chan error, 1)
-
-	go func() {
-		errChan <- handler(timeoutCtx, task)
-	}()
-
-	select {
-	case err = <-errChan:
+	if w.syncExecution {
+		err = w.runHandlerWithRecovery(timeoutCtx, task, handler)
 		if err != nil {
 			w.logger.Error("Task handler failed",
 				zap.String("task_id", task.ID),
@@ -312,16 +275,52 @@ func (w *workerPool) processMessage(ctx context.Context, streamKey string, msg r
 			w.handleFailure(ctx, streamKey, msg, task, err)
 			return
 		}
-	case <-timeoutCtx.Done():
-		err = timeoutCtx.Err() // context.DeadlineExceeded
-		w.logger.Error("Task handler timed out",
-			zap.String("task_id", task.ID),
-			zap.String("task_name", task.Name),
-			zap.Duration("timeout", timeout),
-			zap.Error(err),
-		)
-		w.handleFailure(ctx, streamKey, msg, task, err)
-		return
+	} else {
+		// Channel must be buffered to prevent goroutine leak if we return early due to timeout
+		errChan := make(chan error, 1)
+
+		// Try submitting task to the execution pool with timeout
+		select {
+		case w.execChan <- taskExecutionRequest{
+			ctx:     timeoutCtx,
+			task:    task,
+			handler: handler,
+			resChan: errChan,
+		}:
+		case <-timeoutCtx.Done():
+			err = timeoutCtx.Err()
+			w.logger.Error("Task timed out waiting in execution queue",
+				zap.String("task_id", task.ID),
+				zap.String("task_name", task.Name),
+				zap.Error(err),
+			)
+			w.handleFailure(ctx, streamKey, msg, task, err)
+			return
+		}
+
+		// Wait for execution result or timeout
+		select {
+		case err = <-errChan:
+			if err != nil {
+				w.logger.Error("Task handler failed",
+					zap.String("task_id", task.ID),
+					zap.String("task_name", task.Name),
+					zap.Error(err),
+				)
+				w.handleFailure(ctx, streamKey, msg, task, err)
+				return
+			}
+		case <-timeoutCtx.Done():
+			err = timeoutCtx.Err() // context.DeadlineExceeded
+			w.logger.Error("Task handler timed out",
+				zap.String("task_id", task.ID),
+				zap.String("task_name", task.Name),
+				zap.Duration("timeout", timeout),
+				zap.Error(err),
+			)
+			w.handleFailure(ctx, streamKey, msg, task, err)
+			return
+		}
 	}
 
 	// Acknowledge successfully processed task
@@ -379,7 +378,7 @@ func (w *workerPool) handleFailure(ctx context.Context, streamKey string, msg re
 		)
 
 		// Serialize and store in DLQ ZSET
-		serialized, _ := task.Serialize()
+		serialized, _ := w.codec.Marshal(task)
 		dlqKey := DLQKey(task.Queue)
 		nowMs := time.Now().UnixMilli()
 
@@ -391,7 +390,7 @@ func (w *workerPool) handleFailure(ctx context.Context, streamKey string, msg re
 		}
 
 		// Execute atomic DLQ move, lock release, and ACK
-		_, zerr := w.rdb.Eval(ctx, luaHandleFailure, []string{dlqKey, streamKey, uniqueLockKey}, "dlq", msg.ID, w.group, nowMs, serialized, uniqueLockVal).Result()
+		_, zerr := w.rdb.Eval(ctx, luaHandleFailure, []string{dlqKey, streamKey, uniqueLockKey}, "dlq", msg.ID, w.group, nowMs, string(serialized), uniqueLockVal).Result()
 		if zerr != nil {
 			w.logger.Error("Failed to move task to DLQ atomically", zap.Error(zerr))
 		}
@@ -409,7 +408,7 @@ func (w *workerPool) handleFailure(ctx context.Context, streamKey string, msg re
 	)
 
 	// Serialize updated task state
-	serialized, err := task.Serialize()
+	serialized, err := w.codec.Marshal(task)
 	if err != nil {
 		w.logger.Error("Failed to serialize retry task", zap.Error(err))
 		return
@@ -419,7 +418,7 @@ func (w *workerPool) handleFailure(ctx context.Context, streamKey string, msg re
 	at := time.Now().Add(backoff)
 
 	// Execute atomic retry schedule and ACK
-	_, zerr := w.rdb.Eval(ctx, luaHandleFailure, []string{delayedKey, streamKey, ""}, "retry", msg.ID, w.group, at.UnixMilli(), serialized, "").Result()
+	_, zerr := w.rdb.Eval(ctx, luaHandleFailure, []string{delayedKey, streamKey, ""}, "retry", msg.ID, w.group, at.UnixMilli(), string(serialized), "").Result()
 	if zerr != nil {
 		w.logger.Error("Failed to schedule task retry atomically", zap.Error(zerr))
 	}
@@ -447,122 +446,3 @@ func (w *workerPool) releaseUniqueLock(ctx context.Context, task *Task) {
 	}
 }
 
-func (w *workerPool) handleCronReschedule(task *Task) {
-	if task.CronSpec == "" {
-		return
-	}
-
-	sched, err := CronParser.Parse(task.CronSpec)
-	if err != nil {
-		w.logger.Error("Cron: invalid spec in task", zap.String("job_name", task.Name), zap.String("spec", task.CronSpec), zap.Error(err))
-		return
-	}
-
-	nextTime := sched.Next(time.Now())
-
-	// Create a new task instance for the next run (preserving Name, Payload, Queue, MaxRetry, and CronSpec)
-	nextTask := NewTask(task.Name, task.Payload, TaskOptions{
-		Queue:    task.Queue,
-		MaxRetry: task.MaxRetry,
-	})
-	nextTask.CronSpec = task.CronSpec
-
-	serialized, err := nextTask.Serialize()
-	if err != nil {
-		w.logger.Error("Cron: failed to serialize next task", zap.Error(err))
-		return
-	}
-
-	delayedKey := DelayedKey(task.Queue)
-	err = w.rdb.ZAdd(context.Background(), delayedKey, redis.Z{
-		Score:  float64(nextTime.UnixMilli()),
-		Member: serialized,
-	}).Err()
-
-	if err != nil {
-		w.logger.Error("Cron: failed to ZADD next run to ZSET", zap.Error(err))
-	} else {
-		w.logger.Debug("Cron: scheduled next run", zap.String("job_name", task.Name), zap.Time("next_run", nextTime))
-	}
-}
-
-func (w *workerPool) selfHealingLoop() {
-	defer w.wg.Done()
-
-	// Run self-healing check every 10 seconds for test responsiveness (can be 30s in production)
-	ticker := time.NewTicker(10 * time.Second)
-	defer ticker.Stop()
-
-	configsKey := CronConfigsKey(w.queue)
-	delayedKey := DelayedKey(w.queue)
-
-	for {
-		select {
-		case <-w.ctx.Done():
-			return
-		case <-ticker.C:
-			// 1. Fetch all registered cron configs from Redis Hash
-			configs, err := w.rdb.HGetAll(w.ctx, configsKey).Result()
-			if err != nil {
-				w.logger.Error("Cron Self-Healing: failed to get configs", zap.Error(err))
-				continue
-			}
-
-			if len(configs) == 0 {
-				continue
-			}
-
-			// 2. Fetch all delayed tasks in ZSET to check what is already scheduled
-			delayedMembers, err := w.rdb.ZRange(w.ctx, delayedKey, 0, -1).Result()
-			if err != nil {
-				w.logger.Error("Cron Self-Healing: failed to get delayed ZSET", zap.Error(err))
-				continue
-			}
-
-			activeCrons := make(map[string]bool)
-			for _, m := range delayedMembers {
-				task, err := DeserializeTask(m)
-				if err == nil && task.CronSpec != "" {
-					activeCrons[task.Name] = true
-				}
-			}
-
-			// 3. Scan and heal missing schedules
-			for jobName, configStr := range configs {
-				if activeCrons[jobName] {
-					continue
-				}
-
-				task, err := DeserializeTask(configStr)
-				if err != nil {
-					continue
-				}
-
-				sched, err := CronParser.Parse(task.CronSpec)
-				if err != nil {
-					continue
-				}
-
-				nextTime := sched.Next(time.Now())
-				w.logger.Warn("Cron Self-Healing: detected broken chain, rescheduling job", zap.String("job_name", jobName), zap.Time("next_run", nextTime))
-
-				// Generate next task run
-				nextTask := NewTask(task.Name, task.Payload, TaskOptions{
-					Queue:    task.Queue,
-					MaxRetry: task.MaxRetry,
-				})
-				nextTask.CronSpec = task.CronSpec
-
-				serialized, err := nextTask.Serialize()
-				if err != nil {
-					continue
-				}
-
-				_ = w.rdb.ZAdd(w.ctx, delayedKey, redis.Z{
-					Score:  float64(nextTime.UnixMilli()),
-					Member: serialized,
-				}).Err()
-			}
-		}
-	}
-}
