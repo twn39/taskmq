@@ -2,6 +2,7 @@ package taskmq
 
 import (
 	"context"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -9,14 +10,17 @@ import (
 )
 
 type pelRecoveryJanitor struct {
-	rdb         *redis.Client
-	logger      *zap.Logger
-	queue       string
-	group       string
-	consumer    string
-	startCursor string
-	concurrency int
-	processFn   func(ctx context.Context, msg redis.XMessage)
+	rdb           *redis.Client
+	logger        *zap.Logger
+	queue         string
+	group         string
+	consumer      string
+	startCursor   string
+	concurrency   int
+	checkInterval time.Duration
+	minIdleTime   time.Duration
+	processFn     func(ctx context.Context, msg redis.XMessage)
+	processFnMu   sync.RWMutex
 }
 
 func newPELRecoveryJanitor(
@@ -26,26 +30,36 @@ func newPELRecoveryJanitor(
 	group string,
 	consumer string,
 	concurrency int,
+	checkInterval time.Duration,
+	minIdleTime time.Duration,
 	processFn func(ctx context.Context, msg redis.XMessage),
-) Runner {
+) PELRecoveryJanitor {
 	return &pelRecoveryJanitor{
-		rdb:         rdb,
-		logger:      logger,
-		queue:       queue,
-		group:       group,
-		consumer:    consumer,
-		startCursor: "0-0",
-		concurrency: concurrency,
-		processFn:   processFn,
+		rdb:           rdb,
+		logger:        logger,
+		queue:         queue,
+		group:         group,
+		consumer:      consumer,
+		startCursor:   "0-0",
+		concurrency:   concurrency,
+		checkInterval: checkInterval,
+		minIdleTime:   minIdleTime,
+		processFn:     processFn,
 	}
+}
+
+func (j *pelRecoveryJanitor) RegisterProcessor(fn func(ctx context.Context, msg redis.XMessage)) {
+	j.processFnMu.Lock()
+	defer j.processFnMu.Unlock()
+	j.processFn = fn
 }
 
 // Run launches the PEL auto-claim and recovery loop
 func (j *pelRecoveryJanitor) Run(ctx context.Context) error {
-	ticker := time.NewTicker(3 * time.Second)
+	ticker := time.NewTicker(j.checkInterval)
 	defer ticker.Stop()
 
-	minIdleTime := 5 * time.Second
+	minIdleTime := j.minIdleTime
 	streamKey := StreamKey(j.queue)
 
 	// Semaphore to limit concurrent processing of reclaimed tasks
@@ -87,7 +101,14 @@ func (j *pelRecoveryJanitor) Run(ctx context.Context) error {
 					case sem <- struct{}{}:
 						go func(m redis.XMessage) {
 							defer func() { <-sem }()
-							j.processFn(ctx, m)
+							
+							j.processFnMu.RLock()
+							processFn := j.processFn
+							j.processFnMu.RUnlock()
+							
+							if processFn != nil {
+								processFn(ctx, m)
+							}
 						}(msg)
 					case <-ctx.Done():
 						return ctx.Err()
@@ -97,3 +118,4 @@ func (j *pelRecoveryJanitor) Run(ctx context.Context) error {
 		}
 	}
 }
+

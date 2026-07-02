@@ -19,24 +19,25 @@ type Worker interface {
 }
 
 type workerPool struct {
-	rdb           *redis.Client
-	logger        *zap.Logger
-	queue         string
-	group         string
-	consumer      string
-	concurrency   int
-	handlers      map[string]HandlerFunc
-	scheduler     Runner
-	janitor       Runner
-	cronManager   CronManager
-	codec         Codec
-	syncExecution bool
-	execPoolSize  int
-	execChan      chan taskExecutionRequest
-	sem           chan struct{}
-	ctx           context.Context
-	cancel        context.CancelFunc
-	wg            sync.WaitGroup
+	rdb            *redis.Client
+	logger         *zap.Logger
+	queue          string
+	group          string
+	consumer       string
+	concurrency    int
+	handlers       map[string]HandlerFunc
+	scheduler      Runner
+	janitor        Runner
+	cronManager    CronManager
+	codec          Codec
+	syncExecution  bool
+	execPoolSize   int
+	sem            chan struct{}
+	ctx            context.Context
+	cancel         context.CancelFunc
+	consumerCtx    context.Context
+	consumerCancel context.CancelFunc
+	wg             sync.WaitGroup
 }
 
 type WorkerOptions struct {
@@ -48,13 +49,16 @@ type WorkerOptions struct {
 	ExecutionPoolSize   int
 	CronHealingInterval time.Duration
 	CronHealingLockTTL  time.Duration
-}
 
-type taskExecutionRequest struct {
-	ctx     context.Context
-	task    *Task
-	handler HandlerFunc
-	resChan chan<- error
+	// Dependency Injections
+	CronManager         CronManager
+	Scheduler           Runner
+	Janitor             Runner
+
+	// Scheduler & Janitor Tick Intervals (DIP / Configurable tickers)
+	SchedulerPollInterval time.Duration
+	JanitorInterval       time.Duration
+	JanitorMinIdleTime    time.Duration
 }
 
 func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...WorkerOptions) Worker {
@@ -73,6 +77,9 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 
 	cronHealingInterval := 1 * time.Minute
 	cronHealingLockTTL := 50 * time.Second
+	schedulerPollInterval := 500 * time.Millisecond
+	janitorInterval := 3 * time.Second
+	janitorMinIdleTime := 5 * time.Second
 
 	if len(opts) > 0 {
 		opt := opts[0]
@@ -99,15 +106,43 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 		if opt.CronHealingLockTTL > 0 {
 			cronHealingLockTTL = opt.CronHealingLockTTL
 		}
+		if opt.CronManager != nil {
+			pool.cronManager = opt.CronManager
+		}
+		if opt.Scheduler != nil {
+			pool.scheduler = opt.Scheduler
+		}
+		if opt.Janitor != nil {
+			pool.janitor = opt.Janitor
+		}
+		if opt.SchedulerPollInterval > 0 {
+			schedulerPollInterval = opt.SchedulerPollInterval
+		}
+		if opt.JanitorInterval > 0 {
+			janitorInterval = opt.JanitorInterval
+		}
+		if opt.JanitorMinIdleTime > 0 {
+			janitorMinIdleTime = opt.JanitorMinIdleTime
+		}
 	}
 
 	pool.sem = make(chan struct{}, pool.execPoolSize)
 
-	pool.cronManager = newCronManager(rdb, logger, queue, pool.codec, cronHealingInterval, cronHealingLockTTL)
-	pool.scheduler = newDelayedScheduler(rdb, logger, queue, pool.cronManager, pool.codec)
-	pool.janitor = newPELRecoveryJanitor(rdb, logger, queue, pool.group, pool.consumer, pool.concurrency, func(ctx context.Context, msg redis.XMessage) {
-		pool.processMessage(ctx, StreamKey(queue), msg)
-	})
+	if pool.cronManager == nil {
+		pool.cronManager = newCronManager(rdb, logger, queue, pool.codec, cronHealingInterval, cronHealingLockTTL)
+	}
+	if pool.scheduler == nil {
+		pool.scheduler = newDelayedScheduler(rdb, logger, queue, pool.cronManager, pool.codec, schedulerPollInterval)
+	}
+	if pool.janitor == nil {
+		pool.janitor = newPELRecoveryJanitor(rdb, logger, queue, pool.group, pool.consumer, pool.concurrency, janitorInterval, janitorMinIdleTime, nil)
+	}
+
+	if j, ok := pool.janitor.(PELRecoveryJanitor); ok {
+		j.RegisterProcessor(func(ctx context.Context, msg redis.XMessage) {
+			pool.processMessage(ctx, StreamKey(queue), msg)
+		})
+	}
 
 	return pool
 }
@@ -133,14 +168,9 @@ func (w *workerPool) Start(ctx context.Context) error {
 		zap.Int("concurrency", w.concurrency),
 	)
 
-	// Create a long-running context for the worker loop, independent of the short startup ctx
+	// Create contexts for the active tasks and consumers/background loops
 	w.ctx, w.cancel = context.WithCancel(context.Background())
-
-	// Start execution pool if not in synchronous execution mode
-	if !w.syncExecution {
-		w.execChan = make(chan taskExecutionRequest, w.execPoolSize*2)
-		w.startExecutionPool(w.ctx)
-	}
+	w.consumerCtx, w.consumerCancel = context.WithCancel(w.ctx)
 
 	// 1. Start workers
 	for i := 0; i < w.concurrency; i++ {
@@ -166,27 +196,28 @@ func (w *workerPool) Start(ctx context.Context) error {
 // Stop stops the worker pool gracefully
 func (w *workerPool) Stop() {
 	w.logger.Info("Stopping TaskMQ worker pool gracefully")
-	if w.cancel != nil {
-		w.cancel()
+	if w.consumerCancel != nil {
+		w.consumerCancel()
 	}
-	if w.execChan != nil {
-		close(w.execChan)
-	}
-	w.wg.Wait()
-	w.logger.Info("TaskMQ worker pool stopped")
-}
 
-func (w *workerPool) startExecutionPool(ctx context.Context) {
-	w.logger.Info("Starting TaskMQ execution pool", zap.Int("size", w.execPoolSize))
-	for i := 0; i < w.execPoolSize; i++ {
-		w.wg.Add(1)
-		go func() {
-			defer w.wg.Done()
-			for req := range w.execChan {
-				req.resChan <- w.runHandlerWithRecovery(req.ctx, req.task, req.handler)
-			}
-		}()
+	// Wait for running tasks with a shutdown timeout (e.g. 10 seconds)
+	done := make(chan struct{})
+	go func() {
+		w.wg.Wait()
+		close(done)
+	}()
+
+	select {
+	case <-done:
+		w.logger.Info("All tasks finished, worker pool stopped")
+	case <-time.After(10 * time.Second):
+		w.logger.Warn("Shutdown timeout reached, force cancelling running tasks")
+		if w.cancel != nil {
+			w.cancel() // cancels w.ctx, which cancels active task contexts
+		}
+		<-done
 	}
+	w.logger.Info("TaskMQ worker pool stopped")
 }
 
 func (w *workerPool) runBackgroundLoop(runner Runner, name string) {
@@ -199,14 +230,13 @@ func (w *workerPool) runBackgroundLoop(runner Runner, name string) {
 			)
 		}
 	}()
-	if err := runner.Run(w.ctx); err != nil && err != context.Canceled {
+	if err := runner.Run(w.consumerCtx); err != nil && err != context.Canceled {
 		w.logger.Error("Background loop returned error",
 			zap.String("loop_name", name),
 			zap.Error(err),
 		)
 	}
 }
-
 
 func (w *workerPool) runHandlerWithRecovery(ctx context.Context, task *Task, handler HandlerFunc) (err error) {
 	defer func() {
@@ -227,18 +257,18 @@ func (w *workerPool) worker(streamKey string) {
 
 	for {
 		select {
-		case <-w.ctx.Done():
+		case <-w.consumerCtx.Done():
 			return
 		default:
 			// 1. Acquire execution slot token before pulling task from Redis
 			select {
-			case <-w.ctx.Done():
+			case <-w.consumerCtx.Done():
 				return
 			case w.sem <- struct{}{}:
 			}
 
-			// Read messages from the stream using the long-running context w.ctx
-			streams, err := w.rdb.XReadGroup(w.ctx, &redis.XReadGroupArgs{
+			// Read messages from the stream using the long-running context w.consumerCtx
+			streams, err := w.rdb.XReadGroup(w.consumerCtx, &redis.XReadGroupArgs{
 				Group:    w.group,
 				Consumer: w.consumer,
 				Streams:  []string{streamKey, ">"},
@@ -256,7 +286,7 @@ func (w *workerPool) worker(streamKey string) {
 				if netErr, ok := err.(interface{ Timeout() bool }); ok && netErr.Timeout() {
 					continue
 				}
-				if w.ctx.Err() != nil {
+				if w.consumerCtx.Err() != nil {
 					return
 				}
 				w.logger.Error("Worker error reading stream", zap.Error(err))
@@ -330,63 +360,24 @@ func (w *workerPool) processMessage(ctx context.Context, streamKey string, msg r
 	timeoutCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 
-	if w.syncExecution {
-		err = w.runHandlerWithRecovery(timeoutCtx, task, handler)
-		if err != nil {
-			w.logger.Error("Task handler failed",
+	err = w.runHandlerWithRecovery(timeoutCtx, task, handler)
+	if err != nil {
+		// Check if the parent context (w.ctx) was cancelled, which means the worker pool is stopping
+		if w.ctx.Err() != nil {
+			w.logger.Warn("Task aborted due to worker pool shutdown, leaving in PEL for recovery",
 				zap.String("task_id", task.ID),
 				zap.String("task_name", task.Name),
-				zap.Error(err),
 			)
-			w.handleFailure(ctx, streamKey, msg, task, err)
-			return
-		}
-	} else {
-		// Channel must be buffered to prevent goroutine leak if we return early due to timeout
-		errChan := make(chan error, 1)
-
-		// Try submitting task to the execution pool with timeout
-		select {
-		case w.execChan <- taskExecutionRequest{
-			ctx:     timeoutCtx,
-			task:    task,
-			handler: handler,
-			resChan: errChan,
-		}:
-		case <-timeoutCtx.Done():
-			err = timeoutCtx.Err()
-			w.logger.Error("Task timed out waiting in execution queue",
-				zap.String("task_id", task.ID),
-				zap.String("task_name", task.Name),
-				zap.Error(err),
-			)
-			w.handleFailure(ctx, streamKey, msg, task, err)
 			return
 		}
 
-		// Wait for execution result or timeout
-		select {
-		case err = <-errChan:
-			if err != nil {
-				w.logger.Error("Task handler failed",
-					zap.String("task_id", task.ID),
-					zap.String("task_name", task.Name),
-					zap.Error(err),
-				)
-				w.handleFailure(ctx, streamKey, msg, task, err)
-				return
-			}
-		case <-timeoutCtx.Done():
-			err = timeoutCtx.Err() // context.DeadlineExceeded
-			w.logger.Error("Task handler timed out",
-				zap.String("task_id", task.ID),
-				zap.String("task_name", task.Name),
-				zap.Duration("timeout", timeout),
-				zap.Error(err),
-			)
-			w.handleFailure(ctx, streamKey, msg, task, err)
-			return
-		}
+		w.logger.Error("Task handler failed",
+			zap.String("task_id", task.ID),
+			zap.String("task_name", task.Name),
+			zap.Error(err),
+		)
+		w.handleFailure(ctx, streamKey, msg, task, err)
+		return
 	}
 
 	// Acknowledge successfully processed task

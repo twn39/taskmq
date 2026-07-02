@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 	taskmqv1 "github.com/twn39/taskmq/api/proto/taskmq/v1"
@@ -17,9 +18,25 @@ import (
 var Module = fx.Module("taskmq",
 	fx.Provide(
 		NewClient,
-		// Provide Worker with a default queue named "default"
-		func(rdb *redis.Client, logger *zap.Logger) Worker {
-			return NewWorkerPool(rdb, logger, "default")
+		// Provide CronManager
+		func(rdb *redis.Client, logger *zap.Logger) CronManager {
+			return newCronManager(rdb, logger, "default", JSONCodec{}, 1*time.Minute, 50*time.Second)
+		},
+		// Provide DelayedScheduler as a Runner
+		func(rdb *redis.Client, logger *zap.Logger, cron CronManager) Runner {
+			return newDelayedScheduler(rdb, logger, "default", cron, JSONCodec{}, 500*time.Millisecond)
+		},
+		// Provide PELRecoveryJanitor
+		func(rdb *redis.Client, logger *zap.Logger) PELRecoveryJanitor {
+			return newPELRecoveryJanitor(rdb, logger, "default", "taskmq-group", "taskmq-consumer-1", 5, 3*time.Second, 5*time.Second, nil)
+		},
+		// Provide Worker using injected dependencies
+		func(rdb *redis.Client, logger *zap.Logger, cron CronManager, scheduler Runner, janitor PELRecoveryJanitor) Worker {
+			return NewWorkerPool(rdb, logger, "default", WorkerOptions{
+				CronManager: cron,
+				Scheduler:   scheduler,
+				Janitor:     janitor,
+			})
 		},
 		// Provide gRPC Server constructor
 		NewGRPCServer,

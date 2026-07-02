@@ -9,26 +9,28 @@ import (
 )
 
 type delayedScheduler struct {
-	rdb         *redis.Client
-	logger      *zap.Logger
-	queue       string
-	cronManager CronManager
-	codec       Codec
+	rdb          *redis.Client
+	logger       *zap.Logger
+	queue        string
+	cronManager  CronManager
+	codec        Codec
+	pollInterval time.Duration
 }
 
-func newDelayedScheduler(rdb *redis.Client, logger *zap.Logger, queue string, cronManager CronManager, codec Codec) Runner {
+func newDelayedScheduler(rdb *redis.Client, logger *zap.Logger, queue string, cronManager CronManager, codec Codec, pollInterval time.Duration) Runner {
 	return &delayedScheduler{
-		rdb:         rdb,
-		logger:      logger,
-		queue:       queue,
-		cronManager: cronManager,
-		codec:       codec,
+		rdb:          rdb,
+		logger:       logger,
+		queue:        queue,
+		cronManager:  cronManager,
+		codec:        codec,
+		pollInterval: pollInterval,
 	}
 }
 
 // Run launches the delayed task scheduler loop
 func (s *delayedScheduler) Run(ctx context.Context) error {
-	ticker := time.NewTicker(500 * time.Millisecond)
+	ticker := time.NewTicker(s.pollInterval)
 	defer ticker.Stop()
 
 	delayedKey := DelayedKey(s.queue)
