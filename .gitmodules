@@ -7,3 +7,6 @@
 [submodule "third_party/asynq"]
 	path = third_party/asynq
 	url = https://github.com/hibiken/asynq.git
+[submodule "third_party/sidekiq"]
+	path = third_party/sidekiq
+	url = https://github.com/sidekiq/sidekiq.git
