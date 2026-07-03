@@ -119,107 +119,63 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 		limiter:       NewGCRALimiter(rdb),
 	}
 
+	var opt WorkerOptions
 	if len(opts) > 0 {
-		opt := opts[0]
-		if opt.Group != "" {
-			pool.group = opt.Group
-		}
-		if opt.Consumer != "" {
-			pool.consumer = opt.Consumer
-		}
-		if opt.Concurrency > 0 {
-			pool.concurrency = opt.Concurrency
-			pool.execPoolSize = opt.Concurrency
-		}
-		if opt.Codec != nil {
-			pool.codec = opt.Codec
-		}
-		pool.syncExecution = opt.SyncExecution
-		if opt.ExecutionPoolSize > 0 {
-			pool.execPoolSize = opt.ExecutionPoolSize
-		}
-		if opt.Context != nil {
-			pool.parentCtx = opt.Context
-		}
+		opt = opts[0]
+	} else {
+		panic("NewWorkerPool: WorkerOptions must be provided")
+	}
+	opt.ApplyDefaults(rdb, logger, queue, pool.codec)
 
-		pool.queues = opt.PriorityQueues
-		pool.priorityStrategy = opt.PriorityStrategy
-		if pool.priorityStrategy == "" {
-			pool.priorityStrategy = "weighted"
+	pool.group = opt.Group
+	pool.consumer = opt.Consumer
+	pool.concurrency = opt.Concurrency
+	pool.execPoolSize = opt.Concurrency
+	pool.codec = opt.Codec
+	pool.syncExecution = opt.SyncExecution
+	if opt.ExecutionPoolSize > 0 {
+		pool.execPoolSize = opt.ExecutionPoolSize
+	}
+	if opt.Context != nil {
+		pool.parentCtx = opt.Context
+	}
+
+	pool.queues = opt.PriorityQueues
+	pool.priorityStrategy = opt.PriorityStrategy
+	if pool.priorityStrategy == "" {
+		pool.priorityStrategy = "weighted"
+	}
+
+	if len(pool.queues) > 0 {
+		// Multi-queue priority mode
+		for _, q := range pool.queues {
+			qCron := newCronManager(rdb, logger, q.Name, pool.codec, opt.CronHealingInterval, opt.CronHealingLockTTL, opt.CronHealingScanBatchSize, opt.CronHealingScanMaxCount)
+			qSched := newDelayedScheduler(rdb, logger, q.Name, qCron, pool.codec, opt.SchedulerPollInterval)
+			qJan := newPELRecoveryJanitor(rdb, logger, q.Name, pool.group, pool.consumer, pool.concurrency, opt.JanitorInterval, opt.JanitorMinIdleTime, nil)
+
+			pool.cronManagers[q.Name] = qCron
+			pool.schedulers[q.Name] = qSched
+			pool.janitors[q.Name] = qJan
 		}
 
 		if len(pool.queues) > 0 {
-			// Multi-queue priority mode
-			cronHealingInterval := opt.CronHealingInterval
-			if cronHealingInterval <= 0 {
-				cronHealingInterval = 1 * time.Minute
-			}
-			cronHealingLockTTL := opt.CronHealingLockTTL
-			if cronHealingLockTTL <= 0 {
-				cronHealingLockTTL = 50 * time.Second
-			}
-			cronHealingScanBatchSize := opt.CronHealingScanBatchSize
-			if cronHealingScanBatchSize <= 0 {
-				cronHealingScanBatchSize = 100
-			}
-			cronHealingScanMaxCount := opt.CronHealingScanMaxCount
-			if cronHealingScanMaxCount <= 0 {
-				cronHealingScanMaxCount = 1000
-			}
-			schedulerPollInterval := opt.SchedulerPollInterval
-			if schedulerPollInterval <= 0 {
-				schedulerPollInterval = 500 * time.Millisecond
-			}
-			janitorInterval := opt.JanitorInterval
-			if janitorInterval <= 0 {
-				janitorInterval = 3 * time.Second
-			}
-			janitorMinIdleTime := opt.JanitorMinIdleTime
-			if janitorMinIdleTime <= 0 {
-				janitorMinIdleTime = 5 * time.Second
-			}
-
-			for _, q := range pool.queues {
-				qCron := newCronManager(rdb, logger, q.Name, pool.codec, cronHealingInterval, cronHealingLockTTL, cronHealingScanBatchSize, cronHealingScanMaxCount)
-				qSched := newDelayedScheduler(rdb, logger, q.Name, qCron, pool.codec, schedulerPollInterval)
-				qJan := newPELRecoveryJanitor(rdb, logger, q.Name, pool.group, pool.consumer, pool.concurrency, janitorInterval, janitorMinIdleTime, nil)
-
-				pool.cronManagers[q.Name] = qCron
-				pool.schedulers[q.Name] = qSched
-				pool.janitors[q.Name] = qJan
-			}
-
-			if len(pool.queues) > 0 {
-				firstQ := pool.queues[0].Name
-				pool.cronManager = pool.cronManagers[firstQ]
-				pool.scheduler = pool.schedulers[firstQ]
-				pool.janitor = pool.janitors[firstQ]
-			}
-		} else {
-			// Single-queue mode
-			if opt.CronManager != nil {
-				pool.cronManager = opt.CronManager
-				pool.cronManagers[queue] = opt.CronManager
-			}
-			if opt.Scheduler != nil {
-				pool.scheduler = opt.Scheduler
-				pool.schedulers[queue] = opt.Scheduler
-			}
-			if opt.Janitor != nil {
-				pool.janitor = opt.Janitor
-				pool.janitors[queue] = opt.Janitor
-			}
-
-			pool.rateLimitMax = opt.RateLimitMax
-			pool.rateLimitDuration = opt.RateLimitDuration
-			pool.rateLimitKeyField = opt.RateLimitKeyField
-
-			if pool.cronManager == nil || pool.scheduler == nil || pool.janitor == nil {
-				panic("NewWorkerPool: CronManager, Scheduler, and Janitor must be provided in WorkerOptions")
-			}
+			firstQ := pool.queues[0].Name
+			pool.cronManager = pool.cronManagers[firstQ]
+			pool.scheduler = pool.schedulers[firstQ]
+			pool.janitor = pool.janitors[firstQ]
 		}
 	} else {
-		panic("NewWorkerPool: WorkerOptions must be provided")
+		// Single-queue mode
+		pool.cronManager = opt.CronManager
+		pool.cronManagers[queue] = opt.CronManager
+		pool.scheduler = opt.Scheduler
+		pool.schedulers[queue] = opt.Scheduler
+		pool.janitor = opt.Janitor
+		pool.janitors[queue] = opt.Janitor
+
+		pool.rateLimitMax = opt.RateLimitMax
+		pool.rateLimitDuration = opt.RateLimitDuration
+		pool.rateLimitKeyField = opt.RateLimitKeyField
 	}
 
 	pool.sem = make(chan struct{}, pool.execPoolSize)
@@ -670,9 +626,13 @@ func (w *workerPool) processMessage(ctx context.Context, streamKey string, msg r
 			w.logger.Error("Failed to apply rate limiting", zap.Error(rlErr))
 		} else if wait > 0 {
 			w.logger.Debug("Rate limit exceeded, deferring task", zap.String("queue", task.Queue), zap.String("group_key", groupKeyVal), zap.Duration("wait", wait))
-			_ = w.rdb.XAck(ctx, streamKey, w.group, msg.ID).Err()
-			_ = w.rdb.XDel(ctx, streamKey, msg.ID).Err()
-			_ = w.enqueueDelayed(ctx, task, wait)
+			if err := w.deferRateLimitedTask(ctx, streamKey, msg.ID, task, wait); err != nil {
+				w.logger.Error("Failed to defer rate limited task atomically",
+					zap.String("task_id", task.ID),
+					zap.String("task_name", task.Name),
+					zap.Error(err),
+				)
+			}
 			return
 		}
 	}
@@ -717,6 +677,25 @@ func (w *workerPool) processMessage(ctx context.Context, streamKey string, msg r
 		w.releaseUniqueLock(ctx, task)
 	}
 }
+const luaDeferRateLimitedTask = `
+	local delayedKey = KEYS[1]
+	local streamKey = KEYS[2]
+	local group = ARGV[1]
+	local msgID = ARGV[2]
+	local score = tonumber(ARGV[3])
+	local serializedTask = ARGV[4]
+
+	-- Safety Check: Perform ZADD (reschedule) BEFORE XACK and XDEL.
+	-- Since Redis Lua has no rollback, if ZADD fails, the script aborts
+	-- and the message remains in the stream's PEL to prevent task loss.
+	redis.call('ZADD', delayedKey, score, serializedTask)
+
+	-- ACK the message in the stream to remove it from PEL
+	redis.call('XACK', streamKey, group, msgID)
+
+	-- Delete the message from the stream since it is relocated to the delayed queue
+	return redis.call('XDEL', streamKey, msgID)
+`
 
 const luaHandleFailure = `
 	local op = ARGV[1]
@@ -805,6 +784,18 @@ func (w *workerPool) handleFailure(ctx context.Context, streamKey string, msg re
 	if zerr != nil {
 		w.logger.Error("Failed to schedule task retry atomically", zap.Error(zerr))
 	}
+}
+
+func (w *workerPool) deferRateLimitedTask(ctx context.Context, streamKey string, msgID string, task *Task, delay time.Duration) error {
+	serialized, err := w.codec.Marshal(task)
+	if err != nil {
+		return fmt.Errorf("failed to serialize rate-limited task: %w", err)
+	}
+	delayedKey := DelayedKey(task.Queue)
+	at := time.Now().Add(delay)
+
+	_, err = w.rdb.Eval(ctx, luaDeferRateLimitedTask, []string{delayedKey, streamKey}, w.group, msgID, at.UnixMilli(), string(serialized)).Result()
+	return err
 }
 
 func (w *workerPool) releaseUniqueLock(ctx context.Context, task *Task) {

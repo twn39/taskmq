@@ -331,3 +331,114 @@ func TestTaskMQ_PriorityQueueRateLimiting(t *testing.T) {
 	assert.Equal(t, qLow, executedQueues[2])
 	assert.Equal(t, qCritical, executedQueues[3])
 }
+
+func TestTaskMQ_RateLimitDeferralAtomicity(t *testing.T) {
+	ctx := context.Background()
+	var rdb *redis.Client
+	var client taskmq.Client
+	var worker taskmq.Worker
+
+	qName := "atomicity_rate_limit_queue"
+
+	app := fxtest.New(
+		t,
+		fx.Provide(
+			func() *config.Config {
+				cfg := NewTestConfig()
+				cfg.TaskMQ.Queues = []config.QueueConfig{
+					{
+						Name:              qName,
+						Concurrency:       1,
+						RateLimitMax:      1,
+						RateLimitDuration: 10 * time.Second, // Long rate limit duration
+						RateLimitKeyField: "tenantId",        // Forces Phase 2 deferral!
+					},
+				}
+				return cfg
+			},
+			logger.NewLogger,
+			internalredis.NewRedisClient,
+			taskmq.NewClient,
+			func() taskmq.Codec { return taskmq.JSONCodec{} },
+			taskmq.ProvideWorkers,
+		),
+		fx.Invoke(taskmq.RegisterWorkerPoolLifecycle),
+		fx.Populate(&rdb, &client, &worker),
+	)
+
+	// Clean up Redis keys
+	rdb.Del(ctx, taskmq.StreamKey(qName), taskmq.DelayedKey(qName), taskmq.RateLimitKey(qName, "tenant-A"))
+	defer rdb.Del(ctx, taskmq.StreamKey(qName), taskmq.DelayedKey(qName), taskmq.RateLimitKey(qName, "tenant-A"))
+
+	// Pre-create consumer group
+	_ = rdb.XGroupCreateMkStream(ctx, taskmq.StreamKey(qName), "taskmq-group-"+qName, "0").Err()
+
+	var mu sync.Mutex
+	executionCount := 0
+	firstTaskDone := make(chan struct{})
+
+	mqWorker, ok := worker.(taskmq.MultiQueueWorker)
+	assert.True(t, ok)
+
+	mqWorker.Queue(qName).Register("task:atomicity:test", func(ctx context.Context, task *taskmq.Task) error {
+		mu.Lock()
+		executionCount++
+		count := executionCount
+		mu.Unlock()
+
+		if count == 1 {
+			close(firstTaskDone)
+		}
+		return nil
+	})
+
+	app.RequireStart()
+	defer app.RequireStop()
+
+	payloadBytes, _ := json.Marshal(map[string]string{"tenantId": "tenant-A"})
+
+	// 1. Enqueue first task (should execute immediately)
+	err := client.Enqueue(ctx, &taskmq.Task{
+		Queue:   qName,
+		Name:    "task:atomicity:test",
+		Payload: payloadBytes,
+	})
+	assert.NoError(t, err)
+
+	// Wait for first task to execute
+	select {
+	case <-firstTaskDone:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Timeout waiting for first task")
+	}
+
+	// 2. Enqueue second task (should hit rate limit and get deferred immediately)
+	err = client.Enqueue(ctx, &taskmq.Task{
+		Queue:   qName,
+		Name:    "task:atomicity:test",
+		Payload: payloadBytes,
+	})
+	assert.NoError(t, err)
+
+	// Wait and verify: the second task must be deferred atomically
+	// It should:
+	// a) Be deleted from the Stream (Stream length = 0)
+	// b) Be acknowledged (PEL size = 0)
+	// c) Be placed in the Delayed ZSET (ZSET size = 1)
+	assert.Eventually(t, func() bool {
+		streamLen, _ := rdb.XLen(ctx, taskmq.StreamKey(qName)).Result()
+		zsetSize, _ := rdb.ZCard(ctx, taskmq.DelayedKey(qName)).Result()
+		
+		// Check PEL size
+		pendingInfo, _ := rdb.XPending(ctx, taskmq.StreamKey(qName), "taskmq-group-"+qName).Result()
+		pelSize := 0
+		if pendingInfo != nil {
+			pelSize = int(pendingInfo.Count)
+		}
+
+		t.Logf("CHECK: streamLen=%d, pelSize=%d, zsetSize=%d", streamLen, pelSize, zsetSize)
+
+		return streamLen == 1 && pelSize == 0 && zsetSize == 1
+	}, 3*time.Second, 100*time.Millisecond, "Task was not deferred atomically into delayed ZSET or cleaned from Stream/PEL")
+}
+
