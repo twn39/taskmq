@@ -23,3 +23,9 @@ type PELRecoveryJanitor interface {
 	RegisterProcessor(fn func(ctx context.Context, msg redis.XMessage))
 }
 
+// MultiQueueWorker defines a worker pool coordinator that multiplexes multiple queue worker instances
+type MultiQueueWorker interface {
+	Worker
+	Queue(name string) Worker
+}
+

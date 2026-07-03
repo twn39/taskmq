@@ -14,6 +14,7 @@ redis:
 
 # TaskMQ configuration
 taskmq:
+  codec: "binary"
   default_unique_ttl: 1h
   cron_healing_interval: 1m
   cron_healing_lock_ttl: 50s
@@ -22,3 +23,6 @@ taskmq:
   scheduler_poll_interval: 500ms
   janitor_interval: 3s
   janitor_min_idle_time: 5s
+  queues:
+    - name: "default"
+      concurrency: 5

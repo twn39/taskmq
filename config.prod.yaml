@@ -7,3 +7,9 @@ logger:
 redis:
   addr: "localhost:6379"
   pool_size: 0
+
+taskmq:
+  codec: "binary"
+  queues:
+    - name: "default"
+      concurrency: 5

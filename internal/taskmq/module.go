@@ -4,7 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net"
-	"time"
+	"strings"
 
 	"github.com/redis/go-redis/v9"
 	taskmqv1 "github.com/twn39/taskmq/api/proto/taskmq/v1"
@@ -14,76 +14,32 @@ import (
 	"google.golang.org/grpc"
 )
 
-// WorkerParams defines the injected parameters for Worker, supporting optional RootCtx
-type WorkerParams struct {
+// ProvideWorkersParams defines the injected parameters for ProvideWorkers
+type ProvideWorkersParams struct {
 	fx.In
-	Rdb         *redis.Client
-	Logger      *zap.Logger
-	Cron        CronManager
-	Scheduler   Runner
-	Janitor     PELRecoveryJanitor
-	RootCtx     context.Context `optional:"true"`
+	Rdb     *redis.Client
+	Logger  *zap.Logger
+	Codec   Codec
+	Cfg     *config.Config
+	RootCtx context.Context `optional:"true"`
 }
 
 // Module is the Fx module for TaskMQ dependencies
 var Module = fx.Module("taskmq",
 	fx.Provide(
-		// Provide Client using injected config
-		func(rdb *redis.Client, cfg *config.Config) Client {
-			return NewClient(rdb, WithDefaultUniqueTTL(cfg.TaskMQ.DefaultUniqueTTL))
+		// Provide Codec based on config
+		func(cfg *config.Config) Codec {
+			if strings.ToLower(cfg.TaskMQ.Codec) == "binary" {
+				return BinaryCodec{}
+			}
+			return JSONCodec{}
 		},
-		// Provide CronManager
-		func(rdb *redis.Client, logger *zap.Logger, cfg *config.Config) CronManager {
-			healingInterval := 1 * time.Minute
-			if cfg.TaskMQ.CronHealingInterval > 0 {
-				healingInterval = cfg.TaskMQ.CronHealingInterval
-			}
-			healingLockTTL := 50 * time.Second
-			if cfg.TaskMQ.CronHealingLockTTL > 0 {
-				healingLockTTL = cfg.TaskMQ.CronHealingLockTTL
-			}
-			scanBatchSize := 100
-			if cfg.TaskMQ.CronHealingScanBatchSize > 0 {
-				scanBatchSize = cfg.TaskMQ.CronHealingScanBatchSize
-			}
-			scanMaxCount := 1000
-			if cfg.TaskMQ.CronHealingScanMaxCount > 0 {
-				scanMaxCount = cfg.TaskMQ.CronHealingScanMaxCount
-			}
-			return newCronManager(rdb, logger, "default", JSONCodec{}, healingInterval, healingLockTTL, scanBatchSize, scanMaxCount)
+		// Provide Client using injected config and codec
+		func(rdb *redis.Client, codec Codec, cfg *config.Config) Client {
+			return NewClient(rdb, WithDefaultUniqueTTL(cfg.TaskMQ.DefaultUniqueTTL), WithClientCodec(codec))
 		},
-		// Provide DelayedScheduler as a Runner
-		func(rdb *redis.Client, logger *zap.Logger, cron CronManager, cfg *config.Config) Runner {
-			pollInterval := 500 * time.Millisecond
-			if cfg.TaskMQ.SchedulerPollInterval > 0 {
-				pollInterval = cfg.TaskMQ.SchedulerPollInterval
-			}
-			return newDelayedScheduler(rdb, logger, "default", cron, JSONCodec{}, pollInterval)
-		},
-		// Provide PELRecoveryJanitor
-		func(rdb *redis.Client, logger *zap.Logger, cfg *config.Config) PELRecoveryJanitor {
-			janitorInterval := 3 * time.Second
-			if cfg.TaskMQ.JanitorInterval > 0 {
-				janitorInterval = cfg.TaskMQ.JanitorInterval
-			}
-			janitorMinIdleTime := 5 * time.Second
-			if cfg.TaskMQ.JanitorMinIdleTime > 0 {
-				janitorMinIdleTime = cfg.TaskMQ.JanitorMinIdleTime
-			}
-			return newPELRecoveryJanitor(rdb, logger, "default", "taskmq-group", "taskmq-consumer-1", 5, janitorInterval, janitorMinIdleTime, nil)
-		},
-		// Provide Worker using injected dependencies
-		func(p WorkerParams) Worker {
-			opts := WorkerOptions{
-				CronManager: p.Cron,
-				Scheduler:   p.Scheduler,
-				Janitor:     p.Janitor,
-			}
-			if p.RootCtx != nil {
-				opts.Context = p.RootCtx
-			}
-			return NewWorkerPool(p.Rdb, p.Logger, "default", opts)
-		},
+		// Provide Workers dynamically based on configuration
+		ProvideWorkers,
 		// Provide gRPC Server constructor
 		NewGRPCServer,
 	),
@@ -92,6 +48,58 @@ var Module = fx.Module("taskmq",
 		RegisterGRPCServerLifecycle,
 	),
 )
+
+// ProvideWorkers constructs and provides a Worker (implemented by multiWorker) for all configured queues.
+func ProvideWorkers(p ProvideWorkersParams) (Worker, error) {
+	workers := make(map[string]Worker)
+
+	queues := p.Cfg.TaskMQ.Queues
+	if len(queues) == 0 {
+		queues = []config.QueueConfig{
+			{
+				Name:        "default",
+				Concurrency: 5,
+			},
+		}
+	}
+
+	for _, qCfg := range queues {
+		concurrency := 5
+		if qCfg.Concurrency > 0 {
+			concurrency = qCfg.Concurrency
+		}
+		group := "taskmq-group-" + qCfg.Name
+		if qCfg.Group != "" {
+			group = qCfg.Group
+		}
+		consumer := "taskmq-consumer-" + qCfg.Name + "-1"
+		if qCfg.Consumer != "" {
+			consumer = qCfg.Consumer
+		}
+
+		baseOpts := WorkerOptions{
+			Group:                    group,
+			Consumer:                 consumer,
+			Concurrency:              concurrency,
+			CronHealingInterval:      p.Cfg.TaskMQ.CronHealingInterval,
+			CronHealingLockTTL:       p.Cfg.TaskMQ.CronHealingLockTTL,
+			CronHealingScanBatchSize: p.Cfg.TaskMQ.CronHealingScanBatchSize,
+			CronHealingScanMaxCount:  p.Cfg.TaskMQ.CronHealingScanMaxCount,
+			SchedulerPollInterval:    p.Cfg.TaskMQ.SchedulerPollInterval,
+			JanitorInterval:          p.Cfg.TaskMQ.JanitorInterval,
+			JanitorMinIdleTime:       p.Cfg.TaskMQ.JanitorMinIdleTime,
+		}
+		if p.RootCtx != nil {
+			baseOpts.Context = p.RootCtx
+		}
+
+		opts := NewDefaultWorkerOptions(p.Rdb, p.Logger, qCfg.Name, p.Codec, baseOpts)
+		pool := NewWorkerPool(p.Rdb, p.Logger, qCfg.Name, opts)
+		workers[qCfg.Name] = pool
+	}
+
+	return NewMultiQueueWorker(workers), nil
+}
 
 // RegisterWorkerPoolLifecycle registers worker pool startup and shutdown inside Fx container lifecycle hooks.
 func RegisterWorkerPoolLifecycle(lc fx.Lifecycle, worker Worker) {

@@ -1,0 +1,6 @@
+{
+  "exclude": ["third_party", ".git", ".gemini"],
+  "output": ".codegraph",
+  "languages": ["go"],
+  "cache": true
+}

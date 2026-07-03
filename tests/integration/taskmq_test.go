@@ -11,6 +11,7 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	taskmqv1 "github.com/twn39/taskmq/api/proto/taskmq/v1"
+	"github.com/twn39/taskmq/internal/config"
 	"github.com/twn39/taskmq/internal/logger"
 	internalredis "github.com/twn39/taskmq/internal/redis"
 	"github.com/twn39/taskmq/internal/taskmq"
@@ -47,11 +48,12 @@ func TestTaskMQ_MVPFlow(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
 					Group:       "test-group",
 					Consumer:    "test-consumer",
 					Concurrency: 2,
 				})
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
 				pool.Register("email:welcome", func(ctx context.Context, task *taskmq.Task) error {
 					var email WelcomeEmail
 					if err := json.Unmarshal(task.Payload, &email); err != nil {
@@ -123,11 +125,12 @@ func TestTaskMQ_DelayedFlow(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
 					Group:       "delayed-group",
 					Consumer:    "delayed-consumer",
 					Concurrency: 1,
 				})
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
 				pool.Register("task:delayed", func(ctx context.Context, task *taskmq.Task) error {
 					runChan <- time.Now()
 					return nil
@@ -186,11 +189,12 @@ func TestTaskMQ_RetryFlow(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
 					Group:       "retry-group",
 					Consumer:    "retry-consumer",
 					Concurrency: 1,
 				})
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
 				pool.Register("task:fail", func(ctx context.Context, task *taskmq.Task) error {
 					current := atomic.AddInt64(&execCount, 1)
 					if current >= 3 {
@@ -257,11 +261,12 @@ func TestTaskMQ_JanitorRecoveryFlow(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
 					Group:       "janitor-group",
 					Consumer:    "janitor-consumer",
 					Concurrency: 1,
 				})
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
 				pool.Register("task:crash", func(ctx context.Context, task *taskmq.Task) error {
 					count := atomic.AddInt64(&runCount, 1)
 					if count == 1 {
@@ -338,11 +343,12 @@ func TestTaskMQ_TimeoutCancellationFlow(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
 					Group:       "timeout-group",
 					Consumer:    "timeout-consumer",
 					Concurrency: 1,
 				})
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
 				pool.Register("task:slow", func(ctx context.Context, task *taskmq.Task) error {
 					atomic.AddInt64(&execCount, 1)
 
@@ -413,11 +419,12 @@ func TestTaskMQ_UniquenessFlow(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
 					Group:       "unique-group",
 					Consumer:    "unique-consumer",
 					Concurrency: 1,
 				})
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
 				pool.Register("task:unique", func(ctx context.Context, task *taskmq.Task) error {
 					runChan <- true
 					return nil
@@ -498,11 +505,12 @@ func TestTaskMQ_DLQFlow(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
 					Group:       "dlq-group",
 					Consumer:    "dlq-consumer",
 					Concurrency: 1,
 				})
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
 				pool.Register("task:fail", func(ctx context.Context, task *taskmq.Task) error {
 					att := atomic.AddInt64(&attempt, 1)
 					if att == 1 {
@@ -635,11 +643,12 @@ func TestTaskMQ_CronFlow(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
 					Concurrency:         2,
 					CronHealingInterval: 2 * time.Second,
 					CronHealingLockTTL:  1800 * time.Millisecond,
 				})
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
 				// Register handler for the cron job
 				pool.Register("cron:ticker", func(ctx context.Context, task *taskmq.Task) error {
 					val := atomic.AddInt64(&runCount, 1)
@@ -744,9 +753,10 @@ func TestTaskMQ_GRPCFlow(t *testing.T) {
 			taskmq.NewClient,
 			taskmq.NewGRPCServer,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
 					Concurrency: 2,
 				})
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
 				pool.Register("task:grpc-test", func(ctx context.Context, task *taskmq.Task) error {
 					runChan <- string(task.Payload)
 					return nil
@@ -821,10 +831,11 @@ func TestTaskMQ_BinaryCodec(t *testing.T) {
 				return taskmq.NewClient(rdb, taskmq.WithClientCodec(binaryCodec))
 			},
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, binaryCodec, taskmq.WorkerOptions{
 					Concurrency: 2,
 					Codec:       binaryCodec,
 				})
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
 				pool.Register("task:binary-test", func(ctx context.Context, task *taskmq.Task) error {
 					runChan <- string(task.Payload)
 					return nil
@@ -880,10 +891,11 @@ func TestTaskMQ_SyncExecution(t *testing.T) {
 				return taskmq.NewClient(rdb)
 			},
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
 					Concurrency:   2,
 					SyncExecution: true,
 				})
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
 				pool.Register("task:sync-exec-test", func(ctx context.Context, task *taskmq.Task) error {
 					runChan <- string(task.Payload)
 					return nil
@@ -938,9 +950,10 @@ func TestTaskMQ_ExecutionPoolPanicRecovery(t *testing.T) {
 				return taskmq.NewClient(rdb)
 			},
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
 					Concurrency: 2,
 				})
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
 				pool.Register("task:panic-test", func(ctx context.Context, task *taskmq.Task) error {
 					panic("something went terribly wrong")
 				})
@@ -996,11 +1009,12 @@ func TestTaskMQ_CronSelfHealing_CustomConfig(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
 					Concurrency:         1,
 					CronHealingInterval: 1 * time.Second,
 					CronHealingLockTTL:  800 * time.Millisecond,
 				})
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
 				pool.Register("cron:healing:custom", func(ctx context.Context, task *taskmq.Task) error {
 					val := atomic.AddInt64(&runCount, 1)
 					if val >= 1 {
@@ -1103,10 +1117,11 @@ func TestTaskMQ_BackpressureFlow(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
 					Concurrency:       1,
 					ExecutionPoolSize: 1, // Only 1 concurrent task execution allowed
 				})
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
 				pool.Register("task:slow", func(ctx context.Context, task *taskmq.Task) error {
 					atomic.AddInt64(&runCount, 1)
 					if task.Retry > 0 {
@@ -1192,13 +1207,14 @@ func TestTaskMQ_CronSelfHealing_Pagination_ExceededLimit(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
 					Concurrency:              1,
 					CronHealingInterval:      1 * time.Second,
 					CronHealingLockTTL:       800 * time.Millisecond,
 					CronHealingScanBatchSize: 2,
 					CronHealingScanMaxCount:  5, // will not reach the cron task if we put 8 dummy tasks first
 				})
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
 				return pool
 			},
 		),
@@ -1283,13 +1299,14 @@ func TestTaskMQ_CronSelfHealing_Pagination_WithinLimit(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
 					Concurrency:              1,
 					CronHealingInterval:      1 * time.Second,
 					CronHealingLockTTL:       800 * time.Millisecond,
 					CronHealingScanBatchSize: 2,
 					CronHealingScanMaxCount:  15, // large enough to find the cron task at position 9
 				})
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
 				return pool
 			},
 		),
@@ -1363,10 +1380,11 @@ func TestTaskMQ_WorkerPool_ParentContextCancellation(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
 					Concurrency: 1,
 					Context:     ctx,
 				})
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
 				pool.Register("task:test", func(ctx context.Context, task *taskmq.Task) error {
 					return nil
 				})
@@ -1386,7 +1404,7 @@ func TestTaskMQ_WorkerPool_ParentContextCancellation(t *testing.T) {
 	cancel()
 
 	// Wait for the cancellation to propagate and shutdown loops
-	time.Sleep(500 * time.Millisecond)
+	time.Sleep(1500 * time.Millisecond)
 
 	// Enqueue a task
 	task := taskmq.NewTask("task:test", []byte("payload"), taskmq.TaskOptions{
@@ -1423,9 +1441,10 @@ func TestTaskMQ_WorkerPool_GracefulShutdownDeadline(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
 					Concurrency: 1,
 				})
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
 				pool.Register("task:long", func(ctx context.Context, task *taskmq.Task) error {
 					select {
 					case <-time.After(5 * time.Second):
@@ -1470,6 +1489,86 @@ func TestTaskMQ_WorkerPool_GracefulShutdownDeadline(t *testing.T) {
 	assert.Equal(t, int32(1), atomic.LoadInt32(&taskCancelled), "Task should have been cancelled by Stop because deadline was reached")
 
 	app.RequireStop()
+}
+
+func TestTaskMQ_MultiQueue(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	q1 := "multi_queue_1"
+	q2 := "multi_queue_2"
+
+	run1 := make(chan string, 1)
+	run2 := make(chan string, 1)
+
+	var rdb *goredis.Client
+	var client taskmq.Client
+	var worker taskmq.Worker
+
+	app := fxtest.New(t,
+		fx.Provide(
+			func() *config.Config {
+				cfg := NewTestConfig()
+				cfg.TaskMQ.Queues = []config.QueueConfig{
+					{Name: q1, Concurrency: 1},
+					{Name: q2, Concurrency: 1},
+				}
+				return cfg
+			},
+			logger.NewLogger,
+			internalredis.NewRedisClient,
+			taskmq.NewClient,
+			func() taskmq.Codec { return taskmq.JSONCodec{} }, // Provide Codec explicitly
+			taskmq.ProvideWorkers,
+		),
+		fx.Invoke(taskmq.RegisterWorkerPoolLifecycle),
+		fx.Populate(&rdb, &client, &worker),
+	)
+
+	// Clean up Redis
+	_ = rdb.Del(ctx, taskmq.StreamKey(q1)).Err()
+	_ = rdb.Del(ctx, taskmq.StreamKey(q2)).Err()
+
+	// Assert the returned worker is a MultiQueueWorker
+	mqWorker, ok := worker.(taskmq.MultiQueueWorker)
+	assert.True(t, ok, "Worker should implement MultiQueueWorker")
+
+	// Register handlers on specific queues
+	mqWorker.Queue(q1).Register("task:q1", func(ctx context.Context, task *taskmq.Task) error {
+		run1 <- string(task.Payload)
+		return nil
+	})
+	mqWorker.Queue(q2).Register("task:q2", func(ctx context.Context, task *taskmq.Task) error {
+		run2 <- string(task.Payload)
+		return nil
+	})
+
+	app.RequireStart()
+	defer app.RequireStop()
+
+	// Enqueue tasks to different queues
+	t1 := taskmq.NewTask("task:q1", []byte("payload-1"), taskmq.TaskOptions{Queue: q1})
+	err := client.Enqueue(ctx, t1)
+	assert.NoError(t, err)
+
+	t2 := taskmq.NewTask("task:q2", []byte("payload-2"), taskmq.TaskOptions{Queue: q2})
+	err = client.Enqueue(ctx, t2)
+	assert.NoError(t, err)
+
+	// Verify execution
+	select {
+	case p1 := <-run1:
+		assert.Equal(t, "payload-1", p1)
+	case <-ctx.Done():
+		t.Fatal("Timeout waiting for task on queue 1")
+	}
+
+	select {
+	case p2 := <-run2:
+		assert.Equal(t, "payload-2", p2)
+	case <-ctx.Done():
+		t.Fatal("Timeout waiting for task on queue 2")
+	}
 }
 
 

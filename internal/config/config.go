@@ -32,7 +32,15 @@ type RedisConfig struct {
 	PoolSize int    `mapstructure:"pool_size"`
 }
 
+type QueueConfig struct {
+	Name        string `mapstructure:"name"`
+	Concurrency int    `mapstructure:"concurrency"`
+	Group       string `mapstructure:"group"`
+	Consumer    string `mapstructure:"consumer"`
+}
+
 type TaskMQConfig struct {
+	Codec                    string        `mapstructure:"codec"`
 	DefaultUniqueTTL         time.Duration `mapstructure:"default_unique_ttl"`
 	CronHealingInterval      time.Duration `mapstructure:"cron_healing_interval"`
 	CronHealingLockTTL       time.Duration `mapstructure:"cron_healing_lock_ttl"`
@@ -41,6 +49,7 @@ type TaskMQConfig struct {
 	SchedulerPollInterval    time.Duration `mapstructure:"scheduler_poll_interval"`
 	JanitorInterval          time.Duration `mapstructure:"janitor_interval"`
 	JanitorMinIdleTime       time.Duration `mapstructure:"janitor_min_idle_time"`
+	Queues                   []QueueConfig `mapstructure:"queues"`
 }
 
 // NewConfig loads the configuration from environment variables and/or config files
@@ -56,6 +65,7 @@ func NewConfig() (*Config, error) {
 	v.SetDefault("redis.db", 0)
 	v.SetDefault("redis.pool_size", 0)
 
+	v.SetDefault("taskmq.codec", "binary")
 	v.SetDefault("taskmq.default_unique_ttl", 1*time.Hour)
 	v.SetDefault("taskmq.cron_healing_interval", 1*time.Minute)
 	v.SetDefault("taskmq.cron_healing_lock_ttl", 50*time.Second)
@@ -64,6 +74,12 @@ func NewConfig() (*Config, error) {
 	v.SetDefault("taskmq.scheduler_poll_interval", 500*time.Millisecond)
 	v.SetDefault("taskmq.janitor_interval", 3*time.Second)
 	v.SetDefault("taskmq.janitor_min_idle_time", 5*time.Second)
+	v.SetDefault("taskmq.queues", []map[string]interface{}{
+		{
+			"name":        "default",
+			"concurrency": 5,
+		},
+	})
 
 	// Enable environment variable support
 	// This makes env vars like TASKMQ_SERVER_PORT map to server.port

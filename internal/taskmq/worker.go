@@ -82,14 +82,6 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 		parentCtx:     context.Background(),
 	}
 
-	cronHealingInterval := 1 * time.Minute
-	cronHealingLockTTL := 50 * time.Second
-	cronHealingScanBatchSize := 100
-	cronHealingScanMaxCount := 1000
-	schedulerPollInterval := 500 * time.Millisecond
-	janitorInterval := 3 * time.Second
-	janitorMinIdleTime := 5 * time.Second
-
 	if len(opts) > 0 {
 		opt := opts[0]
 		if opt.Group != "" {
@@ -109,18 +101,6 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 		if opt.ExecutionPoolSize > 0 {
 			pool.execPoolSize = opt.ExecutionPoolSize
 		}
-		if opt.CronHealingInterval > 0 {
-			cronHealingInterval = opt.CronHealingInterval
-		}
-		if opt.CronHealingLockTTL > 0 {
-			cronHealingLockTTL = opt.CronHealingLockTTL
-		}
-		if opt.CronHealingScanBatchSize > 0 {
-			cronHealingScanBatchSize = opt.CronHealingScanBatchSize
-		}
-		if opt.CronHealingScanMaxCount > 0 {
-			cronHealingScanMaxCount = opt.CronHealingScanMaxCount
-		}
 		if opt.Context != nil {
 			pool.parentCtx = opt.Context
 		}
@@ -133,28 +113,13 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 		if opt.Janitor != nil {
 			pool.janitor = opt.Janitor
 		}
-		if opt.SchedulerPollInterval > 0 {
-			schedulerPollInterval = opt.SchedulerPollInterval
-		}
-		if opt.JanitorInterval > 0 {
-			janitorInterval = opt.JanitorInterval
-		}
-		if opt.JanitorMinIdleTime > 0 {
-			janitorMinIdleTime = opt.JanitorMinIdleTime
-		}
+	}
+
+	if pool.cronManager == nil || pool.scheduler == nil || pool.janitor == nil {
+		panic("NewWorkerPool: CronManager, Scheduler, and Janitor must be provided in WorkerOptions")
 	}
 
 	pool.sem = make(chan struct{}, pool.execPoolSize)
-
-	if pool.cronManager == nil {
-		pool.cronManager = newCronManager(rdb, logger, queue, pool.codec, cronHealingInterval, cronHealingLockTTL, cronHealingScanBatchSize, cronHealingScanMaxCount)
-	}
-	if pool.scheduler == nil {
-		pool.scheduler = newDelayedScheduler(rdb, logger, queue, pool.cronManager, pool.codec, schedulerPollInterval)
-	}
-	if pool.janitor == nil {
-		pool.janitor = newPELRecoveryJanitor(rdb, logger, queue, pool.group, pool.consumer, pool.concurrency, janitorInterval, janitorMinIdleTime, nil)
-	}
 
 	if j, ok := pool.janitor.(PELRecoveryJanitor); ok {
 		j.RegisterProcessor(func(ctx context.Context, msg redis.XMessage) {
