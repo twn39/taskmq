@@ -56,6 +56,10 @@ type workerPool struct {
 	rateLimitMax      int64
 	rateLimitDuration time.Duration
 	rateLimitKeyField string
+
+	// Decoupled abstractions
+	broker      TaskBroker
+	retryPolicy RetryPolicy
 }
 
 type WorkerOptions struct {
@@ -74,6 +78,8 @@ type WorkerOptions struct {
 	CronManager CronManager
 	Scheduler   Runner
 	Janitor     Runner
+	Broker      TaskBroker  // Decoupled Task Broker
+	RetryPolicy RetryPolicy // Decoupled Retry Policy
 
 	// Scheduler & Janitor Tick Intervals (DIP / Configurable tickers)
 	SchedulerPollInterval time.Duration
@@ -138,6 +144,19 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 	pool.rateLimitDuration = opt.RateLimitDuration
 	pool.rateLimitKeyField = opt.RateLimitKeyField
 
+	// Decoupled components
+	if opt.Broker != nil {
+		pool.broker = opt.Broker
+	} else {
+		pool.broker = NewRedisBroker(rdb, pool.codec)
+	}
+
+	if opt.RetryPolicy != nil {
+		pool.retryPolicy = opt.RetryPolicy
+	} else {
+		pool.retryPolicy = NewExponentialBackoff(100*time.Millisecond, 1*time.Hour)
+	}
+
 	pool.sem = make(chan struct{}, pool.execPoolSize)
 
 	// Register processors for janitor
@@ -190,7 +209,7 @@ func (w *workerPool) Start(ctx context.Context) error {
 	}
 	if w.cronManager != nil {
 		w.wg.Add(1)
-		go w.runBackgroundLoop(w.cronManager, "cronManager-"+w.queue)
+		go w.runBackgroundLoop(w.cronManager, "cron-"+w.queue)
 	}
 
 	return nil
@@ -198,68 +217,48 @@ func (w *workerPool) Start(ctx context.Context) error {
 
 // Stop stops the worker pool gracefully
 func (w *workerPool) Stop(ctxs ...context.Context) {
-	w.logger.Info("Stopping TaskMQ worker pool gracefully")
+	w.logger.Info("Stopping TaskMQ worker pool", zap.String("queue", w.queue))
+
+	// Step 1: Terminate active consumer loops so they don't read new messages
 	if w.consumerCancel != nil {
 		w.consumerCancel()
 	}
 
-	var ctx context.Context
-	if len(ctxs) > 0 {
-		ctx = ctxs[0]
-	} else {
-		ctx = context.Background()
+	// Step 2: Cancel root context so all active processing and background loops stop
+	if w.cancel != nil {
+		w.cancel()
 	}
 
-	done := make(chan struct{})
+	// Wait for all workers and background processes to terminate
+	waitChan := make(chan struct{})
 	go func() {
 		w.wg.Wait()
-		close(done)
+		close(waitChan)
 	}()
 
+	var timeoutCtx context.Context
+	var cancel context.CancelFunc
+	if len(ctxs) > 0 {
+		timeoutCtx = ctxs[0]
+	} else {
+		timeoutCtx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+	}
+
 	select {
-	case <-ctx.Done():
-		w.logger.Warn("Graceful shutdown timeout, cancelling remaining context and forcing exit")
-		if w.cancel != nil {
-			w.cancel()
-		}
-		<-done
-	case <-done:
-		w.logger.Info("TaskMQ worker pool stopped")
+	case <-waitChan:
+		w.logger.Info("All TaskMQ workers and background loops stopped gracefully")
+	case <-timeoutCtx.Done():
+		w.logger.Warn("Graceful shutdown timed out; some tasks may still be active in background")
 	}
 }
 
 func (w *workerPool) runBackgroundLoop(runner Runner, name string) {
 	defer w.wg.Done()
-	defer func() {
-		if r := recover(); r != nil {
-			w.logger.Error("Panic recovered in background loop",
-				zap.String("loop_name", name),
-				zap.Any("panic", r),
-			)
-		}
-	}()
-
-	err := runner.Run(w.ctx)
-	if err != nil && err != context.Canceled {
-		w.logger.Error("Background loop failed",
-			zap.String("loop_name", name),
-			zap.Error(err),
-		)
+	w.logger.Info("Starting background runner loop", zap.String("runner", name))
+	if err := runner.Run(w.ctx); err != nil && err != context.Canceled {
+		w.logger.Error("Background runner stopped with error", zap.String("runner", name), zap.Error(err))
 	}
-}
-
-func (w *workerPool) runHandlerWithRecovery(ctx context.Context, task *Task, handler HandlerFunc) (err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("task handler panicked: %v", r)
-			w.logger.Error("Panic recovered in task handler execution",
-				zap.String("task_id", task.ID),
-				zap.String("task_name", task.Name),
-				zap.Any("panic", r),
-			)
-		}
-	}()
-	return handler(ctx, task)
 }
 
 func (w *workerPool) worker(streamKey string) {
@@ -270,109 +269,71 @@ func (w *workerPool) worker(streamKey string) {
 		case <-w.consumerCtx.Done():
 			return
 		default:
-			// 1. Acquire execution slot token before pulling task from Redis
-			select {
-			case <-w.consumerCtx.Done():
-				return
-			case w.sem <- struct{}{}:
-			}
-
-			var streams []redis.XStream
-			var err error
-
-			rlMax, rlDuration, rlKeyField := w.getQueueRateLimit(w.queue)
-			if rlMax > 0 && rlDuration > 0 && rlKeyField == "" {
-				limitKey := RateLimitKey(w.queue, "")
-				wait, checkErr := w.limiter.Check(w.consumerCtx, limitKey, rlMax, rlDuration)
-				if checkErr == nil && wait > 0 {
-					w.releaseToken()
-					select {
-					case <-w.consumerCtx.Done():
-						return
-					case <-time.After(wait):
-					}
-					continue
-				}
-			}
-
-			streams, err = w.rdb.XReadGroup(w.consumerCtx, &redis.XReadGroupArgs{
+			// Block-reading messages from group. Use block duration 100ms.
+			streams, err := w.rdb.XReadGroup(w.consumerCtx, &redis.XReadGroupArgs{
 				Group:    w.group,
 				Consumer: w.consumer,
 				Streams:  []string{streamKey, ">"},
 				Count:    1,
-				Block:    time.Second,
+				Block:    100 * time.Millisecond,
 			}).Result()
 
 			if err != nil {
-				w.releaseToken() // Release token since we didn't get any message
-				if w.consumerCtx.Err() != nil {
-					return
-				}
-				if err == redis.Nil {
+				if err == redis.Nil || err == context.Canceled || w.consumerCtx.Err() != nil {
 					continue
 				}
-				if netErr, ok := err.(interface{ Timeout() bool }); ok && netErr.Timeout() {
-					continue
-				}
-				w.logger.Error("Worker error reading stream", zap.Error(err))
-				time.Sleep(time.Second)
+				w.logger.Error("Failed to read messages from stream group", zap.Error(err))
+				time.Sleep(200 * time.Millisecond) // exponential backoff fallback
 				continue
 			}
 
-			msgPulled := false
-			firstMsg := true
 			for _, stream := range streams {
 				for _, msg := range stream.Messages {
-					msgPulled = true
-					if !firstMsg {
-						select {
-						case <-w.consumerCtx.Done():
-							return
-						case w.sem <- struct{}{}:
-						}
-					}
-					firstMsg = false
-
 					if w.syncExecution {
 						w.ProcessMessage(w.ctx, msg)
-						w.releaseToken()
 					} else {
-						w.wg.Add(1)
-						go func(m redis.XMessage) {
-							defer w.wg.Done()
-							defer w.releaseToken()
-							w.ProcessMessage(w.ctx, m)
-						}(msg)
+						// Concurrency control via semaphore
+						select {
+						case w.sem <- struct{}{}:
+							w.wg.Add(1)
+							go func(m redis.XMessage) {
+								defer func() {
+									<-w.sem
+									w.wg.Done()
+								}()
+								w.ProcessMessage(w.ctx, m)
+							}(msg)
+						case <-w.consumerCtx.Done():
+							return
+						}
 					}
 				}
-			}
-
-			if !msgPulled {
-				w.releaseToken()
 			}
 		}
 	}
 }
 
-func (w *workerPool) releaseToken() {
-	select {
-	case <-w.sem:
-	default:
-	}
-}
-
+// ProcessMessage unmarshals and executes a task from a stream message
 func (w *workerPool) ProcessMessage(ctx context.Context, msg redis.XMessage) {
 	streamKey := StreamKey(w.queue)
-	taskData, ok := msg.Values["task"].(string)
+
+	taskRaw, ok := msg.Values["task"]
 	if !ok {
-		w.logger.Error("Invalid message payload format, missing 'task' field")
+		w.logger.Error("Message values missing 'task' field; acknowledging corrupted message", zap.String("msg_id", msg.ID))
+		_ = w.rdb.XAck(ctx, streamKey, w.group, msg.ID).Err()
+		return
+	}
+
+	taskStr, ok := taskRaw.(string)
+	if !ok {
+		w.logger.Error("Message 'task' field is not a string; acknowledging corrupted message", zap.String("msg_id", msg.ID))
 		_ = w.rdb.XAck(ctx, streamKey, w.group, msg.ID).Err()
 		return
 	}
 
 	task := &Task{}
-	if err := w.codec.Unmarshal([]byte(taskData), task); err != nil {
-		w.logger.Error("Failed to deserialize task", zap.Error(err))
+	if err := w.codec.Unmarshal([]byte(taskStr), task); err != nil {
+		w.logger.Error("Failed to unmarshal task; acknowledging corrupted message", zap.String("msg_id", msg.ID), zap.Error(err))
 		_ = w.rdb.XAck(ctx, streamKey, w.group, msg.ID).Err()
 		return
 	}
@@ -397,7 +358,8 @@ func (w *workerPool) ProcessMessage(ctx context.Context, msg redis.XMessage) {
 			w.logger.Error("Failed to apply rate limiting", zap.Error(rlErr))
 		} else if wait > 0 {
 			w.logger.Debug("Rate limit exceeded, deferring task", zap.String("queue", task.Queue), zap.String("group_key", groupKeyVal), zap.Duration("wait", wait))
-			if err := w.deferRateLimitedTask(ctx, msg.ID, task, wait); err != nil {
+			runAt := time.Now().Add(wait)
+			if err := w.broker.DeferRateLimitedTask(ctx, msg.ID, task, runAt); err != nil {
 				w.logger.Error("Failed to defer rate limited task atomically",
 					zap.String("task_id", task.ID),
 					zap.String("task_name", task.Name),
@@ -438,60 +400,15 @@ func (w *workerPool) ProcessMessage(ctx context.Context, msg redis.XMessage) {
 
 	// Uniqueness locks release (if lock is active)
 	if task.UniqueKey != "" {
-		w.releaseUniqueLock(ctx, task)
+		_ = w.broker.ReleaseUniqueLock(ctx, task)
 	}
 }
-
-const luaDeferRateLimitedTask = `
-	local delayedKey = KEYS[1]
-	local streamKey = KEYS[2]
-	local group = ARGV[1]
-	local msgID = ARGV[2]
-	local score = tonumber(ARGV[3])
-	local serializedTask = ARGV[4]
-
-	-- Safety Check: Perform ZADD (reschedule/archive) BEFORE XACK.
-	redis.call('ZADD', delayedKey, score, serializedTask)
-
-	-- ACK the message in the stream to remove it from PEL
-	return redis.call('XACK', streamKey, group, msgID)
-`
-
-const luaHandleFailure = `
-	local op = ARGV[1]
-	local msgID = ARGV[2]
-	local group = ARGV[3]
-	local score = tonumber(ARGV[4])
-	local serializedTask = ARGV[5]
-
-	-- Safety Check: Perform ZADD (reschedule/archive) BEFORE XACK.
-	-- Since Redis Lua has no rollback, if ZADD fails, the script aborts
-	-- and the message remains in the stream's PEL to prevent task loss.
-	redis.call('ZADD', KEYS[1], score, serializedTask)
-
-	if op == 'dlq' then
-		-- Limit DLQ size to latest 1000 items
-		redis.call('ZREMRANGEBYRANK', KEYS[1], 0, -1001)
-		
-		-- Release unique lock if provided
-		local uniqueKey = KEYS[3]
-		local uniqueKeyVal = ARGV[6]
-		if uniqueKey ~= '' and uniqueKeyVal ~= '' then
-			if redis.call('GET', uniqueKey) == uniqueKeyVal then
-				redis.call('DEL', uniqueKey)
-			end
-		end
-	end
-
-	-- ACK the message in the stream to remove it from PEL
-	return redis.call('XACK', KEYS[2], group, msgID)
-`
 
 func (w *workerPool) handleFailure(ctx context.Context, msg redis.XMessage, task *Task, err error) {
 	task.Retry++
 	streamKey := StreamKey(w.queue)
 
-	if task.Retry >= task.MaxRetry {
+	if !w.retryPolicy.ShouldRetry(task) {
 		task.LastError = err.Error()
 		w.logger.Error("Task exhausted all retries, moving to DLQ",
 			zap.String("task_id", task.ID),
@@ -500,86 +417,34 @@ func (w *workerPool) handleFailure(ctx context.Context, msg redis.XMessage, task
 			zap.String("error", task.LastError),
 		)
 
-		// Serialize and store in DLQ ZSET
-		serialized, _ := w.codec.Marshal(task)
-		dlqKey := DLQKey(task.Queue)
-		nowMs := time.Now().UnixMilli()
-
-		var uniqueLockKey string
-		var uniqueLockVal string
-		if task.UniqueKey != "" {
-			uniqueLockKey = UniqueKey(task.Queue, task.UniqueKey)
-			uniqueLockVal = task.ID
-		}
-
-		// Execute atomic DLQ move, lock release, and ACK
-		_, zerr := w.rdb.Eval(ctx, luaHandleFailure, []string{dlqKey, streamKey, uniqueLockKey}, "dlq", msg.ID, w.group, nowMs, string(serialized), uniqueLockVal).Result()
-		if zerr != nil {
-			w.logger.Error("Failed to move task to DLQ atomically", zap.Error(zerr))
+		if err := w.broker.MoveToDLQ(ctx, task, streamKey, msg.ID, w.group); err != nil {
+			w.logger.Error("Failed to move task to DLQ atomically", zap.Error(err))
 		}
 		return
 	}
 
-	// Exponential backoff: 2^retry * 100ms (faster for tests, scalable for prod)
-	backoff := time.Millisecond * time.Duration(100*(1<<uint(task.Retry)))
+	backoff := w.retryPolicy.NextBackoff(task)
 
-	w.logger.Info("Scheduling task retry with exponential backoff",
+	w.logger.Info("Scheduling task retry with backoff",
 		zap.String("task_id", task.ID),
 		zap.String("task_name", task.Name),
 		zap.Int("retry", task.Retry),
 		zap.Duration("backoff", backoff),
 	)
 
-	// Serialize updated task state
-	serialized, err := w.codec.Marshal(task)
-	if err != nil {
-		w.logger.Error("Failed to serialize retry task", zap.Error(err))
-		return
-	}
-
-	delayedKey := DelayedKey(task.Queue)
-	at := time.Now().Add(backoff)
-
-	// Execute atomic retry schedule and ACK
-	_, zerr := w.rdb.Eval(ctx, luaHandleFailure, []string{delayedKey, streamKey, ""}, "retry", msg.ID, w.group, at.UnixMilli(), string(serialized), "").Result()
-	if zerr != nil {
-		w.logger.Error("Failed to schedule task retry atomically", zap.Error(zerr))
+	runAt := time.Now().Add(backoff)
+	if err := w.broker.ScheduleRetry(ctx, task, streamKey, msg.ID, w.group, runAt); err != nil {
+		w.logger.Error("Failed to schedule task retry atomically", zap.Error(err))
 	}
 }
 
-func (w *workerPool) deferRateLimitedTask(ctx context.Context, msgID string, task *Task, delay time.Duration) error {
-	serialized, err := w.codec.Marshal(task)
-	if err != nil {
-		return fmt.Errorf("failed to serialize rate-limited task: %w", err)
-	}
-	delayedKey := DelayedKey(task.Queue)
-	streamKey := StreamKey(w.queue)
-	at := time.Now().Add(delay)
-
-	_, err = w.rdb.Eval(ctx, luaDeferRateLimitedTask, []string{delayedKey, streamKey}, w.group, msgID, at.UnixMilli(), string(serialized)).Result()
-	return err
-}
-
-func (w *workerPool) releaseUniqueLock(ctx context.Context, task *Task) {
-	if task.UniqueKey == "" {
-		return
-	}
-	uniqueKey := UniqueKey(task.Queue, task.UniqueKey)
-	luaUnlock := `
-		if redis.call("get", KEYS[1]) == ARGV[1] then
-			return redis.call("del", KEYS[1])
-		else
-			return 0
-		end
-	`
-	err := w.rdb.Eval(ctx, luaUnlock, []string{uniqueKey}, task.ID).Err()
-	if err != nil {
-		w.logger.Error("Failed to release task uniqueness lock",
-			zap.String("task_id", task.ID),
-			zap.String("unique_key", task.UniqueKey),
-			zap.Error(err),
-		)
-	}
+func (w *workerPool) runHandlerWithRecovery(ctx context.Context, task *Task, handler HandlerFunc) (err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("task panicked: %v", r)
+		}
+	}()
+	return handler(ctx, task)
 }
 
 func RateLimitKey(queue string, groupKey string) string {
@@ -594,19 +459,6 @@ func (w *workerPool) getQueueRateLimit(qName string) (int64, time.Duration, stri
 		return w.rateLimitMax, w.rateLimitDuration, w.rateLimitKeyField
 	}
 	return 0, 0, ""
-}
-
-func (w *workerPool) enqueueDelayed(ctx context.Context, task *Task, delay time.Duration) error {
-	serialized, err := w.codec.Marshal(task)
-	if err != nil {
-		return err
-	}
-	delayedKey := DelayedKey(task.Queue)
-	at := time.Now().Add(delay)
-	return w.rdb.ZAdd(ctx, delayedKey, redis.Z{
-		Score:  float64(at.UnixMilli()),
-		Member: string(serialized),
-	}).Err()
 }
 
 func shuffleQueues(queues []QueuePriority) []string {
