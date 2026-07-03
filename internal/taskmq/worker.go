@@ -58,8 +58,9 @@ type workerPool struct {
 	rateLimitKeyField string
 
 	// Decoupled abstractions
-	broker      TaskBroker
-	retryPolicy RetryPolicy
+	broker           TaskBroker
+	retryPolicy      RetryPolicy
+	deadLetterPolicy DeadLetterPolicy
 }
 
 type WorkerOptions struct {
@@ -75,11 +76,12 @@ type WorkerOptions struct {
 	CronHealingScanMaxCount  int
 
 	// Dependency Injections
-	CronManager CronManager
-	Scheduler   Runner
-	Janitor     Runner
-	Broker      TaskBroker  // Decoupled Task Broker
-	RetryPolicy RetryPolicy // Decoupled Retry Policy
+	CronManager      CronManager
+	Scheduler        Runner
+	Janitor          Runner
+	Broker           TaskBroker       // Decoupled Task Broker
+	RetryPolicy      RetryPolicy      // Decoupled Retry Policy
+	DeadLetterPolicy DeadLetterPolicy // Decoupled Dead Letter Policy
 
 	// Scheduler & Janitor Tick Intervals (DIP / Configurable tickers)
 	SchedulerPollInterval time.Duration
@@ -154,7 +156,13 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 	if opt.RetryPolicy != nil {
 		pool.retryPolicy = opt.RetryPolicy
 	} else {
-		pool.retryPolicy = NewExponentialBackoff(100*time.Millisecond, 1*time.Hour)
+		pool.retryPolicy = NewExponentialBackoff(100*time.Millisecond, 1*time.Hour, true)
+	}
+
+	if opt.DeadLetterPolicy != nil {
+		pool.deadLetterPolicy = opt.DeadLetterPolicy
+	} else {
+		pool.deadLetterPolicy = NewStandardDeadLetterPolicy("", nil)
 	}
 
 	pool.sem = make(chan struct{}, pool.execPoolSize)
@@ -408,16 +416,18 @@ func (w *workerPool) handleFailure(ctx context.Context, msg redis.XMessage, task
 	task.Retry++
 	streamKey := StreamKey(w.queue)
 
-	if !w.retryPolicy.ShouldRetry(task) {
-		task.LastError = err.Error()
-		w.logger.Error("Task exhausted all retries, moving to DLQ",
+	if !w.retryPolicy.ShouldRetry(task, err) {
+		// Run dead-letter hooks/custom routing
+		w.deadLetterPolicy.BeforeDeadLetter(ctx, task, err)
+		dlqName := w.deadLetterPolicy.DLQQueueName(task)
+
+		w.logger.Error("Task permanently failed, moving to DLQ",
 			zap.String("task_id", task.ID),
-			zap.String("task_name", task.Name),
-			zap.Int("retry", task.Retry),
-			zap.String("error", task.LastError),
+			zap.String("dlq", dlqName),
+			zap.Error(err),
 		)
 
-		if err := w.broker.MoveToDLQ(ctx, task, streamKey, msg.ID, w.group); err != nil {
+		if err := w.broker.MoveToDLQ(ctx, task, streamKey, msg.ID, w.group, dlqName); err != nil {
 			w.logger.Error("Failed to move task to DLQ atomically", zap.Error(err))
 		}
 		return

@@ -9,7 +9,7 @@ import (
 
 // TaskBroker abstracts all atomic queue storage transitions.
 type TaskBroker interface {
-	MoveToDLQ(ctx context.Context, task *Task, streamKey, msgID, group string) error
+	MoveToDLQ(ctx context.Context, task *Task, streamKey, msgID, group string, dlqQueueName string) error
 	ScheduleRetry(ctx context.Context, task *Task, streamKey, msgID, group string, runAt time.Time) error
 	DeferRateLimitedTask(ctx context.Context, msgID string, task *Task, runAt time.Time) error
 	ReleaseUniqueLock(ctx context.Context, task *Task) error
@@ -45,9 +45,14 @@ const luaHandleFailure = `
 	redis.call("ZADD", targetKey, score, serializedTask)
 
 	-- Clean up uniqueness lock if moving to DLQ and lock matches
-	if action == "dlq" and lockKey ~= "" and expectedLockVal ~= "" then
-		if redis.call("GET", lockKey) == expectedLockVal then
-			redis.call("DEL", lockKey)
+	if action == "dlq" then
+		-- Apply capacity protection: keep only latest 1000 DLQ items
+		redis.call("ZREMRANGEBYRANK", targetKey, 0, -1001)
+
+		if lockKey ~= "" and expectedLockVal ~= "" then
+			if redis.call("GET", lockKey) == expectedLockVal then
+				redis.call("DEL", lockKey)
+			end
 		end
 	end
 	return 1
@@ -74,12 +79,12 @@ const luaUnlock = `
 	end
 `
 
-func (b *redisBroker) MoveToDLQ(ctx context.Context, task *Task, streamKey, msgID, group string) error {
+func (b *redisBroker) MoveToDLQ(ctx context.Context, task *Task, streamKey, msgID, group string, dlqQueueName string) error {
 	serialized, err := b.codec.Marshal(task)
 	if err != nil {
 		return err
 	}
-	dlqKey := DLQKey(task.Queue)
+	dlqKey := DLQKey(dlqQueueName)
 	nowMs := time.Now().UnixMilli()
 
 	var uniqueLockKey string

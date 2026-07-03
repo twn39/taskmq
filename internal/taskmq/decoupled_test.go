@@ -18,12 +18,14 @@ type mockBroker struct {
 	schedRetry   int
 	deferCnt     int
 	releasedLock int
+	lastDLQName  string
 }
 
-func (m *mockBroker) MoveToDLQ(ctx context.Context, task *Task, streamKey, msgID, group string) error {
+func (m *mockBroker) MoveToDLQ(ctx context.Context, task *Task, streamKey, msgID, group string, dlqQueueName string) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.moveToDLQCnt++
+	m.lastDLQName = dlqQueueName
 	return nil
 }
 
@@ -52,7 +54,7 @@ type mockRetryPolicy struct {
 	should bool
 }
 
-func (m *mockRetryPolicy) ShouldRetry(task *Task) bool {
+func (m *mockRetryPolicy) ShouldRetry(task *Task, err error) bool {
 	return m.should
 }
 
@@ -70,13 +72,20 @@ func TestWorkerPool_DecoupledAbtractionAndFailureHandling(t *testing.T) {
 	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
 	logger := zap.NewNop()
 
-	t.Run("Task exhausts retries - Should move to DLQ via injected Broker", func(t *testing.T) {
+	t.Run("Task exhausts retries - Should move to custom DLQ via DeadLetterPolicy", func(t *testing.T) {
 		mb := &mockBroker{}
 		mp := &mockRetryPolicy{should: false} // do not retry
 
+		var hookTriggered bool
+		dlHook := func(ctx context.Context, task *Task, err error) {
+			hookTriggered = true
+		}
+		dlPolicy := NewStandardDeadLetterPolicy("custom-dead-letters", dlHook)
+
 		opts := WorkerOptions{
-			Broker:      mb,
-			RetryPolicy: mp,
+			Broker:           mb,
+			RetryPolicy:      mp,
+			DeadLetterPolicy: dlPolicy,
 		}
 		opts.ApplyDefaults(rdb, logger, "test-q", JSONCodec{})
 
@@ -88,45 +97,49 @@ func TestWorkerPool_DecoupledAbtractionAndFailureHandling(t *testing.T) {
 			Values: map[string]interface{}{"task": `{"id":"t-1","queue":"test-q"}`},
 		}
 
-		pool.handleFailure(context.Background(), msg, task, errors.New("fatal err"))
+		pool.handleFailure(context.Background(), msg, task, errors.New("fatal billing error"))
 
 		mb.mu.Lock()
 		defer mb.mu.Unlock()
 		if mb.moveToDLQCnt != 1 {
 			t.Errorf("expected MoveToDLQ to be called 1 time, got %d", mb.moveToDLQCnt)
 		}
-		if mb.schedRetry != 0 {
-			t.Errorf("expected ScheduleRetry to be called 0 times, got %d", mb.schedRetry)
+		if mb.lastDLQName != "custom-dead-letters" {
+			t.Errorf("expected DLQ target to be 'custom-dead-letters', got '%s'", mb.lastDLQName)
+		}
+		if !hookTriggered {
+			t.Error("expected Dead-Letter hook to be triggered, but was not")
 		}
 	})
 
-	t.Run("Task does not exhaust retries - Should reschedule via injected Broker", func(t *testing.T) {
+	t.Run("Task filtered out by ErrorFilterRetryPolicy", func(t *testing.T) {
 		mb := &mockBroker{}
-		mp := &mockRetryPolicy{should: true} // trigger retry
+		
+		// Base says yes, but filter says no because error matches non-retryable list
+		nonRetryableErr := errors.New("invalid signature")
+		basePolicy := &mockRetryPolicy{should: true}
+		filterPolicy := NewErrorFilterRetryPolicy(basePolicy, []error{nonRetryableErr})
 
 		opts := WorkerOptions{
 			Broker:      mb,
-			RetryPolicy: mp,
+			RetryPolicy: filterPolicy,
 		}
 		opts.ApplyDefaults(rdb, logger, "test-q", JSONCodec{})
 
 		pool := NewWorkerPool(rdb, logger, "test-q", opts).(*workerPool)
-		task := &Task{ID: "t-2", Queue: "test-q", MaxRetry: 3, Retry: 1}
+		task := &Task{ID: "t-3", Queue: "test-q", MaxRetry: 3, Retry: 1}
 
 		msg := redis.XMessage{
-			ID:     "2-0",
-			Values: map[string]interface{}{"task": `{"id":"t-2","queue":"test-q"}`},
+			ID:     "3-0",
+			Values: map[string]interface{}{"task": `{"id":"t-3","queue":"test-q"}`},
 		}
 
-		pool.handleFailure(context.Background(), msg, task, errors.New("transient err"))
+		pool.handleFailure(context.Background(), msg, task, nonRetryableErr)
 
 		mb.mu.Lock()
 		defer mb.mu.Unlock()
-		if mb.schedRetry != 1 {
-			t.Errorf("expected ScheduleRetry to be called 1 time, got %d", mb.schedRetry)
-		}
-		if mb.moveToDLQCnt != 0 {
-			t.Errorf("expected MoveToDLQ to be called 0 times, got %d", mb.moveToDLQCnt)
+		if mb.moveToDLQCnt != 1 {
+			t.Errorf("expected task matching non-retryable error to go straight to DLQ, but did not")
 		}
 	})
 }
