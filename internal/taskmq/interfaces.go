@@ -28,4 +28,3 @@ type MultiQueueWorker interface {
 	Worker
 	Queue(name string) Worker
 }
-

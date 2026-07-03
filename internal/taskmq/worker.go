@@ -26,51 +26,51 @@ type QueuePriority struct {
 }
 
 type workerPool struct {
-	rdb            *redis.Client
-	logger         *zap.Logger
-	queue          string
-	queues         []QueuePriority
+	rdb              *redis.Client
+	logger           *zap.Logger
+	queue            string
+	queues           []QueuePriority
 	priorityStrategy string
-	group          string
-	consumer       string
-	concurrency    int
-	handlers       map[string]HandlerFunc
-	scheduler      Runner
-	janitor        Runner
-	cronManager    CronManager
-	codec          Codec
-	syncExecution  bool
-	execPoolSize   int
-	sem            chan struct{}
-	parentCtx      context.Context
-	ctx            context.Context
-	cancel         context.CancelFunc
-	consumerCtx    context.Context
-	consumerCancel context.CancelFunc
-	wg             sync.WaitGroup
+	group            string
+	consumer         string
+	concurrency      int
+	handlers         map[string]HandlerFunc
+	scheduler        Runner
+	janitor          Runner
+	cronManager      CronManager
+	codec            Codec
+	syncExecution    bool
+	execPoolSize     int
+	sem              chan struct{}
+	parentCtx        context.Context
+	ctx              context.Context
+	cancel           context.CancelFunc
+	consumerCtx      context.Context
+	consumerCancel   context.CancelFunc
+	wg               sync.WaitGroup
 
 	// Multi-queue support mapping
-	schedulers     map[string]Runner
-	janitors       map[string]Runner
-	cronManagers     map[string]CronManager
+	schedulers   map[string]Runner
+	janitors     map[string]Runner
+	cronManagers map[string]CronManager
 }
 
 type WorkerOptions struct {
-	Group               string
-	Consumer            string
-	Concurrency         int
-	Codec               Codec
-	SyncExecution       bool
-	ExecutionPoolSize   int
+	Group                    string
+	Consumer                 string
+	Concurrency              int
+	Codec                    Codec
+	SyncExecution            bool
+	ExecutionPoolSize        int
 	CronHealingInterval      time.Duration
 	CronHealingLockTTL       time.Duration
 	CronHealingScanBatchSize int
 	CronHealingScanMaxCount  int
 
 	// Dependency Injections
-	CronManager         CronManager
-	Scheduler           Runner
-	Janitor             Runner
+	CronManager CronManager
+	Scheduler   Runner
+	Janitor     Runner
 
 	// Scheduler & Janitor Tick Intervals (DIP / Configurable tickers)
 	SchedulerPollInterval time.Duration
@@ -740,4 +740,3 @@ func (w *workerPool) releaseUniqueLock(ctx context.Context, task *Task) {
 		)
 	}
 }
-

@@ -101,11 +101,11 @@ func (j *pelRecoveryJanitor) Run(ctx context.Context) error {
 					case sem <- struct{}{}:
 						go func(m redis.XMessage) {
 							defer func() { <-sem }()
-							
+
 							j.processFnMu.RLock()
 							processFn := j.processFn
 							j.processFnMu.RUnlock()
-							
+
 							if processFn != nil {
 								processFn(ctx, m)
 							}
@@ -118,4 +118,3 @@ func (j *pelRecoveryJanitor) Run(ctx context.Context) error {
 		}
 	}
 }
-

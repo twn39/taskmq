@@ -5,10 +5,13 @@ go 1.25.6
 require (
 	github.com/labstack/echo/v5 v5.2.1
 	github.com/redis/go-redis/v9 v9.21.0
+	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.11.1
 	go.uber.org/fx v1.24.0
 	go.uber.org/zap v1.28.0
+	google.golang.org/grpc v1.82.0
+	google.golang.org/protobuf v1.36.11
 )
 
 require (
@@ -18,7 +21,6 @@ require (
 	github.com/go-viper/mapstructure/v2 v2.5.0 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.2 // indirect
 	github.com/pmezard/go-difflib v1.0.1-0.20181226105442-5d4384ee4fb2 // indirect
-	github.com/robfig/cron/v3 v3.0.1 // indirect
 	github.com/sagikazarmark/locafero v0.12.0 // indirect
 	github.com/spf13/afero v1.15.0 // indirect
 	github.com/spf13/cast v1.10.0 // indirect
@@ -33,8 +35,6 @@ require (
 	golang.org/x/text v0.38.0 // indirect
 	golang.org/x/time v0.15.0 // indirect
 	google.golang.org/genproto/googleapis/rpc v0.0.0-20260414002931-afd174a4e478 // indirect
-	google.golang.org/grpc v1.82.0 // indirect
-	google.golang.org/protobuf v1.36.11 // indirect
 	gopkg.in/check.v1 v1.0.0-20190902080502-41f04d3bba15 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
