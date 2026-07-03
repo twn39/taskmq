@@ -33,11 +33,14 @@ type RedisConfig struct {
 }
 
 type QueueConfig struct {
-	Name        string `mapstructure:"name"`
-	Concurrency int    `mapstructure:"concurrency"`
-	Group       string `mapstructure:"group"`
-	Consumer    string `mapstructure:"consumer"`
-	Priority    int    `mapstructure:"priority"`
+	Name              string        `mapstructure:"name"`
+	Concurrency       int           `mapstructure:"concurrency"`
+	Group             string        `mapstructure:"group"`
+	Consumer          string        `mapstructure:"consumer"`
+	Priority          int           `mapstructure:"priority"`
+	RateLimitMax      int64         `mapstructure:"rate_limit_max"`
+	RateLimitDuration time.Duration `mapstructure:"rate_limit_duration"`
+	RateLimitKeyField string        `mapstructure:"rate_limit_key_field"`
 }
 
 type TaskMQConfig struct {

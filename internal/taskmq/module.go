@@ -73,8 +73,11 @@ func ProvideWorkers(p ProvideWorkersParams) (Worker, error) {
 	for _, qCfg := range queues {
 		if priorityQueuesEnabled && qCfg.Priority > 0 {
 			priorityQueues = append(priorityQueues, QueuePriority{
-				Name:   qCfg.Name,
-				Weight: qCfg.Priority,
+				Name:              qCfg.Name,
+				Weight:            qCfg.Priority,
+				RateLimitMax:      qCfg.RateLimitMax,
+				RateLimitDuration: qCfg.RateLimitDuration,
+				RateLimitKeyField: qCfg.RateLimitKeyField,
 			})
 			priorityConcurrency += qCfg.Concurrency
 		} else {
@@ -143,6 +146,9 @@ func ProvideWorkers(p ProvideWorkersParams) (Worker, error) {
 			SchedulerPollInterval:    p.Cfg.TaskMQ.SchedulerPollInterval,
 			JanitorInterval:          p.Cfg.TaskMQ.JanitorInterval,
 			JanitorMinIdleTime:       p.Cfg.TaskMQ.JanitorMinIdleTime,
+			RateLimitMax:             qCfg.RateLimitMax,
+			RateLimitDuration:        qCfg.RateLimitDuration,
+			RateLimitKeyField:        qCfg.RateLimitKeyField,
 		}
 		if p.RootCtx != nil {
 			baseOpts.Context = p.RootCtx

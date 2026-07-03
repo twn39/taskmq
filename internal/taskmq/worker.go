@@ -2,6 +2,7 @@ package taskmq
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"math/rand"
 	"sort"
@@ -21,8 +22,11 @@ type Worker interface {
 }
 
 type QueuePriority struct {
-	Name   string
-	Weight int
+	Name              string
+	Weight            int
+	RateLimitMax      int64
+	RateLimitDuration time.Duration
+	RateLimitKeyField string
 }
 
 type workerPool struct {
@@ -53,6 +57,12 @@ type workerPool struct {
 	schedulers   map[string]Runner
 	janitors     map[string]Runner
 	cronManagers map[string]CronManager
+
+	// Rate Limiting
+	limiter           *GCRALimiter
+	rateLimitMax      int64
+	rateLimitDuration time.Duration
+	rateLimitKeyField string
 }
 
 type WorkerOptions struct {
@@ -83,6 +93,11 @@ type WorkerOptions struct {
 	// Priority Queues Settings
 	PriorityQueues   []QueuePriority
 	PriorityStrategy string // "strict" or "weighted"
+
+	// Rate Limiting Settings
+	RateLimitMax      int64
+	RateLimitDuration time.Duration
+	RateLimitKeyField string
 }
 
 func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...WorkerOptions) Worker {
@@ -101,6 +116,7 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 		schedulers:    make(map[string]Runner),
 		janitors:      make(map[string]Runner),
 		cronManagers:  make(map[string]CronManager),
+		limiter:       NewGCRALimiter(rdb),
 	}
 
 	if len(opts) > 0 {
@@ -193,6 +209,10 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 				pool.janitor = opt.Janitor
 				pool.janitors[queue] = opt.Janitor
 			}
+
+			pool.rateLimitMax = opt.RateLimitMax
+			pool.rateLimitDuration = opt.RateLimitDuration
+			pool.rateLimitKeyField = opt.RateLimitKeyField
 
 			if pool.cronManager == nil || pool.scheduler == nil || pool.janitor == nil {
 				panic("NewWorkerPool: CronManager, Scheduler, and Janitor must be provided in WorkerOptions")
@@ -455,14 +475,47 @@ func (w *workerPool) worker(streamKey string) {
 					orderedQueues = shuffleQueues(w.queues)
 				}
 
-				// 1. Try non-blocking check on each queue in priority order first to prevent priority inversion under load
-				found := false
+				// Check rate limits and determine which queues are currently allowed
+				var nonLimitedQueues []string
+				var minWait time.Duration
 				for _, qName := range orderedQueues {
-					streamKey := StreamKey(qName)
+					rlMax, rlDuration, rlKeyField := w.getQueueRateLimit(qName)
+					if rlMax > 0 && rlDuration > 0 && rlKeyField == "" {
+						limitKey := RateLimitKey(qName, "")
+						wait, checkErr := w.limiter.Check(w.consumerCtx, limitKey, rlMax, rlDuration)
+						if checkErr == nil && wait > 0 {
+							w.logger.Debug("Queue rate-limited, skipping in polling", zap.String("queue", qName), zap.Duration("wait", wait))
+							if wait < minWait || minWait == 0 {
+								minWait = wait
+							}
+							continue
+						}
+					}
+					nonLimitedQueues = append(nonLimitedQueues, qName)
+				}
+
+				if len(nonLimitedQueues) == 0 {
+					// All queues are currently rate limited! Sleep and retry
+					w.releaseToken()
+					if minWait == 0 {
+						minWait = time.Second
+					}
+					select {
+					case <-w.consumerCtx.Done():
+						return
+					case <-time.After(minWait):
+					}
+					continue
+				}
+
+				// 1. Try non-blocking check on each non-limited queue in priority order first to prevent priority inversion under load
+				found := false
+				for _, qName := range nonLimitedQueues {
+					sKey := StreamKey(qName)
 					res, readErr := w.rdb.XReadGroup(w.consumerCtx, &redis.XReadGroupArgs{
 						Group:    w.group,
 						Consumer: w.consumer,
-						Streams:  []string{streamKey, ">"},
+						Streams:  []string{sKey, ">"},
 						Count:    1,
 						Block:    -1, // True non-blocking check (omits BLOCK parameter)
 					}).Result()
@@ -480,14 +533,14 @@ func (w *workerPool) worker(streamKey string) {
 					}
 				}
 
-				// 2. If no messages found in any queue, do a blocking read on all queues
+				// 2. If no messages found in any non-limited queue, do a blocking read on non-limited queues
 				if !found {
-					streamsArg := make([]string, 2*len(orderedQueues))
-					for i, qName := range orderedQueues {
+					streamsArg := make([]string, 2*len(nonLimitedQueues))
+					for i, qName := range nonLimitedQueues {
 						streamsArg[i] = StreamKey(qName)
 					}
-					for i := 0; i < len(orderedQueues); i++ {
-						streamsArg[len(orderedQueues)+i] = ">"
+					for i := 0; i < len(nonLimitedQueues); i++ {
+						streamsArg[len(nonLimitedQueues)+i] = ">"
 					}
 
 					streams, err = w.rdb.XReadGroup(w.consumerCtx, &redis.XReadGroupArgs{
@@ -499,6 +552,21 @@ func (w *workerPool) worker(streamKey string) {
 					}).Result()
 				}
 			} else {
+				rlMax, rlDuration, rlKeyField := w.getQueueRateLimit(w.queue)
+				if rlMax > 0 && rlDuration > 0 && rlKeyField == "" {
+					limitKey := RateLimitKey(w.queue, "")
+					wait, checkErr := w.limiter.Check(w.consumerCtx, limitKey, rlMax, rlDuration)
+					if checkErr == nil && wait > 0 {
+						w.releaseToken()
+						select {
+						case <-w.consumerCtx.Done():
+							return
+						case <-time.After(wait):
+						}
+						continue
+					}
+				}
+
 				streams, err = w.rdb.XReadGroup(w.consumerCtx, &redis.XReadGroupArgs{
 					Group:    w.group,
 					Consumer: w.consumer,
@@ -587,6 +655,26 @@ func (w *workerPool) processMessage(ctx context.Context, streamKey string, msg r
 		w.logger.Warn("No handler registered for task", zap.String("task_name", task.Name))
 		_ = w.rdb.XAck(ctx, streamKey, w.group, msg.ID).Err()
 		return
+	}
+
+	// Rate Limit Check & Consume (Phase 2)
+	rlMax, rlDuration, rlKeyField := w.getQueueRateLimit(task.Queue)
+	if rlMax > 0 && rlDuration > 0 {
+		groupKeyVal := ""
+		if rlKeyField != "" {
+			groupKeyVal = extractGroupKey(task.Payload, rlKeyField)
+		}
+		limitKey := RateLimitKey(task.Queue, groupKeyVal)
+		wait, rlErr := w.limiter.TryConsume(ctx, limitKey, rlMax, rlDuration)
+		if rlErr != nil {
+			w.logger.Error("Failed to apply rate limiting", zap.Error(rlErr))
+		} else if wait > 0 {
+			w.logger.Debug("Rate limit exceeded, deferring task", zap.String("queue", task.Queue), zap.String("group_key", groupKeyVal), zap.Duration("wait", wait))
+			_ = w.rdb.XAck(ctx, streamKey, w.group, msg.ID).Err()
+			_ = w.rdb.XDel(ctx, streamKey, msg.ID).Err()
+			_ = w.enqueueDelayed(ctx, task, wait)
+			return
+		}
 	}
 
 	// 1. Enforce timeout context
@@ -739,4 +827,52 @@ func (w *workerPool) releaseUniqueLock(ctx context.Context, task *Task) {
 			zap.Error(err),
 		)
 	}
+}
+
+func RateLimitKey(queue string, groupKey string) string {
+	if groupKey != "" {
+		return fmt.Sprintf("taskmq:{%s}:rate_limit:%s", queue, groupKey)
+	}
+	return fmt.Sprintf("taskmq:{%s}:rate_limit", queue)
+}
+
+func (w *workerPool) getQueueRateLimit(qName string) (int64, time.Duration, string) {
+	if len(w.queues) > 0 {
+		for _, q := range w.queues {
+			if q.Name == qName {
+				return q.RateLimitMax, q.RateLimitDuration, q.RateLimitKeyField
+			}
+		}
+	}
+	if qName == w.queue {
+		return w.rateLimitMax, w.rateLimitDuration, w.rateLimitKeyField
+	}
+	return 0, 0, ""
+}
+
+func (w *workerPool) enqueueDelayed(ctx context.Context, task *Task, delay time.Duration) error {
+	serialized, err := w.codec.Marshal(task)
+	if err != nil {
+		return err
+	}
+	delayedKey := DelayedKey(task.Queue)
+	at := time.Now().Add(delay)
+	return w.rdb.ZAdd(ctx, delayedKey, redis.Z{
+		Score:  float64(at.UnixMilli()),
+		Member: string(serialized),
+	}).Err()
+}
+
+func extractGroupKey(payload []byte, field string) string {
+	if len(payload) == 0 || field == "" {
+		return ""
+	}
+	var data map[string]interface{}
+	if err := json.Unmarshal(payload, &data); err != nil {
+		return ""
+	}
+	if val, ok := data[field]; ok {
+		return fmt.Sprintf("%v", val)
+	}
+	return ""
 }
