@@ -1175,4 +1175,302 @@ func TestTaskMQ_BackpressureFlow(t *testing.T) {
 	assert.Equal(t, int64(0), atomic.LoadInt64(&retryCount), "No task should have failed/retried due to queue timeout")
 }
 
+// 12. Cron Self-Healing Pagination: Exceeded Limit Test
+func TestTaskMQ_CronSelfHealing_Pagination_ExceededLimit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	queueName := "cron_healing_pag_exceeded_test_queue"
+
+	var rdb *goredis.Client
+	var client taskmq.Client
+
+	app := fxtest.New(t,
+		fx.Provide(
+			NewTestConfig,
+			logger.NewLogger,
+			internalredis.NewRedisClient,
+			taskmq.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+					Concurrency:              1,
+					CronHealingInterval:      1 * time.Second,
+					CronHealingLockTTL:       800 * time.Millisecond,
+					CronHealingScanBatchSize: 2,
+					CronHealingScanMaxCount:  5, // will not reach the cron task if we put 8 dummy tasks first
+				})
+				return pool
+			},
+		),
+		fx.Invoke(taskmq.RegisterWorkerPoolLifecycle),
+		fx.Populate(&rdb, &client),
+	)
+
+	// Clean up Redis before test
+	err := rdb.Del(ctx,
+		taskmq.StreamKey(queueName),
+		taskmq.DelayedKey(queueName),
+		taskmq.CronConfigsKey(queueName),
+	).Err()
+	assert.NoError(t, err)
+
+	// 1. Register a Cron task.
+	task := taskmq.NewTask("cron:pagination", []byte("payload"), taskmq.TaskOptions{
+		Queue: queueName,
+	})
+	// Trigger every 10 minutes so it doesn't execute immediately
+	err = client.RegisterCron(ctx, "cron:pagination", "*/10 * * * *", task)
+	assert.NoError(t, err)
+
+	// Fetch the registered cron task from ZSET to find its score
+	delayedKey := taskmq.DelayedKey(queueName)
+	members, err := rdb.ZRangeWithScores(ctx, delayedKey, 0, -1).Result()
+	assert.NoError(t, err)
+	assert.Len(t, members, 1)
+	cronScore := members[0].Score
+
+	// 2. Add 8 dummy delayed tasks to the ZSET with a slightly lower score (so they are sorted before the cron task)
+	for i := 0; i < 8; i++ {
+		dummyTask := taskmq.NewTask("dummy", []byte("dummy-payload"), taskmq.TaskOptions{
+			Queue: queueName,
+		})
+		serialized, err := json.Marshal(dummyTask)
+		assert.NoError(t, err)
+		err = rdb.ZAdd(ctx, delayedKey, goredis.Z{
+			Score:  cronScore - float64(10-i),
+			Member: string(serialized),
+		}).Err()
+		assert.NoError(t, err)
+	}
+
+	// Verify ZSET has 9 elements: 8 dummy tasks first, then 1 cron task.
+	allMembers, err := rdb.ZRangeWithScores(ctx, delayedKey, 0, -1).Result()
+	assert.NoError(t, err)
+	assert.Len(t, allMembers, 9)
+
+	// Start worker pool.
+	// Since CronHealingScanMaxCount is 5 and the cron task is at index 8 (9th item),
+	// the self-healing loop will scan only the first 5 (indices 0 to 4) and miss the cron task.
+	// Therefore, it will assume the cron task is missing and schedule a duplicate.
+	app.RequireStart()
+	defer app.RequireStop()
+
+	// Wait for self-healing loop to run (interval is 1s, wait 2s)
+	time.Sleep(2 * time.Second)
+
+	// Fetch ZSET members again.
+	// Since it decided to schedule a duplicate, a new member (representing the rescheduled cron task with different CreatedAt)
+	// should have been added to the ZSET.
+	newMembers, err := rdb.ZRangeWithScores(ctx, delayedKey, 0, -1).Result()
+	assert.NoError(t, err)
+	assert.Greater(t, len(newMembers), 9, "Self-healing loop should have rescheduled the cron task because it was beyond scan limit")
+}
+
+// 13. Cron Self-Healing Pagination: Within Limit Test
+func TestTaskMQ_CronSelfHealing_Pagination_WithinLimit(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	queueName := "cron_healing_pag_within_test_queue"
+
+	var rdb *goredis.Client
+	var client taskmq.Client
+
+	app := fxtest.New(t,
+		fx.Provide(
+			NewTestConfig,
+			logger.NewLogger,
+			internalredis.NewRedisClient,
+			taskmq.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+					Concurrency:              1,
+					CronHealingInterval:      1 * time.Second,
+					CronHealingLockTTL:       800 * time.Millisecond,
+					CronHealingScanBatchSize: 2,
+					CronHealingScanMaxCount:  15, // large enough to find the cron task at position 9
+				})
+				return pool
+			},
+		),
+		fx.Invoke(taskmq.RegisterWorkerPoolLifecycle),
+		fx.Populate(&rdb, &client),
+	)
+
+	// Clean up Redis before test
+	err := rdb.Del(ctx,
+		taskmq.StreamKey(queueName),
+		taskmq.DelayedKey(queueName),
+		taskmq.CronConfigsKey(queueName),
+	).Err()
+	assert.NoError(t, err)
+
+	// 1. Register a Cron task.
+	task := taskmq.NewTask("cron:pagination", []byte("payload"), taskmq.TaskOptions{
+		Queue: queueName,
+	})
+	// Trigger every 10 minutes so it doesn't execute immediately
+	err = client.RegisterCron(ctx, "cron:pagination", "*/10 * * * *", task)
+	assert.NoError(t, err)
+
+	// Fetch the registered cron task from ZSET to find its score
+	delayedKey := taskmq.DelayedKey(queueName)
+	members, err := rdb.ZRangeWithScores(ctx, delayedKey, 0, -1).Result()
+	assert.NoError(t, err)
+	assert.Len(t, members, 1)
+	cronScore := members[0].Score
+
+	// 2. Add 8 dummy delayed tasks to the ZSET with a slightly lower score (so they are sorted before the cron task)
+	for i := 0; i < 8; i++ {
+		dummyTask := taskmq.NewTask("dummy", []byte("dummy-payload"), taskmq.TaskOptions{
+			Queue: queueName,
+		})
+		serialized, err := json.Marshal(dummyTask)
+		assert.NoError(t, err)
+		err = rdb.ZAdd(ctx, delayedKey, goredis.Z{
+			Score:  cronScore - float64(10-i),
+			Member: string(serialized),
+		}).Err()
+		assert.NoError(t, err)
+	}
+
+	app.RequireStart()
+	defer app.RequireStop()
+
+	// Wait for self-healing loop to run
+	time.Sleep(2 * time.Second)
+
+	// Fetch ZSET members again. Since it successfully found the cron task, it should not have scheduled a duplicate.
+	finalMembers, err := rdb.ZRangeWithScores(ctx, delayedKey, 0, -1).Result()
+	assert.NoError(t, err)
+	assert.Equal(t, 9, len(finalMembers), "Self-healing loop should not have rescheduled the cron task because it was within scan limit")
+}
+
+// 14. Worker Pool Parent Context Cancellation Test
+func TestTaskMQ_WorkerPool_ParentContextCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+
+	queueName := "parent_ctx_cancel_test_queue"
+
+	var rdb *goredis.Client
+	var client taskmq.Client
+	var worker taskmq.Worker
+
+	app := fxtest.New(t,
+		fx.Provide(
+			NewTestConfig,
+			logger.NewLogger,
+			internalredis.NewRedisClient,
+			taskmq.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+					Concurrency: 1,
+					Context:     ctx,
+				})
+				pool.Register("task:test", func(ctx context.Context, task *taskmq.Task) error {
+					return nil
+				})
+				return pool
+			},
+		),
+		fx.Invoke(taskmq.RegisterWorkerPoolLifecycle),
+		fx.Populate(&rdb, &client, &worker),
+	)
+
+	// Clean up Redis
+	rdb.Del(ctx, taskmq.StreamKey(queueName))
+
+	app.RequireStart()
+
+	// Cancel the parent context!
+	cancel()
+
+	// Wait for the cancellation to propagate and shutdown loops
+	time.Sleep(500 * time.Millisecond)
+
+	// Enqueue a task
+	task := taskmq.NewTask("task:test", []byte("payload"), taskmq.TaskOptions{
+		Queue: queueName,
+	})
+	err := client.Enqueue(context.Background(), task)
+	assert.NoError(t, err)
+
+	// Wait to see if it executes (it should not, since worker is stopped)
+	time.Sleep(1 * time.Second)
+
+	// Verify task is still in stream and not acknowledged (meaning it wasn't processed)
+	pending, err := rdb.XPending(context.Background(), taskmq.StreamKey(queueName), "taskmq-group").Result()
+	assert.NoError(t, err)
+	assert.Equal(t, int64(0), pending.Count, "Task should not even be read/claimed (pending count should be 0 in group since group didn't pull)")
+
+	app.RequireStop()
+}
+
+// 15. Worker Pool Graceful Shutdown Deadline Test
+func TestTaskMQ_WorkerPool_GracefulShutdownDeadline(t *testing.T) {
+	queueName := "graceful_shutdown_deadline_test_queue"
+
+	var rdb *goredis.Client
+	var client taskmq.Client
+	var worker taskmq.Worker
+
+	var taskCancelled int32
+
+	app := fxtest.New(t,
+		fx.Provide(
+			NewTestConfig,
+			logger.NewLogger,
+			internalredis.NewRedisClient,
+			taskmq.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, taskmq.WorkerOptions{
+					Concurrency: 1,
+				})
+				pool.Register("task:long", func(ctx context.Context, task *taskmq.Task) error {
+					select {
+					case <-time.After(5 * time.Second):
+						return nil
+					case <-ctx.Done():
+						atomic.StoreInt32(&taskCancelled, 1)
+						return ctx.Err()
+					}
+				})
+				return pool
+			},
+		),
+		fx.Invoke(taskmq.RegisterWorkerPoolLifecycle),
+		fx.Populate(&rdb, &client, &worker),
+	)
+
+	// Clean up Redis
+	rdb.Del(context.Background(), taskmq.StreamKey(queueName))
+
+	app.RequireStart()
+
+	// Enqueue the long task
+	task := taskmq.NewTask("task:long", []byte("payload"), taskmq.TaskOptions{
+		Queue: queueName,
+	})
+	err := client.Enqueue(context.Background(), task)
+	assert.NoError(t, err)
+
+	// Wait briefly to ensure task starts executing
+	time.Sleep(200 * time.Millisecond)
+
+	// Call worker.Stop with a short deadline context (e.g. 1.5 seconds)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	defer shutdownCancel()
+
+	stopStart := time.Now()
+	worker.Stop(shutdownCtx)
+	stopDuration := time.Since(stopStart)
+
+	// The stop duration should be around 1.0 second (1500ms - 500ms safety buffer)
+	assert.LessOrEqual(t, stopDuration.Seconds(), 1.4, "Stop should respect the deadline and exit before Fx hook timeout")
+	assert.Equal(t, int32(1), atomic.LoadInt32(&taskCancelled), "Task should have been cancelled by Stop because deadline was reached")
+
+	app.RequireStop()
+}
+
+
 

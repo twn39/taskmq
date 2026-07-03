@@ -11,3 +11,14 @@ logger:
 redis:
   addr: "localhost:6379"
   pool_size: 0 # Maximum number of socket connections (0 resolved dynamically)
+
+# TaskMQ configuration
+taskmq:
+  default_unique_ttl: 1h
+  cron_healing_interval: 1m
+  cron_healing_lock_ttl: 50s
+  cron_healing_scan_batch_size: 100
+  cron_healing_scan_max_count: 1000
+  scheduler_poll_interval: 500ms
+  janitor_interval: 3s
+  janitor_min_idle_time: 5s

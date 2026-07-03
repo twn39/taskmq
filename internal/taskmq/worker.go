@@ -15,7 +15,7 @@ type HandlerFunc func(ctx context.Context, task *Task) error
 type Worker interface {
 	Register(taskName string, handler HandlerFunc)
 	Start(ctx context.Context) error
-	Stop()
+	Stop(ctxs ...context.Context)
 }
 
 type workerPool struct {
@@ -33,6 +33,7 @@ type workerPool struct {
 	syncExecution  bool
 	execPoolSize   int
 	sem            chan struct{}
+	parentCtx      context.Context
 	ctx            context.Context
 	cancel         context.CancelFunc
 	consumerCtx    context.Context
@@ -47,8 +48,10 @@ type WorkerOptions struct {
 	Codec               Codec
 	SyncExecution       bool
 	ExecutionPoolSize   int
-	CronHealingInterval time.Duration
-	CronHealingLockTTL  time.Duration
+	CronHealingInterval      time.Duration
+	CronHealingLockTTL       time.Duration
+	CronHealingScanBatchSize int
+	CronHealingScanMaxCount  int
 
 	// Dependency Injections
 	CronManager         CronManager
@@ -59,6 +62,9 @@ type WorkerOptions struct {
 	SchedulerPollInterval time.Duration
 	JanitorInterval       time.Duration
 	JanitorMinIdleTime    time.Duration
+
+	// Parent context for the worker pool execution lifecycle
+	Context context.Context
 }
 
 func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...WorkerOptions) Worker {
@@ -73,10 +79,13 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 		syncExecution: false,
 		execPoolSize:  5,
 		handlers:      make(map[string]HandlerFunc),
+		parentCtx:     context.Background(),
 	}
 
 	cronHealingInterval := 1 * time.Minute
 	cronHealingLockTTL := 50 * time.Second
+	cronHealingScanBatchSize := 100
+	cronHealingScanMaxCount := 1000
 	schedulerPollInterval := 500 * time.Millisecond
 	janitorInterval := 3 * time.Second
 	janitorMinIdleTime := 5 * time.Second
@@ -106,6 +115,15 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 		if opt.CronHealingLockTTL > 0 {
 			cronHealingLockTTL = opt.CronHealingLockTTL
 		}
+		if opt.CronHealingScanBatchSize > 0 {
+			cronHealingScanBatchSize = opt.CronHealingScanBatchSize
+		}
+		if opt.CronHealingScanMaxCount > 0 {
+			cronHealingScanMaxCount = opt.CronHealingScanMaxCount
+		}
+		if opt.Context != nil {
+			pool.parentCtx = opt.Context
+		}
 		if opt.CronManager != nil {
 			pool.cronManager = opt.CronManager
 		}
@@ -129,7 +147,7 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 	pool.sem = make(chan struct{}, pool.execPoolSize)
 
 	if pool.cronManager == nil {
-		pool.cronManager = newCronManager(rdb, logger, queue, pool.codec, cronHealingInterval, cronHealingLockTTL)
+		pool.cronManager = newCronManager(rdb, logger, queue, pool.codec, cronHealingInterval, cronHealingLockTTL, cronHealingScanBatchSize, cronHealingScanMaxCount)
 	}
 	if pool.scheduler == nil {
 		pool.scheduler = newDelayedScheduler(rdb, logger, queue, pool.cronManager, pool.codec, schedulerPollInterval)
@@ -169,7 +187,7 @@ func (w *workerPool) Start(ctx context.Context) error {
 	)
 
 	// Create contexts for the active tasks and consumers/background loops
-	w.ctx, w.cancel = context.WithCancel(context.Background())
+	w.ctx, w.cancel = context.WithCancel(w.parentCtx)
 	w.consumerCtx, w.consumerCancel = context.WithCancel(w.ctx)
 
 	// 1. Start workers
@@ -194,13 +212,30 @@ func (w *workerPool) Start(ctx context.Context) error {
 }
 
 // Stop stops the worker pool gracefully
-func (w *workerPool) Stop() {
+func (w *workerPool) Stop(ctxs ...context.Context) {
 	w.logger.Info("Stopping TaskMQ worker pool gracefully")
 	if w.consumerCancel != nil {
 		w.consumerCancel()
 	}
 
-	// Wait for running tasks with a shutdown timeout (e.g. 10 seconds)
+	shutdownTimeout := 10 * time.Second
+	var parentCtx context.Context
+	if len(ctxs) > 0 && ctxs[0] != nil {
+		parentCtx = ctxs[0]
+		if deadline, ok := parentCtx.Deadline(); ok {
+			shutdownTimeout = time.Until(deadline)
+			// Add a small safety buffer (e.g. 500ms) so we force-cancel before Fx times out the hook
+			if shutdownTimeout > 500*time.Millisecond {
+				shutdownTimeout -= 500 * time.Millisecond
+			} else {
+				shutdownTimeout = 100 * time.Millisecond
+			}
+		}
+	} else {
+		parentCtx = context.Background()
+	}
+
+	// Wait for running tasks with a shutdown timeout
 	done := make(chan struct{})
 	go func() {
 		w.wg.Wait()
@@ -210,10 +245,16 @@ func (w *workerPool) Stop() {
 	select {
 	case <-done:
 		w.logger.Info("All tasks finished, worker pool stopped")
-	case <-time.After(10 * time.Second):
+	case <-time.After(shutdownTimeout):
 		w.logger.Warn("Shutdown timeout reached, force cancelling running tasks")
 		if w.cancel != nil {
 			w.cancel() // cancels w.ctx, which cancels active task contexts
+		}
+		<-done
+	case <-parentCtx.Done():
+		w.logger.Warn("Shutdown context canceled, force cancelling running tasks")
+		if w.cancel != nil {
+			w.cancel()
 		}
 		<-done
 	}

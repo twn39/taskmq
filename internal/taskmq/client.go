@@ -24,8 +24,9 @@ type Client interface {
 }
 
 type client struct {
-	rdb   *redis.Client
-	codec Codec
+	rdb              *redis.Client
+	codec            Codec
+	defaultUniqueTTL time.Duration
 }
 
 type ClientOption func(*client)
@@ -33,6 +34,13 @@ type ClientOption func(*client)
 func WithClientCodec(codec Codec) ClientOption {
 	return func(c *client) {
 		c.codec = codec
+	}
+}
+
+// WithDefaultUniqueTTL sets the default TTL for unique task locks.
+func WithDefaultUniqueTTL(ttl time.Duration) ClientOption {
+	return func(c *client) {
+		c.defaultUniqueTTL = ttl
 	}
 }
 
@@ -66,7 +74,11 @@ func (c *client) acquireUniqueLock(ctx context.Context, task *Task) (bool, error
 	uniqueKey := UniqueKey(task.Queue, task.UniqueKey)
 	ttl := time.Duration(task.UniqueTTLMs) * time.Millisecond
 	if ttl <= 0 {
-		ttl = 1 * time.Hour // Default to 1 hour
+		if c.defaultUniqueTTL > 0 {
+			ttl = c.defaultUniqueTTL
+		} else {
+			ttl = 1 * time.Hour // Default to 1 hour
+		}
 	}
 
 	return c.rdb.SetNX(ctx, uniqueKey, task.ID, ttl).Result()

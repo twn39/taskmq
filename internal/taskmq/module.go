@@ -14,29 +14,75 @@ import (
 	"google.golang.org/grpc"
 )
 
+// WorkerParams defines the injected parameters for Worker, supporting optional RootCtx
+type WorkerParams struct {
+	fx.In
+	Rdb         *redis.Client
+	Logger      *zap.Logger
+	Cron        CronManager
+	Scheduler   Runner
+	Janitor     PELRecoveryJanitor
+	RootCtx     context.Context `optional:"true"`
+}
+
 // Module is the Fx module for TaskMQ dependencies
 var Module = fx.Module("taskmq",
 	fx.Provide(
-		NewClient,
+		// Provide Client using injected config
+		func(rdb *redis.Client, cfg *config.Config) Client {
+			return NewClient(rdb, WithDefaultUniqueTTL(cfg.TaskMQ.DefaultUniqueTTL))
+		},
 		// Provide CronManager
-		func(rdb *redis.Client, logger *zap.Logger) CronManager {
-			return newCronManager(rdb, logger, "default", JSONCodec{}, 1*time.Minute, 50*time.Second)
+		func(rdb *redis.Client, logger *zap.Logger, cfg *config.Config) CronManager {
+			healingInterval := 1 * time.Minute
+			if cfg.TaskMQ.CronHealingInterval > 0 {
+				healingInterval = cfg.TaskMQ.CronHealingInterval
+			}
+			healingLockTTL := 50 * time.Second
+			if cfg.TaskMQ.CronHealingLockTTL > 0 {
+				healingLockTTL = cfg.TaskMQ.CronHealingLockTTL
+			}
+			scanBatchSize := 100
+			if cfg.TaskMQ.CronHealingScanBatchSize > 0 {
+				scanBatchSize = cfg.TaskMQ.CronHealingScanBatchSize
+			}
+			scanMaxCount := 1000
+			if cfg.TaskMQ.CronHealingScanMaxCount > 0 {
+				scanMaxCount = cfg.TaskMQ.CronHealingScanMaxCount
+			}
+			return newCronManager(rdb, logger, "default", JSONCodec{}, healingInterval, healingLockTTL, scanBatchSize, scanMaxCount)
 		},
 		// Provide DelayedScheduler as a Runner
-		func(rdb *redis.Client, logger *zap.Logger, cron CronManager) Runner {
-			return newDelayedScheduler(rdb, logger, "default", cron, JSONCodec{}, 500*time.Millisecond)
+		func(rdb *redis.Client, logger *zap.Logger, cron CronManager, cfg *config.Config) Runner {
+			pollInterval := 500 * time.Millisecond
+			if cfg.TaskMQ.SchedulerPollInterval > 0 {
+				pollInterval = cfg.TaskMQ.SchedulerPollInterval
+			}
+			return newDelayedScheduler(rdb, logger, "default", cron, JSONCodec{}, pollInterval)
 		},
 		// Provide PELRecoveryJanitor
-		func(rdb *redis.Client, logger *zap.Logger) PELRecoveryJanitor {
-			return newPELRecoveryJanitor(rdb, logger, "default", "taskmq-group", "taskmq-consumer-1", 5, 3*time.Second, 5*time.Second, nil)
+		func(rdb *redis.Client, logger *zap.Logger, cfg *config.Config) PELRecoveryJanitor {
+			janitorInterval := 3 * time.Second
+			if cfg.TaskMQ.JanitorInterval > 0 {
+				janitorInterval = cfg.TaskMQ.JanitorInterval
+			}
+			janitorMinIdleTime := 5 * time.Second
+			if cfg.TaskMQ.JanitorMinIdleTime > 0 {
+				janitorMinIdleTime = cfg.TaskMQ.JanitorMinIdleTime
+			}
+			return newPELRecoveryJanitor(rdb, logger, "default", "taskmq-group", "taskmq-consumer-1", 5, janitorInterval, janitorMinIdleTime, nil)
 		},
 		// Provide Worker using injected dependencies
-		func(rdb *redis.Client, logger *zap.Logger, cron CronManager, scheduler Runner, janitor PELRecoveryJanitor) Worker {
-			return NewWorkerPool(rdb, logger, "default", WorkerOptions{
-				CronManager: cron,
-				Scheduler:   scheduler,
-				Janitor:     janitor,
-			})
+		func(p WorkerParams) Worker {
+			opts := WorkerOptions{
+				CronManager: p.Cron,
+				Scheduler:   p.Scheduler,
+				Janitor:     p.Janitor,
+			}
+			if p.RootCtx != nil {
+				opts.Context = p.RootCtx
+			}
+			return NewWorkerPool(p.Rdb, p.Logger, "default", opts)
 		},
 		// Provide gRPC Server constructor
 		NewGRPCServer,
@@ -54,7 +100,7 @@ func RegisterWorkerPoolLifecycle(lc fx.Lifecycle, worker Worker) {
 			return worker.Start(ctx)
 		},
 		OnStop: func(ctx context.Context) error {
-			worker.Stop()
+			worker.Stop(ctx)
 			return nil
 		},
 	})

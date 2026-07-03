@@ -16,9 +16,20 @@ type cronManager struct {
 	codec           Codec
 	healingInterval time.Duration
 	healingLockTTL  time.Duration
+	scanBatchSize   int
+	scanMaxCount    int
 }
 
-func newCronManager(rdb *redis.Client, logger *zap.Logger, queue string, codec Codec, healingInterval time.Duration, healingLockTTL time.Duration) CronManager {
+func newCronManager(
+	rdb *redis.Client,
+	logger *zap.Logger,
+	queue string,
+	codec Codec,
+	healingInterval time.Duration,
+	healingLockTTL time.Duration,
+	scanBatchSize int,
+	scanMaxCount int,
+) CronManager {
 	return &cronManager{
 		rdb:             rdb,
 		logger:          logger,
@@ -26,6 +37,8 @@ func newCronManager(rdb *redis.Client, logger *zap.Logger, queue string, codec C
 		codec:           codec,
 		healingInterval: healingInterval,
 		healingLockTTL:  healingLockTTL,
+		scanBatchSize:   scanBatchSize,
+		scanMaxCount:    scanMaxCount,
 	}
 }
 
@@ -84,22 +97,57 @@ func (m *cronManager) Run(ctx context.Context) error {
 				}
 			}
 
-			// Fetch only tasks up to the max next execution time to optimize scanning
-			delayedMembers, err := m.rdb.ZRangeByScore(ctx, delayedKey, &redis.ZRangeBy{
-				Min: "0",
-				Max: fmt.Sprintf("%d", maxNextTime.UnixMilli()),
-			}).Result()
-			if err != nil {
-				m.logger.Error("Cron Self-Healing: failed to get delayed ZSET", zap.Error(err))
-				continue
+			// Paginate ZSET query to prevent memory bloat
+			offset := int64(0)
+			limit := int64(100)
+			if m.scanBatchSize > 0 {
+				limit = int64(m.scanBatchSize)
+			}
+			maxScan := int64(1000)
+			if m.scanMaxCount > 0 {
+				maxScan = int64(m.scanMaxCount)
 			}
 
 			activeCrons := make(map[string]bool)
-			for _, member := range delayedMembers {
-				task := &Task{}
-				err := m.codec.Unmarshal([]byte(member), task)
-				if err == nil && task.CronSpec != "" {
-					activeCrons[task.Name] = true
+			scannedCount := int64(0)
+
+			for scannedCount < maxScan {
+				delayedMembers, err := m.rdb.ZRangeByScore(ctx, delayedKey, &redis.ZRangeBy{
+					Min:    "0",
+					Max:    fmt.Sprintf("%d", maxNextTime.UnixMilli()),
+					Offset: offset,
+					Count:  limit,
+				}).Result()
+				if err != nil {
+					m.logger.Error("Cron Self-Healing: failed to get delayed ZSET chunk", zap.Error(err))
+					break
+				}
+
+				if len(delayedMembers) == 0 {
+					break
+				}
+
+				for _, member := range delayedMembers {
+					task := &Task{}
+					err := m.codec.Unmarshal([]byte(member), task)
+					if err == nil && task.CronSpec != "" {
+						activeCrons[task.Name] = true
+					}
+				}
+
+				scannedCount += int64(len(delayedMembers))
+				offset += limit
+
+				// Optimize: If all registered cron jobs are already active, break early.
+				allFound := true
+				for jobName := range parsedConfigs {
+					if !activeCrons[jobName] {
+						allFound = false
+						break
+					}
+				}
+				if allFound {
+					break
 				}
 			}
 
