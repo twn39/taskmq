@@ -1,6 +1,7 @@
 package taskmq
 
 import (
+	"math/rand"
 	"context"
 	"fmt"
 	"sync"
@@ -188,21 +189,29 @@ func (pw *priorityWorker) Start(ctx context.Context) error {
 		pw.wg.Add(1)
 		go pw.runBackgroundLoop(jan, "janitor-"+qName)
 	}
+	for qName, cron := range pw.cronManagers {
+		pw.wg.Add(1)
+		go pw.runBackgroundLoop(cron, "cron-"+qName)
+	}
 
 	return nil
 }
 
+func (pw *priorityWorker) runBackgroundLoop(runner Runner, name string) {
+	defer pw.wg.Done()
+	if err := runner.Run(pw.ctx); err != nil {
+		pw.logger.Error("Background priority runner stopped with error", zap.String("runner", name), zap.Error(err))
+	}
+}
+
 func (pw *priorityWorker) Stop(ctxs ...context.Context) {
-	pw.logger.Info("Stopping TaskMQ priority worker gracefully")
+	pw.logger.Info("Stopping TaskMQ priority worker background loops...")
+
 	if pw.consumerCancel != nil {
 		pw.consumerCancel()
 	}
-
-	var ctx context.Context
-	if len(ctxs) > 0 {
-		ctx = ctxs[0]
-	} else {
-		ctx = context.Background()
+	if pw.cancel != nil {
+		pw.cancel()
 	}
 
 	done := make(chan struct{})
@@ -211,209 +220,129 @@ func (pw *priorityWorker) Stop(ctxs ...context.Context) {
 		close(done)
 	}()
 
-	select {
-	case <-ctx.Done():
-		pw.logger.Warn("Graceful shutdown timeout, cancelling remaining context and forcing exit")
-		if pw.cancel != nil {
-			pw.cancel()
-		}
-		<-done
-	case <-done:
-		pw.logger.Info("All tasks finished, priority worker stopped")
+	var waitCtx context.Context
+	if len(ctxs) > 0 {
+		waitCtx = ctxs[0]
+	} else {
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
 	}
-}
 
-func (pw *priorityWorker) runBackgroundLoop(runner Runner, name string) {
-	defer pw.wg.Done()
-	defer func() {
-		if r := recover(); r != nil {
-			pw.logger.Error("Panic recovered in priority background loop",
-				zap.String("loop_name", name),
-				zap.Any("panic", r),
-			)
-		}
-	}()
-
-	err := runner.Run(pw.ctx)
-	if err != nil && err != context.Canceled {
-		pw.logger.Error("Priority background loop failed",
-			zap.String("loop_name", name),
-			zap.Error(err),
-		)
+	select {
+	case <-done:
+		pw.logger.Info("Priority worker gracefully stopped.")
+	case <-waitCtx.Done():
+		pw.logger.Warn("Priority worker shutdown timeout exceeded, forcing stop.")
 	}
 }
 
 func (pw *priorityWorker) worker() {
 	defer pw.wg.Done()
+	consumerName := fmt.Sprintf("%s-%d", pw.consumer, rand.Intn(10000))
 
 	for {
 		select {
 		case <-pw.consumerCtx.Done():
 			return
 		default:
-			select {
-			case <-pw.consumerCtx.Done():
-				return
-			case pw.sem <- struct{}{}:
-			}
-
-			var streams []redis.XStream
-			var err error
-
-			var orderedQueues []string
+			// Fetch the list of queue names according to priority strategy
+			var queueNames []string
 			if pw.priorityStrategy == "strict" {
-				orderedQueues = sortQueues(pw.queues)
+				queueNames = sortQueues(pw.queues)
 			} else {
-				orderedQueues = shuffleQueues(pw.queues)
+				queueNames = shuffleQueues(pw.queues)
 			}
 
-			var nonLimitedQueues []string
-			var minWait time.Duration
-			for _, qName := range orderedQueues {
-				rlMax, rlDuration, rlKeyField := pw.getQueueRateLimit(qName)
-				if rlMax > 0 && rlDuration > 0 && rlKeyField == "" {
-					limitKey := RateLimitKey(qName, "")
-					wait, checkErr := pw.limiter.Check(pw.consumerCtx, limitKey, rlMax, rlDuration)
-					if checkErr == nil && wait > 0 {
-						pw.logger.Debug("Queue rate-limited, skipping in polling", zap.String("queue", qName), zap.Duration("wait", wait))
-						if wait < minWait || minWait == 0 {
-							minWait = wait
-						}
+			messageFetched := false
+
+			for _, qName := range queueNames {
+				streamKey := StreamKey(qName)
+
+				streams, err := pw.rdb.XReadGroup(pw.consumerCtx, &redis.XReadGroupArgs{
+					Group:    pw.group,
+					Consumer: consumerName,
+					Streams:  []string{streamKey, ">"},
+					Count:    1,
+					Block:    100 * time.Millisecond,
+				}).Result()
+
+				if err != nil {
+					if err == redis.Nil {
+						continue
+					}
+					select {
+					case <-pw.consumerCtx.Done():
+						return
+					default:
+						pw.logger.Error("Failed to read group messages in priority worker", zap.Error(err))
+						time.Sleep(100 * time.Millisecond)
 						continue
 					}
 				}
-				nonLimitedQueues = append(nonLimitedQueues, qName)
-			}
 
-			if len(nonLimitedQueues) == 0 {
-				pw.releaseToken()
-				if minWait == 0 {
-					minWait = time.Second
+				for _, stream := range streams {
+					for _, msg := range stream.Messages {
+						messageFetched = true
+						if pw.syncExecution {
+							pw.processMessage(pw.consumerCtx, streamKey, msg)
+						} else {
+							select {
+							case pw.sem <- struct{}{}:
+							case <-pw.consumerCtx.Done():
+								return
+							}
+
+							pw.wg.Add(1)
+							go func(sk string, m redis.XMessage) {
+								defer func() {
+									<-pw.sem
+									pw.wg.Done()
+								}()
+								pw.processMessage(pw.consumerCtx, sk, m)
+							}(streamKey, msg)
+						}
+					}
 				}
-				select {
-				case <-pw.consumerCtx.Done():
-					return
-				case <-time.After(minWait):
-				}
-				continue
-			}
 
-			found := false
-			for _, qName := range nonLimitedQueues {
-				sKey := StreamKey(qName)
-				res, readErr := pw.rdb.XReadGroup(pw.consumerCtx, &redis.XReadGroupArgs{
-					Group:    pw.group,
-					Consumer: pw.consumer,
-					Streams:  []string{sKey, ">"},
-					Count:    1,
-					Block:    -1,
-				}).Result()
-
-				if readErr == nil && len(res) > 0 && len(res[0].Messages) > 0 {
-					streams = res
-					found = true
+				if messageFetched {
 					break
 				}
 			}
 
-			if !found {
-				streamsArg := make([]string, 2*len(nonLimitedQueues))
-				for i, qName := range nonLimitedQueues {
-					streamsArg[i] = StreamKey(qName)
-				}
-				for i := 0; i < len(nonLimitedQueues); i++ {
-					streamsArg[len(nonLimitedQueues)+i] = ">"
-				}
-
-				streams, err = pw.rdb.XReadGroup(pw.consumerCtx, &redis.XReadGroupArgs{
-					Group:    pw.group,
-					Consumer: pw.consumer,
-					Streams:  streamsArg,
-					Count:    1,
-					Block:    time.Second,
-				}).Result()
-			}
-
-			if err != nil {
-				pw.releaseToken()
-				if pw.consumerCtx.Err() != nil {
-					return
-				}
-				if err == redis.Nil {
-					continue
-				}
-				if netErr, ok := err.(interface{ Timeout() bool }); ok && netErr.Timeout() {
-					continue
-				}
-				pw.logger.Error("Priority worker error reading stream", zap.Error(err))
-				time.Sleep(time.Second)
-				continue
-			}
-
-			msgPulled := false
-			firstMsg := true
-			for _, stream := range streams {
-				for _, msg := range stream.Messages {
-					msgPulled = true
-					if !firstMsg {
-						select {
-						case <-pw.consumerCtx.Done():
-							return
-						case pw.sem <- struct{}{}:
-						}
-					}
-					firstMsg = false
-
-					if pw.syncExecution {
-						pw.processMessage(pw.ctx, stream.Stream, msg)
-						pw.releaseToken()
-					} else {
-						pw.wg.Add(1)
-						go func(s string, m redis.XMessage) {
-							defer pw.wg.Done()
-							defer pw.releaseToken()
-							pw.processMessage(pw.ctx, s, m)
-						}(stream.Stream, msg)
-					}
-				}
-			}
-
-			if !msgPulled {
-				pw.releaseToken()
+			if !messageFetched {
+				time.Sleep(50 * time.Millisecond)
 			}
 		}
 	}
 }
 
-func (pw *priorityWorker) releaseToken() {
-	select {
-	case <-pw.sem:
-	default:
-	}
-}
-
 func (pw *priorityWorker) processMessage(ctx context.Context, streamKey string, msg redis.XMessage) {
-	taskData, ok := msg.Values["task"].(string)
+	payload, ok := msg.Values["payload"].([]byte)
 	if !ok {
-		pw.logger.Error("Invalid message payload format, missing 'task' field")
-		_ = pw.rdb.XAck(ctx, streamKey, pw.group, msg.ID).Err()
-		return
+		if payloadStr, ok := msg.Values["payload"].(string); ok {
+			payload = []byte(payloadStr)
+		} else {
+			pw.logger.Error("Message payload must be bytes or string")
+			return
+		}
 	}
 
-	task := &Task{}
-	if err := pw.codec.Unmarshal([]byte(taskData), task); err != nil {
+	var task Task
+	err := pw.codec.Unmarshal(payload, &task)
+	if err != nil {
 		pw.logger.Error("Failed to deserialize task", zap.Error(err))
-		_ = pw.rdb.XAck(ctx, streamKey, pw.group, msg.ID).Err()
 		return
 	}
 
 	handler, exists := pw.handlers[task.Name]
 	if !exists {
-		pw.logger.Warn("No handler registered for task, leaving in PEL for potential future handler", zap.String("task_name", task.Name))
+		pw.logger.Error("No handler registered", zap.String("task_name", task.Name))
 		return
 	}
 
 	rlMax, rlDuration, rlKeyField := pw.getQueueRateLimit(task.Queue)
+
 	if rlMax > 0 && rlDuration > 0 {
 		var groupKeyVal string
 		if rlKeyField != "" {
@@ -426,7 +355,7 @@ func (pw *priorityWorker) processMessage(ctx context.Context, streamKey string, 
 			pw.logger.Error("Failed to apply rate limiting", zap.Error(rlErr))
 		} else if wait > 0 {
 			pw.logger.Debug("Rate limit exceeded, deferring task", zap.String("queue", task.Queue), zap.String("group_key", groupKeyVal), zap.Duration("wait", wait))
-			if err := pw.deferRateLimitedTask(ctx, streamKey, msg.ID, task, wait); err != nil {
+			if err := pw.deferRateLimitedTask(ctx, streamKey, msg.ID, &task, wait); err != nil {
 				pw.logger.Error("Failed to defer rate limited task atomically",
 					zap.String("task_id", task.ID),
 					zap.String("task_name", task.Name),
@@ -443,14 +372,14 @@ func (pw *priorityWorker) processMessage(ctx context.Context, streamKey string, 
 		zap.Int("retry", task.Retry),
 	)
 
-	err := pw.runHandlerWithRecovery(ctx, task, handler)
+	err = pw.runHandlerWithRecovery(ctx, &task, handler)
 	if err != nil {
 		pw.logger.Error("Task execution failed",
 			zap.String("task_id", task.ID),
 			zap.String("task_name", task.Name),
 			zap.Error(err),
 		)
-		pw.handleFailure(ctx, streamKey, msg, task, err)
+		pw.handleFailure(ctx, streamKey, msg, &task, err)
 		return
 	}
 
@@ -467,7 +396,7 @@ func (pw *priorityWorker) processMessage(ctx context.Context, streamKey string, 
 
 	// Uniqueness locks release (if lock is active)
 	if task.UniqueKey != "" {
-		pw.releaseUniqueLock(ctx, task)
+		pw.releaseUniqueLock(ctx, &task)
 	}
 }
 

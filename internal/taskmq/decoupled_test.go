@@ -90,23 +90,31 @@ func TestWorkerPool_DecoupledAbtractionAndFailureHandling(t *testing.T) {
 		opts.ApplyDefaults(rdb, logger, "test-q", JSONCodec{})
 
 		pool := NewWorkerPool(rdb, logger, "test-q", opts).(*workerPool)
-		task := &Task{ID: "t-1", Queue: "test-q", MaxRetry: 3, Retry: 2}
 
 		msg := redis.XMessage{
 			ID:     "1-0",
-			Values: map[string]interface{}{"task": `{"id":"t-1","queue":"test-q"}`},
+			Values: map[string]interface{}{},
 		}
 
-		pool.handleFailure(context.Background(), msg, task, errors.New("fatal billing error"))
+		// Use the new ProcessMessage flow to invoke middleware chain & failure handling
+		pool.Register("test-task", func(ctx context.Context, task *Task) error {
+			return errors.New("fatal billing error")
+		})
+		
+		taskBytesWithWrongName := []byte(`{"id":"t-1","queue":"test-q","name":"test-task","retry":2,"max_retry":3}`)
+		msg.Values["payload"] = taskBytesWithWrongName
+
+		pool.ProcessMessage(context.Background(), msg)
 
 		mb.mu.Lock()
-		defer mb.mu.Unlock()
 		if mb.moveToDLQCnt != 1 {
 			t.Errorf("expected MoveToDLQ to be called 1 time, got %d", mb.moveToDLQCnt)
 		}
 		if mb.lastDLQName != "custom-dead-letters" {
 			t.Errorf("expected DLQ target to be 'custom-dead-letters', got '%s'", mb.lastDLQName)
 		}
+		mb.mu.Unlock()
+
 		if !hookTriggered {
 			t.Error("expected Dead-Letter hook to be triggered, but was not")
 		}
@@ -127,14 +135,19 @@ func TestWorkerPool_DecoupledAbtractionAndFailureHandling(t *testing.T) {
 		opts.ApplyDefaults(rdb, logger, "test-q", JSONCodec{})
 
 		pool := NewWorkerPool(rdb, logger, "test-q", opts).(*workerPool)
-		task := &Task{ID: "t-3", Queue: "test-q", MaxRetry: 3, Retry: 1}
 
 		msg := redis.XMessage{
 			ID:     "3-0",
-			Values: map[string]interface{}{"task": `{"id":"t-3","queue":"test-q"}`},
+			Values: map[string]interface{}{},
 		}
+		taskBytes := []byte(`{"id":"t-3","queue":"test-q","name":"test-task","retry":1,"max_retry":3}`)
+		msg.Values["payload"] = taskBytes
 
-		pool.handleFailure(context.Background(), msg, task, nonRetryableErr)
+		pool.Register("test-task", func(ctx context.Context, task *Task) error {
+			return nonRetryableErr
+		})
+
+		pool.ProcessMessage(context.Background(), msg)
 
 		mb.mu.Lock()
 		defer mb.mu.Unlock()

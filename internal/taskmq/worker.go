@@ -15,6 +15,8 @@ import (
 
 type HandlerFunc func(ctx context.Context, task *Task) error
 
+type CoreHandlerFunc func(c *ConsumeContext) error
+
 type Worker interface {
 	Register(taskName string, handler HandlerFunc)
 	Start(ctx context.Context) error
@@ -187,133 +189,148 @@ func (w *workerPool) Start(ctx context.Context) error {
 	streamKey := StreamKey(w.queue)
 	err := w.rdb.XGroupCreateMkStream(ctx, streamKey, w.group, "$").Err()
 	if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
-		return fmt.Errorf("failed to create consumer group: %w", err)
+		return fmt.Errorf("failed to create stream or group: %w", err)
 	}
 
-	w.logger.Info("Starting TaskMQ worker pool",
-		zap.String("queue", w.queue),
-		zap.String("group", w.group),
-		zap.Int("concurrency", w.concurrency),
-	)
-
-	// Create contexts for the active tasks and consumers/background loops
 	w.ctx, w.cancel = context.WithCancel(w.parentCtx)
-	w.consumerCtx, w.consumerCancel = context.WithCancel(w.ctx)
+	w.consumerCtx, w.consumerCancel = context.WithCancel(ctx)
 
-	// 2. Start workers
-	for i := 0; i < w.concurrency; i++ {
-		w.wg.Add(1)
-		go w.worker(streamKey)
-	}
-
-	// 3. Start Scheduler, Janitor, and CronManager loops
+	// Start Scheduler & Janitor loop
 	if w.scheduler != nil {
 		w.wg.Add(1)
-		go w.runBackgroundLoop(w.scheduler, "scheduler-"+w.queue)
-	}
-	if w.janitor != nil {
-		w.wg.Add(1)
-		go w.runBackgroundLoop(w.janitor, "janitor-"+w.queue)
-	}
-	if w.cronManager != nil {
-		w.wg.Add(1)
-		go w.runBackgroundLoop(w.cronManager, "cron-"+w.queue)
+		go func() {
+			defer w.wg.Done()
+			if err := w.scheduler.Run(w.ctx); err != nil {
+				w.logger.Error("Scheduler loop stopped with error", zap.Error(err))
+			}
+		}()
 	}
 
+	if w.janitor != nil {
+		w.wg.Add(1)
+		go func() {
+			defer w.wg.Done()
+			if err := w.janitor.Run(w.ctx); err != nil {
+				w.logger.Error("Janitor loop stopped with error", zap.Error(err))
+			}
+		}()
+	}
+
+	// Start Cron Manager healing loop
+	if w.cronManager != nil {
+		w.wg.Add(1)
+		go func() {
+			defer w.wg.Done()
+			if err := w.cronManager.Run(w.ctx); err != nil {
+				w.logger.Error("Cron Manager healing loop stopped with error", zap.Error(err))
+			}
+		}()
+	}
+
+	// Start concurrent workers to consume queue
+	for i := 0; i < w.concurrency; i++ {
+		w.wg.Add(1)
+		go w.runBackgroundLoop(i)
+	}
+
+	w.logger.Info("Worker pool started successfully", zap.String("queue", w.queue), zap.Int("concurrency", w.concurrency))
 	return nil
 }
 
-// Stop stops the worker pool gracefully
+// Stop gracefully stops the consumer background loops, then waits for in-flight tasks
 func (w *workerPool) Stop(ctxs ...context.Context) {
-	w.logger.Info("Stopping TaskMQ worker pool", zap.String("queue", w.queue))
+	w.logger.Info("Stopping worker pool background loops...")
 
-	// Step 1: Terminate active consumer loops so they don't read new messages
+	// 1. Stop queue stream readers immediately
 	if w.consumerCancel != nil {
 		w.consumerCancel()
 	}
 
-	// Step 2: Cancel root context so all active processing and background loops stop
+	// 2. Shut down scheduler, janitor and cron healing loops
 	if w.cancel != nil {
 		w.cancel()
 	}
 
-	// Wait for all workers and background processes to terminate
-	waitChan := make(chan struct{})
+	// 3. Optional timeout block wait
+	done := make(chan struct{})
 	go func() {
 		w.wg.Wait()
-		close(waitChan)
+		close(done)
 	}()
 
-	var timeoutCtx context.Context
-	var cancel context.CancelFunc
+	var waitCtx context.Context
 	if len(ctxs) > 0 {
-		timeoutCtx = ctxs[0]
+		waitCtx = ctxs[0]
 	} else {
-		timeoutCtx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
+		var cancel context.CancelFunc
+		waitCtx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
 		defer cancel()
 	}
 
 	select {
-	case <-waitChan:
-		w.logger.Info("All TaskMQ workers and background loops stopped gracefully")
-	case <-timeoutCtx.Done():
-		w.logger.Warn("Graceful shutdown timed out; some tasks may still be active in background")
+	case <-done:
+		w.logger.Info("Worker pool gracefully stopped.")
+	case <-waitCtx.Done():
+		w.logger.Warn("Worker pool shutdown timeout exceeded, forcing stop.")
 	}
 }
 
-func (w *workerPool) runBackgroundLoop(runner Runner, name string) {
+func (w *workerPool) runBackgroundLoop(workerID int) {
 	defer w.wg.Done()
-	w.logger.Info("Starting background runner loop", zap.String("runner", name))
-	if err := runner.Run(w.ctx); err != nil && err != context.Canceled {
-		w.logger.Error("Background runner stopped with error", zap.String("runner", name), zap.Error(err))
-	}
-}
+	consumerName := fmt.Sprintf("%s-%d", w.consumer, workerID)
+	streamKey := StreamKey(w.queue)
 
-func (w *workerPool) worker(streamKey string) {
-	defer w.wg.Done()
+	w.logger.Debug("Worker background loop started", zap.String("consumer", consumerName))
 
 	for {
 		select {
 		case <-w.consumerCtx.Done():
+			w.logger.Debug("Worker consumer context cancelled, exiting loop", zap.String("consumer", consumerName))
 			return
 		default:
-			// Block-reading messages from group. Use block duration 100ms.
+			// Read messages from the stream
 			streams, err := w.rdb.XReadGroup(w.consumerCtx, &redis.XReadGroupArgs{
 				Group:    w.group,
-				Consumer: w.consumer,
+				Consumer: consumerName,
 				Streams:  []string{streamKey, ">"},
 				Count:    1,
-				Block:    100 * time.Millisecond,
+				Block:    1 * time.Second,
 			}).Result()
 
 			if err != nil {
-				if err == redis.Nil || err == context.Canceled || w.consumerCtx.Err() != nil {
+				if err == redis.Nil {
 					continue
 				}
-				w.logger.Error("Failed to read messages from stream group", zap.Error(err))
-				time.Sleep(200 * time.Millisecond) // exponential backoff fallback
-				continue
+				select {
+				case <-w.consumerCtx.Done():
+					return
+				default:
+					w.logger.Error("Failed to read group messages from stream", zap.Error(err))
+					time.Sleep(1 * time.Second)
+					continue
+				}
 			}
 
 			for _, stream := range streams {
 				for _, msg := range stream.Messages {
 					if w.syncExecution {
-						w.ProcessMessage(w.ctx, msg)
+						w.ProcessMessage(w.consumerCtx, msg)
 					} else {
-						// Concurrency control via semaphore
+						// Wait for pool execution token
 						select {
 						case w.sem <- struct{}{}:
-							w.wg.Add(1)
-							go func(m redis.XMessage) {
-								defer func() {
-									<-w.sem
-									w.wg.Done()
-								}()
-								w.ProcessMessage(w.ctx, m)
-							}(msg)
 						case <-w.consumerCtx.Done():
 							return
 						}
+
+						w.wg.Add(1)
+						go func(m redis.XMessage) {
+							defer func() {
+								<-w.sem
+								w.wg.Done()
+							}()
+							w.ProcessMessage(w.consumerCtx, m)
+						}(msg)
 					}
 				}
 			}
@@ -321,140 +338,74 @@ func (w *workerPool) worker(streamKey string) {
 	}
 }
 
-// ProcessMessage unmarshals and executes a task from a stream message
 func (w *workerPool) ProcessMessage(ctx context.Context, msg redis.XMessage) {
-	streamKey := StreamKey(w.queue)
-
-	taskRaw, ok := msg.Values["task"]
+	// Dynamically unpack task
+	payload, ok := msg.Values["payload"].([]byte)
 	if !ok {
-		w.logger.Error("Message values missing 'task' field; acknowledging corrupted message", zap.String("msg_id", msg.ID))
-		_ = w.rdb.XAck(ctx, streamKey, w.group, msg.ID).Err()
-		return
+		// Compatible fallback if not []byte
+		if payloadStr, ok := msg.Values["payload"].(string); ok {
+			payload = []byte(payloadStr)
+		} else {
+			w.logger.Error("Message payload must be bytes or string")
+			return
+		}
 	}
 
-	taskStr, ok := taskRaw.(string)
-	if !ok {
-		w.logger.Error("Message 'task' field is not a string; acknowledging corrupted message", zap.String("msg_id", msg.ID))
-		_ = w.rdb.XAck(ctx, streamKey, w.group, msg.ID).Err()
-		return
-	}
-
-	task := &Task{}
-	if err := w.codec.Unmarshal([]byte(taskStr), task); err != nil {
-		w.logger.Error("Failed to unmarshal task; acknowledging corrupted message", zap.String("msg_id", msg.ID), zap.Error(err))
-		_ = w.rdb.XAck(ctx, streamKey, w.group, msg.ID).Err()
+	var task Task
+	err := w.codec.Unmarshal(payload, &task)
+	if err != nil {
+		w.logger.Error("Failed to deserialize task", zap.Error(err))
 		return
 	}
 
 	handler, exists := w.handlers[task.Name]
 	if !exists {
-		w.logger.Warn("No handler registered for task, leaving in PEL for potential future handler", zap.String("task_name", task.Name))
+		w.logger.Error("No handler registered", zap.String("task_name", task.Name))
 		return
 	}
 
-	// Dynamic GCRA Rate Limiting
+	// GCRA dynamic limits parsing
 	rlMax, rlDuration, rlKeyField := w.getQueueRateLimit(task.Queue)
-	if rlMax > 0 && rlDuration > 0 {
-		var groupKeyVal string
-		if rlKeyField != "" {
-			groupKeyVal = extractGroupKey(task.Payload, rlKeyField)
-		}
-		limitKey := RateLimitKey(task.Queue, groupKeyVal)
 
-		wait, rlErr := w.limiter.Check(ctx, limitKey, rlMax, rlDuration)
-		if rlErr != nil {
-			w.logger.Error("Failed to apply rate limiting", zap.Error(rlErr))
-		} else if wait > 0 {
-			w.logger.Debug("Rate limit exceeded, deferring task", zap.String("queue", task.Queue), zap.String("group_key", groupKeyVal), zap.Duration("wait", wait))
-			runAt := time.Now().Add(wait)
-			if err := w.broker.DeferRateLimitedTask(ctx, msg.ID, task, runAt); err != nil {
-				w.logger.Error("Failed to defer rate limited task atomically",
-					zap.String("task_id", task.ID),
-					zap.String("task_name", task.Name),
-					zap.Error(err),
-				)
-			}
+	// Built-in handlers/middleware chain assembly
+	handlers := []CoreHandlerFunc{
+		RecoveryMiddleware(w.logger),
+		RateLimitMiddleware(w.limiter, w.broker, rlMax, rlDuration, rlKeyField, w.logger),
+		RetryAndDLQMiddleware(w.broker, w.retryPolicy, w.deadLetterPolicy, w.logger),
+		func(c *ConsumeContext) error {
+			return handler(c.Context, c.Task)
+		},
+	}
+
+	c := &ConsumeContext{
+		Context:   ctx,
+		Task:      &task,
+		MessageID: msg.ID,
+		Queue:     w.queue,
+		Group:     w.group,
+		handlers:  handlers,
+		index:     -1,
+	}
+
+	execErr := c.Next()
+
+	// If no error occurred during processing chain and it completed fully (not aborted)
+	if execErr == nil && c.index == len(handlers) {
+		streamKey := StreamKey(w.queue)
+		err = w.rdb.XAck(ctx, streamKey, w.group, msg.ID).Err()
+		if err != nil {
+			w.logger.Error("Failed to ACK task stream message",
+				zap.String("task_id", task.ID),
+				zap.String("stream_id", msg.ID),
+				zap.Error(err),
+			)
 			return
 		}
-	}
 
-	w.logger.Info("Executing task",
-		zap.String("task_id", task.ID),
-		zap.String("task_name", task.Name),
-		zap.Int("retry", task.Retry),
-	)
-
-	err := w.runHandlerWithRecovery(ctx, task, handler)
-	if err != nil {
-		w.logger.Error("Task execution failed",
-			zap.String("task_id", task.ID),
-			zap.String("task_name", task.Name),
-			zap.Error(err),
-		)
-		w.handleFailure(ctx, msg, task, err)
-		return
-	}
-
-	// ACK the message in the stream to remove it from PEL
-	err = w.rdb.XAck(ctx, streamKey, w.group, msg.ID).Err()
-	if err != nil {
-		w.logger.Error("Failed to ACK task stream message",
-			zap.String("task_id", task.ID),
-			zap.String("stream_id", msg.ID),
-			zap.Error(err),
-		)
-		return
-	}
-
-	// Uniqueness locks release (if lock is active)
-	if task.UniqueKey != "" {
-		_ = w.broker.ReleaseUniqueLock(ctx, task)
-	}
-}
-
-func (w *workerPool) handleFailure(ctx context.Context, msg redis.XMessage, task *Task, err error) {
-	task.Retry++
-	streamKey := StreamKey(w.queue)
-
-	if !w.retryPolicy.ShouldRetry(task, err) {
-		// Run dead-letter hooks/custom routing
-		w.deadLetterPolicy.BeforeDeadLetter(ctx, task, err)
-		dlqName := w.deadLetterPolicy.DLQQueueName(task)
-
-		w.logger.Error("Task permanently failed, moving to DLQ",
-			zap.String("task_id", task.ID),
-			zap.String("dlq", dlqName),
-			zap.Error(err),
-		)
-
-		if err := w.broker.MoveToDLQ(ctx, task, streamKey, msg.ID, w.group, dlqName); err != nil {
-			w.logger.Error("Failed to move task to DLQ atomically", zap.Error(err))
+		if task.UniqueKey != "" {
+			_ = w.broker.ReleaseUniqueLock(ctx, &task)
 		}
-		return
 	}
-
-	backoff := w.retryPolicy.NextBackoff(task)
-
-	w.logger.Info("Scheduling task retry with backoff",
-		zap.String("task_id", task.ID),
-		zap.String("task_name", task.Name),
-		zap.Int("retry", task.Retry),
-		zap.Duration("backoff", backoff),
-	)
-
-	runAt := time.Now().Add(backoff)
-	if err := w.broker.ScheduleRetry(ctx, task, streamKey, msg.ID, w.group, runAt); err != nil {
-		w.logger.Error("Failed to schedule task retry atomically", zap.Error(err))
-	}
-}
-
-func (w *workerPool) runHandlerWithRecovery(ctx context.Context, task *Task, handler HandlerFunc) (err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("task panicked: %v", r)
-		}
-	}()
-	return handler(ctx, task)
 }
 
 func RateLimitKey(queue string, groupKey string) string {
