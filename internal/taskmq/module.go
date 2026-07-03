@@ -49,7 +49,7 @@ var Module = fx.Module("taskmq",
 	),
 )
 
-// ProvideWorkers constructs and provides a Worker (implemented by multiWorker) for all configured queues.
+// ProvideWorkers constructs and provides a Worker (implemented by multiWorker or priorityWorker) for all configured queues.
 func ProvideWorkers(p ProvideWorkersParams) (Worker, error) {
 	workers := make(map[string]Worker)
 
@@ -104,19 +104,17 @@ func ProvideWorkers(p ProvideWorkersParams) (Worker, error) {
 			JanitorMinIdleTime:       p.Cfg.TaskMQ.JanitorMinIdleTime,
 			PriorityQueues:           priorityQueues,
 			PriorityStrategy:         priorityStrategy,
+			Codec:                    p.Codec,
 		}
 		if p.RootCtx != nil {
 			baseOpts.Context = p.RootCtx
 		}
 
-		// Use the first queue name as the base for default options
-		firstQ := priorityQueues[0].Name
-		opts := NewDefaultWorkerOptions(p.Rdb, p.Logger, firstQ, p.Codec, baseOpts)
-		pool := NewWorkerPool(p.Rdb, p.Logger, "", opts)
+		pw := NewPriorityWorker(p.Rdb, p.Logger, baseOpts)
 
 		// Register the pool under all priority queue names
 		for _, pq := range priorityQueues {
-			workers[pq.Name] = pool
+			workers[pq.Name] = pw
 		}
 	}
 
