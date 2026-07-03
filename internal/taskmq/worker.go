@@ -3,6 +3,8 @@ package taskmq
 import (
 	"context"
 	"fmt"
+	"math/rand"
+	"sort"
 	"sync"
 	"time"
 
@@ -18,10 +20,17 @@ type Worker interface {
 	Stop(ctxs ...context.Context)
 }
 
+type QueuePriority struct {
+	Name   string
+	Weight int
+}
+
 type workerPool struct {
 	rdb            *redis.Client
 	logger         *zap.Logger
 	queue          string
+	queues         []QueuePriority
+	priorityStrategy string
 	group          string
 	consumer       string
 	concurrency    int
@@ -39,6 +48,11 @@ type workerPool struct {
 	consumerCtx    context.Context
 	consumerCancel context.CancelFunc
 	wg             sync.WaitGroup
+
+	// Multi-queue support mapping
+	schedulers     map[string]Runner
+	janitors       map[string]Runner
+	cronManagers     map[string]CronManager
 }
 
 type WorkerOptions struct {
@@ -65,6 +79,10 @@ type WorkerOptions struct {
 
 	// Parent context for the worker pool execution lifecycle
 	Context context.Context
+
+	// Priority Queues Settings
+	PriorityQueues   []QueuePriority
+	PriorityStrategy string // "strict" or "weighted"
 }
 
 func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...WorkerOptions) Worker {
@@ -80,6 +98,9 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 		execPoolSize:  5,
 		handlers:      make(map[string]HandlerFunc),
 		parentCtx:     context.Background(),
+		schedulers:    make(map[string]Runner),
+		janitors:      make(map[string]Runner),
+		cronManagers:  make(map[string]CronManager),
 	}
 
 	if len(opts) > 0 {
@@ -104,27 +125,93 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 		if opt.Context != nil {
 			pool.parentCtx = opt.Context
 		}
-		if opt.CronManager != nil {
-			pool.cronManager = opt.CronManager
-		}
-		if opt.Scheduler != nil {
-			pool.scheduler = opt.Scheduler
-		}
-		if opt.Janitor != nil {
-			pool.janitor = opt.Janitor
-		}
-	}
 
-	if pool.cronManager == nil || pool.scheduler == nil || pool.janitor == nil {
-		panic("NewWorkerPool: CronManager, Scheduler, and Janitor must be provided in WorkerOptions")
+		pool.queues = opt.PriorityQueues
+		pool.priorityStrategy = opt.PriorityStrategy
+		if pool.priorityStrategy == "" {
+			pool.priorityStrategy = "weighted"
+		}
+
+		if len(pool.queues) > 0 {
+			// Multi-queue priority mode
+			cronHealingInterval := opt.CronHealingInterval
+			if cronHealingInterval <= 0 {
+				cronHealingInterval = 1 * time.Minute
+			}
+			cronHealingLockTTL := opt.CronHealingLockTTL
+			if cronHealingLockTTL <= 0 {
+				cronHealingLockTTL = 50 * time.Second
+			}
+			cronHealingScanBatchSize := opt.CronHealingScanBatchSize
+			if cronHealingScanBatchSize <= 0 {
+				cronHealingScanBatchSize = 100
+			}
+			cronHealingScanMaxCount := opt.CronHealingScanMaxCount
+			if cronHealingScanMaxCount <= 0 {
+				cronHealingScanMaxCount = 1000
+			}
+			schedulerPollInterval := opt.SchedulerPollInterval
+			if schedulerPollInterval <= 0 {
+				schedulerPollInterval = 500 * time.Millisecond
+			}
+			janitorInterval := opt.JanitorInterval
+			if janitorInterval <= 0 {
+				janitorInterval = 3 * time.Second
+			}
+			janitorMinIdleTime := opt.JanitorMinIdleTime
+			if janitorMinIdleTime <= 0 {
+				janitorMinIdleTime = 5 * time.Second
+			}
+
+			for _, q := range pool.queues {
+				qCron := newCronManager(rdb, logger, q.Name, pool.codec, cronHealingInterval, cronHealingLockTTL, cronHealingScanBatchSize, cronHealingScanMaxCount)
+				qSched := newDelayedScheduler(rdb, logger, q.Name, qCron, pool.codec, schedulerPollInterval)
+				qJan := newPELRecoveryJanitor(rdb, logger, q.Name, pool.group, pool.consumer, pool.concurrency, janitorInterval, janitorMinIdleTime, nil)
+
+				pool.cronManagers[q.Name] = qCron
+				pool.schedulers[q.Name] = qSched
+				pool.janitors[q.Name] = qJan
+			}
+
+			if len(pool.queues) > 0 {
+				firstQ := pool.queues[0].Name
+				pool.cronManager = pool.cronManagers[firstQ]
+				pool.scheduler = pool.schedulers[firstQ]
+				pool.janitor = pool.janitors[firstQ]
+			}
+		} else {
+			// Single-queue mode
+			if opt.CronManager != nil {
+				pool.cronManager = opt.CronManager
+				pool.cronManagers[queue] = opt.CronManager
+			}
+			if opt.Scheduler != nil {
+				pool.scheduler = opt.Scheduler
+				pool.schedulers[queue] = opt.Scheduler
+			}
+			if opt.Janitor != nil {
+				pool.janitor = opt.Janitor
+				pool.janitors[queue] = opt.Janitor
+			}
+
+			if pool.cronManager == nil || pool.scheduler == nil || pool.janitor == nil {
+				panic("NewWorkerPool: CronManager, Scheduler, and Janitor must be provided in WorkerOptions")
+			}
+		}
+	} else {
+		panic("NewWorkerPool: WorkerOptions must be provided")
 	}
 
 	pool.sem = make(chan struct{}, pool.execPoolSize)
 
-	if j, ok := pool.janitor.(PELRecoveryJanitor); ok {
-		j.RegisterProcessor(func(ctx context.Context, msg redis.XMessage) {
-			pool.processMessage(ctx, StreamKey(queue), msg)
-		})
+	// Register processors for all janitors
+	for qName, jan := range pool.janitors {
+		if j, ok := jan.(PELRecoveryJanitor); ok {
+			name := qName
+			j.RegisterProcessor(func(ctx context.Context, msg redis.XMessage) {
+				pool.processMessage(ctx, StreamKey(name), msg)
+			})
+		}
 	}
 
 	return pool
@@ -137,16 +224,26 @@ func (w *workerPool) Register(taskName string, handler HandlerFunc) {
 
 // Start starts the worker pool consumers, scheduler, and janitor loops
 func (w *workerPool) Start(ctx context.Context) error {
-	streamKey := StreamKey(w.queue)
-
-	// Create Consumer Group. Ignore BUSYGROUP error if it already exists.
-	err := w.rdb.XGroupCreateMkStream(ctx, streamKey, w.group, "$").Err()
-	if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
-		return fmt.Errorf("failed to create consumer group: %w", err)
+	// 1. Create Consumer Groups for all queues
+	if len(w.queues) > 0 {
+		for _, q := range w.queues {
+			streamKey := StreamKey(q.Name)
+			err := w.rdb.XGroupCreateMkStream(ctx, streamKey, w.group, "$").Err()
+			if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
+				return fmt.Errorf("failed to create consumer group for queue %s: %w", q.Name, err)
+			}
+		}
+	} else {
+		streamKey := StreamKey(w.queue)
+		err := w.rdb.XGroupCreateMkStream(ctx, streamKey, w.group, "$").Err()
+		if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
+			return fmt.Errorf("failed to create consumer group: %w", err)
+		}
 	}
 
 	w.logger.Info("Starting TaskMQ worker pool",
 		zap.String("queue", w.queue),
+		zap.Any("queues", w.queues),
 		zap.String("group", w.group),
 		zap.Int("concurrency", w.concurrency),
 	)
@@ -155,23 +252,35 @@ func (w *workerPool) Start(ctx context.Context) error {
 	w.ctx, w.cancel = context.WithCancel(w.parentCtx)
 	w.consumerCtx, w.consumerCancel = context.WithCancel(w.ctx)
 
-	// 1. Start workers
-	for i := 0; i < w.concurrency; i++ {
-		w.wg.Add(1)
-		go w.worker(streamKey)
+	// 2. Start workers
+	if len(w.queues) > 0 {
+		for i := 0; i < w.concurrency; i++ {
+			w.wg.Add(1)
+			go w.worker("")
+		}
+	} else {
+		streamKey := StreamKey(w.queue)
+		for i := 0; i < w.concurrency; i++ {
+			w.wg.Add(1)
+			go w.worker(streamKey)
+		}
 	}
 
-	// 2. Start Scheduler loop (ZSET -> Stream)
-	w.wg.Add(1)
-	go w.runBackgroundLoop(w.scheduler, "scheduler")
+	// 3. Start Scheduler, Janitor, and CronManager loops for all queues
+	for qName, sched := range w.schedulers {
+		w.wg.Add(1)
+		go w.runBackgroundLoop(sched, "scheduler-"+qName)
+	}
 
-	// 3. Start Janitor loop (PEL Recovery)
-	w.wg.Add(1)
-	go w.runBackgroundLoop(w.janitor, "janitor")
+	for qName, jan := range w.janitors {
+		w.wg.Add(1)
+		go w.runBackgroundLoop(jan, "janitor-"+qName)
+	}
 
-	// 4. Start Cron Self-healing loop
-	w.wg.Add(1)
-	go w.runBackgroundLoop(w.cronManager, "cron_manager")
+	for qName, cronMgr := range w.cronManagers {
+		w.wg.Add(1)
+		go w.runBackgroundLoop(cronMgr, "cron_manager-"+qName)
+	}
 
 	return nil
 }
@@ -189,7 +298,6 @@ func (w *workerPool) Stop(ctxs ...context.Context) {
 		parentCtx = ctxs[0]
 		if deadline, ok := parentCtx.Deadline(); ok {
 			shutdownTimeout = time.Until(deadline)
-			// Add a small safety buffer (e.g. 500ms) so we force-cancel before Fx times out the hook
 			if shutdownTimeout > 500*time.Millisecond {
 				shutdownTimeout -= 500 * time.Millisecond
 			} else {
@@ -213,7 +321,7 @@ func (w *workerPool) Stop(ctxs ...context.Context) {
 	case <-time.After(shutdownTimeout):
 		w.logger.Warn("Shutdown timeout reached, force cancelling running tasks")
 		if w.cancel != nil {
-			w.cancel() // cancels w.ctx, which cancels active task contexts
+			w.cancel()
 		}
 		<-done
 	case <-parentCtx.Done():
@@ -258,6 +366,69 @@ func (w *workerPool) runHandlerWithRecovery(ctx context.Context, task *Task, han
 	return handler(ctx, task)
 }
 
+func shuffleQueues(queues []QueuePriority) []string {
+	temp := make([]QueuePriority, len(queues))
+	copy(temp, queues)
+
+	var result []string
+	for len(temp) > 0 {
+		totalWeight := 0
+		for _, q := range temp {
+			wt := q.Weight
+			if wt <= 0 {
+				wt = 1
+			}
+			totalWeight += wt
+		}
+
+		if totalWeight == 0 {
+			for _, q := range temp {
+				result = append(result, q.Name)
+			}
+			break
+		}
+
+		r := rand.Intn(totalWeight)
+		currentSum := 0
+		idx := -1
+		for i, q := range temp {
+			wt := q.Weight
+			if wt <= 0 {
+				wt = 1
+			}
+			currentSum += wt
+			if r < currentSum {
+				idx = i
+				break
+			}
+		}
+
+		if idx != -1 {
+			result = append(result, temp[idx].Name)
+			temp = append(temp[:idx], temp[idx+1:]...)
+		} else {
+			result = append(result, temp[0].Name)
+			temp = temp[1:]
+		}
+	}
+	return result
+}
+
+func sortQueues(queues []QueuePriority) []string {
+	temp := make([]QueuePriority, len(queues))
+	copy(temp, queues)
+
+	sort.Slice(temp, func(i, j int) bool {
+		return temp[i].Weight > temp[j].Weight
+	})
+
+	result := make([]string, len(temp))
+	for i, q := range temp {
+		result[i] = q.Name
+	}
+	return result
+}
+
 func (w *workerPool) worker(streamKey string) {
 	defer w.wg.Done()
 
@@ -273,27 +444,80 @@ func (w *workerPool) worker(streamKey string) {
 			case w.sem <- struct{}{}:
 			}
 
-			// Read messages from the stream using the long-running context w.consumerCtx
-			streams, err := w.rdb.XReadGroup(w.consumerCtx, &redis.XReadGroupArgs{
-				Group:    w.group,
-				Consumer: w.consumer,
-				Streams:  []string{streamKey, ">"},
-				Count:    1,
-				Block:    time.Second,
-			}).Result()
+			var streams []redis.XStream
+			var err error
+
+			if len(w.queues) > 0 {
+				var orderedQueues []string
+				if w.priorityStrategy == "strict" {
+					orderedQueues = sortQueues(w.queues)
+				} else {
+					orderedQueues = shuffleQueues(w.queues)
+				}
+
+				// 1. Try non-blocking check on each queue in priority order first to prevent priority inversion under load
+				found := false
+				for _, qName := range orderedQueues {
+					streamKey := StreamKey(qName)
+					res, readErr := w.rdb.XReadGroup(w.consumerCtx, &redis.XReadGroupArgs{
+						Group:    w.group,
+						Consumer: w.consumer,
+						Streams:  []string{streamKey, ">"},
+						Count:    1,
+						Block:    -1, // True non-blocking check (omits BLOCK parameter)
+					}).Result()
+
+					if readErr != nil && readErr != redis.Nil {
+						w.logger.Error("Non-blocking priority check error", zap.String("queue", qName), zap.Error(readErr))
+					} else {
+						w.logger.Debug("Non-blocking priority check", zap.String("queue", qName), zap.Int("len_res", len(res)))
+					}
+
+					if readErr == nil && len(res) > 0 && len(res[0].Messages) > 0 {
+						streams = res
+						found = true
+						break
+					}
+				}
+
+				// 2. If no messages found in any queue, do a blocking read on all queues
+				if !found {
+					streamsArg := make([]string, 2*len(orderedQueues))
+					for i, qName := range orderedQueues {
+						streamsArg[i] = StreamKey(qName)
+					}
+					for i := 0; i < len(orderedQueues); i++ {
+						streamsArg[len(orderedQueues)+i] = ">"
+					}
+
+					streams, err = w.rdb.XReadGroup(w.consumerCtx, &redis.XReadGroupArgs{
+						Group:    w.group,
+						Consumer: w.consumer,
+						Streams:  streamsArg,
+						Count:    1,
+						Block:    time.Second,
+					}).Result()
+				}
+			} else {
+				streams, err = w.rdb.XReadGroup(w.consumerCtx, &redis.XReadGroupArgs{
+					Group:    w.group,
+					Consumer: w.consumer,
+					Streams:  []string{streamKey, ">"},
+					Count:    1,
+					Block:    time.Second,
+				}).Result()
+			}
 
 			if err != nil {
 				w.releaseToken() // Release token since we didn't get any message
-				if err == redis.Nil {
-					// Timeout block, no new messages
-					continue
-				}
-				// Silently ignore standard network I/O timeouts
-				if netErr, ok := err.(interface{ Timeout() bool }); ok && netErr.Timeout() {
-					continue
-				}
 				if w.consumerCtx.Err() != nil {
 					return
+				}
+				if err == redis.Nil {
+					continue
+				}
+				if netErr, ok := err.(interface{ Timeout() bool }); ok && netErr.Timeout() {
+					continue
 				}
 				w.logger.Error("Worker error reading stream", zap.Error(err))
 				time.Sleep(time.Second)
@@ -301,27 +525,35 @@ func (w *workerPool) worker(streamKey string) {
 			}
 
 			msgPulled := false
+			firstMsg := true
 			for _, stream := range streams {
 				for _, msg := range stream.Messages {
 					msgPulled = true
+					if !firstMsg {
+						select {
+						case <-w.consumerCtx.Done():
+							return
+						case w.sem <- struct{}{}:
+						}
+					}
+					firstMsg = false
+
 					if w.syncExecution {
-						w.processMessage(w.ctx, streamKey, msg)
+						w.processMessage(w.ctx, stream.Stream, msg)
 						w.releaseToken()
 					} else {
-						// Spawn a goroutine for async processing so the consumer thread
-						// doesn't block and can immediately pull the next task.
 						w.wg.Add(1)
-						go func(m redis.XMessage) {
+						go func(s string, m redis.XMessage) {
 							defer w.wg.Done()
 							defer w.releaseToken()
-							w.processMessage(w.ctx, streamKey, m)
-						}(msg)
+							w.processMessage(w.ctx, s, m)
+						}(stream.Stream, msg)
 					}
 				}
 			}
 
 			if !msgPulled {
-				w.releaseToken() // Release token if no messages were actually pulled
+				w.releaseToken()
 			}
 		}
 	}

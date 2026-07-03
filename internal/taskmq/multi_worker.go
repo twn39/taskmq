@@ -25,7 +25,12 @@ func (m *multiWorker) Register(taskName string, handler HandlerFunc) {
 }
 
 func (m *multiWorker) Start(ctx context.Context) error {
+	seen := make(map[Worker]bool)
 	for _, w := range m.workers {
+		if seen[w] {
+			continue
+		}
+		seen[w] = true
 		if err := w.Start(ctx); err != nil {
 			return err
 		}
@@ -42,7 +47,12 @@ func (m *multiWorker) Stop(ctxs ...context.Context) {
 	}
 
 	var wg sync.WaitGroup
+	seen := make(map[Worker]bool)
 	for _, w := range m.workers {
+		if seen[w] {
+			continue
+		}
+		seen[w] = true
 		wg.Add(1)
 		go func(worker Worker) {
 			defer wg.Done()

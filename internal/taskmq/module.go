@@ -63,7 +63,62 @@ func ProvideWorkers(p ProvideWorkersParams) (Worker, error) {
 		}
 	}
 
+	priorityQueuesEnabled := p.Cfg.TaskMQ.PriorityQueuesEnabled
+	priorityStrategy := p.Cfg.TaskMQ.PriorityStrategy
+
+	var priorityQueues []QueuePriority
+	var priorityConcurrency int
+	var normalQueues []config.QueueConfig
+
 	for _, qCfg := range queues {
+		if priorityQueuesEnabled && qCfg.Priority > 0 {
+			priorityQueues = append(priorityQueues, QueuePriority{
+				Name:   qCfg.Name,
+				Weight: qCfg.Priority,
+			})
+			priorityConcurrency += qCfg.Concurrency
+		} else {
+			normalQueues = append(normalQueues, qCfg)
+		}
+	}
+
+	// 1. Instantiate the prioritized worker pool if enabled
+	if len(priorityQueues) > 0 {
+		if priorityConcurrency <= 0 {
+			priorityConcurrency = 5
+		}
+
+		baseOpts := WorkerOptions{
+			Group:                    "taskmq-priority-group",
+			Consumer:                 "taskmq-priority-consumer-1",
+			Concurrency:              priorityConcurrency,
+			CronHealingInterval:      p.Cfg.TaskMQ.CronHealingInterval,
+			CronHealingLockTTL:       p.Cfg.TaskMQ.CronHealingLockTTL,
+			CronHealingScanBatchSize: p.Cfg.TaskMQ.CronHealingScanBatchSize,
+			CronHealingScanMaxCount:  p.Cfg.TaskMQ.CronHealingScanMaxCount,
+			SchedulerPollInterval:    p.Cfg.TaskMQ.SchedulerPollInterval,
+			JanitorInterval:          p.Cfg.TaskMQ.JanitorInterval,
+			JanitorMinIdleTime:       p.Cfg.TaskMQ.JanitorMinIdleTime,
+			PriorityQueues:           priorityQueues,
+			PriorityStrategy:         priorityStrategy,
+		}
+		if p.RootCtx != nil {
+			baseOpts.Context = p.RootCtx
+		}
+
+		// Use the first queue name as the base for default options
+		firstQ := priorityQueues[0].Name
+		opts := NewDefaultWorkerOptions(p.Rdb, p.Logger, firstQ, p.Codec, baseOpts)
+		pool := NewWorkerPool(p.Rdb, p.Logger, "", opts)
+
+		// Register the pool under all priority queue names
+		for _, pq := range priorityQueues {
+			workers[pq.Name] = pool
+		}
+	}
+
+	// 2. Instantiate normal queues independently
+	for _, qCfg := range normalQueues {
 		concurrency := 5
 		if qCfg.Concurrency > 0 {
 			concurrency = qCfg.Concurrency

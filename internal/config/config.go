@@ -37,6 +37,7 @@ type QueueConfig struct {
 	Concurrency int    `mapstructure:"concurrency"`
 	Group       string `mapstructure:"group"`
 	Consumer    string `mapstructure:"consumer"`
+	Priority    int    `mapstructure:"priority"`
 }
 
 type TaskMQConfig struct {
@@ -49,6 +50,8 @@ type TaskMQConfig struct {
 	SchedulerPollInterval    time.Duration `mapstructure:"scheduler_poll_interval"`
 	JanitorInterval          time.Duration `mapstructure:"janitor_interval"`
 	JanitorMinIdleTime       time.Duration `mapstructure:"janitor_min_idle_time"`
+	PriorityQueuesEnabled    bool          `mapstructure:"priority_queues_enabled"`
+	PriorityStrategy         string        `mapstructure:"priority_strategy"`
 	Queues                   []QueueConfig `mapstructure:"queues"`
 }
 
@@ -74,6 +77,8 @@ func NewConfig() (*Config, error) {
 	v.SetDefault("taskmq.scheduler_poll_interval", 500*time.Millisecond)
 	v.SetDefault("taskmq.janitor_interval", 3*time.Second)
 	v.SetDefault("taskmq.janitor_min_idle_time", 5*time.Second)
+	v.SetDefault("taskmq.priority_queues_enabled", false)
+	v.SetDefault("taskmq.priority_strategy", "weighted")
 	v.SetDefault("taskmq.queues", []map[string]interface{}{
 		{
 			"name":        "default",
