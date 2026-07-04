@@ -61,6 +61,10 @@ func (m *mockBroker) ReleaseUniqueLock(ctx context.Context, task *Task) error {
 	return nil
 }
 
+func (m *mockBroker) RenewUniqueLock(ctx context.Context, task *Task, ttl time.Duration) error {
+	return nil
+}
+
 type mockRetryPolicy struct {
 	should bool
 }

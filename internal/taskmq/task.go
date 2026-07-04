@@ -5,32 +5,46 @@ import (
 	"time"
 )
 
+// UniqueScope defines when the unique lock should be released
+type UniqueScope int
+
+const (
+	// UniqueUntilSucceeded keeps the lock until the task completes successfully or moves to DLQ. (Default)
+	UniqueUntilSucceeded UniqueScope = iota
+	// UniqueUntilStart releases the lock as soon as the task starts executing.
+	UniqueUntilStart
+	// UniqueUntilSuccess keeps the lock during active execution but releases it on failure/retry.
+	UniqueUntilSuccess
+)
+
 // Task represents a unit of work to be executed asynchronously
 type Task struct {
-	ID          string    `json:"id"`
-	Queue       string    `json:"queue"`
-	Name        string    `json:"name"`
-	Payload     []byte    `json:"payload"`
-	Retry       int       `json:"retry"`
-	MaxRetry    int       `json:"max_retry"`
-	TimeoutMs   int       `json:"timeout_ms"`
-	UniqueKey   string    `json:"unique_key"`
-	UniqueTTLMs int       `json:"unique_ttl_ms"`
-	LastError   string    `json:"last_error"`
-	CronSpec    string    `json:"cron_spec,omitempty"`
-	GroupKey    string    `json:"group_key,omitempty"`
-	CreatedAt   time.Time `json:"created_at"`
+	ID          string      `json:"id"`
+	Queue       string      `json:"queue"`
+	Name        string      `json:"name"`
+	Payload     []byte      `json:"payload"`
+	Retry       int         `json:"retry"`
+	MaxRetry    int         `json:"max_retry"`
+	TimeoutMs   int         `json:"timeout_ms"`
+	UniqueKey   string      `json:"unique_key"`
+	UniqueTTLMs int         `json:"unique_ttl_ms"`
+	UniqueScope UniqueScope `json:"unique_scope"`
+	LastError   string      `json:"last_error"`
+	CronSpec    string      `json:"cron_spec,omitempty"`
+	GroupKey    string      `json:"group_key,omitempty"`
+	CreatedAt   time.Time   `json:"created_at"`
 }
 
 // TaskOptions defines configurations applied when creating a task
 type TaskOptions struct {
-	ID        string
-	Queue     string
-	MaxRetry  int
-	Timeout   time.Duration
-	UniqueKey string
-	UniqueTTL time.Duration
-	GroupKey  string
+	ID          string
+	Queue       string
+	MaxRetry    int
+	Timeout     time.Duration
+	UniqueKey   string
+	UniqueTTL   time.Duration
+	UniqueScope UniqueScope
+	GroupKey    string
 }
 
 // NewTask creates a new Task instance with default settings
@@ -62,6 +76,7 @@ func NewTask(name string, payload []byte, opts ...TaskOptions) *Task {
 		if opt.UniqueKey != "" {
 			task.UniqueKey = opt.UniqueKey
 			task.UniqueTTLMs = int(opt.UniqueTTL.Milliseconds())
+			task.UniqueScope = opt.UniqueScope
 		}
 		if opt.GroupKey != "" {
 			task.GroupKey = opt.GroupKey

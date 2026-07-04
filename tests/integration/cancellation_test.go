@@ -140,6 +140,9 @@ func TestTaskMQ_TaskCancellationBeforeRun(t *testing.T) {
 	rdb.Del(ctx, streamKey)
 	defer rdb.Del(ctx, streamKey)
 
+	// Pre-create stream and consumer group with "0" so that the worker can consume backlog messages on a fresh Redis database
+	_ = rdb.XGroupCreateMkStream(ctx, streamKey, "cancel-before-run-group", "0").Err()
+
 	// 1. Enqueue task before starting worker
 	taskID := "test-before-cancel-id"
 	task := taskmq.NewTask("task:cancel_before", []byte("data"), taskmq.TaskOptions{

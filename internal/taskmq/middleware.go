@@ -1,7 +1,9 @@
 package taskmq
 
 import (
+	"context"
 	"fmt"
+	"sync"
 	"time"
 
 	"go.uber.org/zap"
@@ -111,6 +113,107 @@ func RetryAndDLQMiddleware(broker TaskBroker, retryPolicy RetryPolicy, dlqPolicy
 		if rErr := broker.ScheduleRetry(c.Context, c.Task, streamKey, c.MessageID, c.Group, runAt); rErr != nil {
 			logger.Error("Failed to schedule task retry atomically", zap.Error(rErr))
 		}
+		return err
+	}
+}
+
+// UniqueLockWatchdogMiddleware handles background renewal of unique locks during execution
+// and implements the specific UniqueScope lifecycle behaviors.
+func UniqueLockWatchdogMiddleware(broker TaskBroker, logger *zap.Logger) CoreHandlerFunc {
+	return func(c *ConsumeContext) error {
+		task := c.Task
+		if task.UniqueKey == "" {
+			return c.Next()
+		}
+
+		// UniqueUntilStart: Release the lock immediately as execution starts
+		if task.UniqueScope == UniqueUntilStart {
+			if err := broker.ReleaseUniqueLock(c.Context, task); err != nil {
+				logger.Error("Failed to release unique lock for UniqueUntilStart",
+					zap.String("task_id", task.ID),
+					zap.Error(err),
+				)
+			}
+			return c.Next()
+		}
+
+		// Initialize Watchdog ticker for automatic lock renewal
+		ttl := time.Duration(task.UniqueTTLMs) * time.Millisecond
+		if ttl <= 0 {
+			ttl = 1 * time.Hour // Default to 1 hour
+		}
+
+		renewInterval := ttl / 3
+		if renewInterval < 100*time.Millisecond {
+			renewInterval = 100 * time.Millisecond // Safety floor
+		}
+
+		watchdogCtx, cancelWatchdog := context.WithCancel(c.Context)
+		defer cancelWatchdog()
+
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			ticker := time.NewTicker(renewInterval)
+			defer ticker.Stop()
+
+			for {
+				select {
+				case <-watchdogCtx.Done():
+					return
+				case <-ticker.C:
+					var success bool
+					for attempt := 1; attempt <= 3; attempt++ {
+						err := broker.RenewUniqueLock(watchdogCtx, task, ttl)
+						if err == nil {
+							success = true
+							logger.Debug("Watchdog successfully renewed unique lock",
+								zap.String("task_id", task.ID),
+								zap.String("key", task.UniqueKey),
+							)
+							break
+						}
+
+						// Retries with short pause
+						logger.Warn("Watchdog failed to renew lock, retrying...",
+							zap.String("task_id", task.ID),
+							zap.Int("attempt", attempt),
+							zap.Error(err),
+						)
+						select {
+						case <-watchdogCtx.Done():
+							return
+						case <-time.After(50 * time.Millisecond):
+						}
+					}
+
+					if !success {
+						logger.Error("Watchdog failed to renew unique lock after all retries",
+							zap.String("task_id", task.ID),
+						)
+					}
+				}
+			}
+		}()
+
+		// Execute next handler
+		err := c.Next()
+
+		// Stop watchdog and wait for its completion
+		cancelWatchdog()
+		wg.Wait()
+
+		// UniqueUntilSuccess: If error occurs, release unique lock during retry delay
+		if err != nil && task.UniqueScope == UniqueUntilSuccess {
+			if rErr := broker.ReleaseUniqueLock(context.Background(), task); rErr != nil {
+				logger.Error("Failed to release unique lock on failure for UniqueUntilSuccess",
+					zap.String("task_id", task.ID),
+					zap.Error(rErr),
+				)
+			}
+		}
+
 		return err
 	}
 }

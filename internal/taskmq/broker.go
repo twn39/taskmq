@@ -13,6 +13,7 @@ type TaskBroker interface {
 	ScheduleRetry(ctx context.Context, task *Task, streamKey, msgID, group string, runAt time.Time) error
 	DeferRateLimitedTask(ctx context.Context, msgID string, task *Task, group string, runAt time.Time) error
 	ReleaseUniqueLock(ctx context.Context, task *Task) error
+	RenewUniqueLock(ctx context.Context, task *Task, ttl time.Duration) error
 	CompleteTask(ctx context.Context, task *Task, streamKey, msgID, group string) error
 }
 
@@ -100,11 +101,20 @@ const luaCompleteTask = `
 	return 1
 `
 
+const luaRenewUniqueLock = `
+	if redis.call("GET", KEYS[1]) == ARGV[1] then
+		return redis.call("PEXPIRE", KEYS[1], ARGV[2])
+	else
+		return 0
+	end
+`
+
 var (
 	handleFailureCmd        = redis.NewScript(luaHandleFailure)
 	deferRateLimitedTaskCmd = redis.NewScript(luaDeferRateLimitedTask)
 	unlockCmd               = redis.NewScript(luaUnlock)
 	completeTaskCmd         = redis.NewScript(luaCompleteTask)
+	renewUniqueLockCmd      = redis.NewScript(luaRenewUniqueLock)
 )
 
 func (b *redisBroker) MoveToDLQ(ctx context.Context, task *Task, streamKey, msgID, group string, dlqQueueName string) error {
@@ -153,6 +163,15 @@ func (b *redisBroker) ReleaseUniqueLock(ctx context.Context, task *Task) error {
 	}
 	uniqueKey := UniqueKey(task.Queue, task.UniqueKey)
 	return unlockCmd.Run(ctx, b.rdb, []string{uniqueKey}, task.ID).Err()
+}
+
+func (b *redisBroker) RenewUniqueLock(ctx context.Context, task *Task, ttl time.Duration) error {
+	if task.UniqueKey == "" {
+		return nil
+	}
+	uniqueKey := UniqueKey(task.Queue, task.UniqueKey)
+	_, err := renewUniqueLockCmd.Run(ctx, b.rdb, []string{uniqueKey}, task.ID, int(ttl.Milliseconds())).Result()
+	return err
 }
 
 func (b *redisBroker) CompleteTask(ctx context.Context, task *Task, streamKey, msgID, group string) error {

@@ -86,6 +86,7 @@ func (b *baseWorker) initBase(rdb *redis.Client, logger *zap.Logger, opt *worker
 func (b *baseWorker) buildMiddlewareChain() {
 	b.middlewareChain = []CoreHandlerFunc{
 		RetryAndDLQMiddleware(b.broker, b.retryPolicy, b.deadLetterPolicy, b.logger),
+		UniqueLockWatchdogMiddleware(b.broker, b.logger),
 		RateLimitMiddleware(b.limiter, b.broker, func(qName string) (int64, time.Duration, string) {
 			if b.getQueueRateLimit != nil {
 				return b.getQueueRateLimit(qName)
