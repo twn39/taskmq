@@ -2,11 +2,7 @@ package taskmq
 
 import (
 	"fmt"
-
-	"github.com/robfig/cron/v3"
 )
-
-var CronParser = cron.NewParser(cron.SecondOptional | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
 
 func StreamKey(queue string) string {
 	return fmt.Sprintf("taskmq:{%s}:queue", queue)

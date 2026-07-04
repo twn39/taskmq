@@ -6,8 +6,11 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
+	"github.com/robfig/cron/v3"
 	"go.uber.org/zap"
 )
+
+var CronParser = cron.NewParser(cron.SecondOptional | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
 
 type cronManager struct {
 	rdb             *redis.Client
