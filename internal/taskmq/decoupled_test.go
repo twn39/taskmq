@@ -18,7 +18,18 @@ type mockBroker struct {
 	schedRetry   int
 	deferCnt     int
 	releasedLock int
+	completedCnt int
 	lastDLQName  string
+}
+
+func (m *mockBroker) CompleteTask(ctx context.Context, task *Task, streamKey, msgID, group string) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.completedCnt++
+	if task.UniqueKey != "" {
+		m.releasedLock++
+	}
+	return nil
 }
 
 func (m *mockBroker) MoveToDLQ(ctx context.Context, task *Task, streamKey, msgID, group string, dlqQueueName string) error {

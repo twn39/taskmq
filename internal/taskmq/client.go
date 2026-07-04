@@ -13,6 +13,57 @@ import (
 // ErrDuplicateTask is returned when a unique task cannot be enqueued because a duplicate already exists.
 var ErrDuplicateTask = errors.New("taskmq: duplicate task in queue")
 
+var enqueueUniqueCmd = redis.NewScript(`
+	local lockKey = KEYS[1]
+	local streamKey = KEYS[2]
+	local lockVal = ARGV[1]
+	local ttlMs = tonumber(ARGV[2])
+	local serialized = ARGV[3]
+
+	local currentLockVal = redis.call("GET", lockKey)
+	if currentLockVal and currentLockVal ~= lockVal then
+		return -1
+	end
+	redis.call("SET", lockKey, lockVal, "PX", ttlMs)
+	redis.call("XADD", streamKey, "*", "task", serialized)
+	return 1
+`)
+
+var enqueueUniqueDelayedCmd = redis.NewScript(`
+	local lockKey = KEYS[1]
+	local delayedKey = KEYS[2]
+	local lockVal = ARGV[1]
+	local ttlMs = tonumber(ARGV[2])
+	local serialized = ARGV[3]
+	local score = tonumber(ARGV[4])
+
+	local currentLockVal = redis.call("GET", lockKey)
+	if currentLockVal and currentLockVal ~= lockVal then
+		return -1
+	end
+	redis.call("SET", lockKey, lockVal, "PX", ttlMs)
+	redis.call("ZADD", delayedKey, score, serialized)
+	return 1
+`)
+
+var registerCronCmd = redis.NewScript(`
+	local configsKey = KEYS[1]
+	local delayedKey = KEYS[2]
+	local jobName = ARGV[1]
+	local spec = ARGV[2]
+	local serializedTask = ARGV[3]
+	local firstRunScore = tonumber(ARGV[4])
+
+	local existing = redis.call('HGET', configsKey, jobName)
+	if existing == serializedTask then
+		return 0
+	end
+
+	redis.call('HSET', configsKey, jobName, serializedTask)
+	redis.call('ZADD', delayedKey, firstRunScore, serializedTask)
+	return 1
+`)
+
 type Client interface {
 	Enqueue(ctx context.Context, task *Task) error
 	EnqueueIn(ctx context.Context, task *Task, delay time.Duration) error
@@ -21,6 +72,7 @@ type Client interface {
 	ListDeadLetters(ctx context.Context, queue string, limit int) ([]*Task, error)
 	DeleteDeadLetter(ctx context.Context, queue string, taskID string) error
 	RetryDeadLetter(ctx context.Context, queue string, taskID string) error
+	CancelTask(ctx context.Context, queue, taskID string) error
 }
 
 type client struct {
@@ -90,21 +142,33 @@ func (c *client) Enqueue(ctx context.Context, task *Task) error {
 		task.ID = generateUUID()
 	}
 
-	// Try acquiring unique lock
-	ok, err := c.acquireUniqueLock(ctx, task)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return ErrDuplicateTask
-	}
-
 	serialized, err := c.codec.Marshal(task)
 	if err != nil {
 		return err
 	}
 
 	streamKey := StreamKey(task.Queue)
+
+	if task.UniqueKey != "" {
+		ttl := time.Duration(task.UniqueTTLMs) * time.Millisecond
+		if ttl <= 0 {
+			if c.defaultUniqueTTL > 0 {
+				ttl = c.defaultUniqueTTL
+			} else {
+				ttl = 1 * time.Hour // Default to 1 hour
+			}
+		}
+		uniqueKey := UniqueKey(task.Queue, task.UniqueKey)
+		res, err := enqueueUniqueCmd.Run(ctx, c.rdb, []string{uniqueKey, streamKey}, task.ID, int(ttl.Milliseconds()), serialized).Result()
+		if err != nil {
+			return err
+		}
+		if val, ok := res.(int64); ok && val == -1 {
+			return ErrDuplicateTask
+		}
+		return nil
+	}
+
 	return c.rdb.XAdd(ctx, &redis.XAddArgs{
 		Stream: streamKey,
 		Values: map[string]interface{}{
@@ -124,21 +188,33 @@ func (c *client) EnqueueAt(ctx context.Context, task *Task, at time.Time) error 
 		task.ID = generateUUID()
 	}
 
-	// Try acquiring unique lock
-	ok, err := c.acquireUniqueLock(ctx, task)
-	if err != nil {
-		return err
-	}
-	if !ok {
-		return ErrDuplicateTask
-	}
-
 	serialized, err := c.codec.Marshal(task)
 	if err != nil {
 		return err
 	}
 
 	delayedKey := DelayedKey(task.Queue)
+
+	if task.UniqueKey != "" {
+		ttl := time.Duration(task.UniqueTTLMs) * time.Millisecond
+		if ttl <= 0 {
+			if c.defaultUniqueTTL > 0 {
+				ttl = c.defaultUniqueTTL
+			} else {
+				ttl = 1 * time.Hour // Default to 1 hour
+			}
+		}
+		uniqueKey := UniqueKey(task.Queue, task.UniqueKey)
+		res, err := enqueueUniqueDelayedCmd.Run(ctx, c.rdb, []string{uniqueKey, delayedKey}, task.ID, int(ttl.Milliseconds()), serialized, at.UnixMilli()).Result()
+		if err != nil {
+			return err
+		}
+		if val, ok := res.(int64); ok && val == -1 {
+			return ErrDuplicateTask
+		}
+		return nil
+	}
+
 	return c.rdb.ZAdd(ctx, delayedKey, redis.Z{
 		Score:  float64(at.UnixMilli()),
 		Member: serialized,
@@ -221,24 +297,6 @@ func (c *client) RetryDeadLetter(ctx context.Context, queue string, taskID strin
 	return c.rdb.ZRem(ctx, dlqKey, targetMember).Err()
 }
 
-const luaRegisterCron = `
-	local configsKey = KEYS[1]
-	local delayedKey = KEYS[2]
-	local jobName = ARGV[1]
-	local spec = ARGV[2]
-	local serializedTask = ARGV[3]
-	local firstRunScore = tonumber(ARGV[4])
-
-	local existing = redis.call('HGET', configsKey, jobName)
-	if existing == serializedTask then
-		return 0
-	end
-
-	redis.call('HSET', configsKey, jobName, serializedTask)
-	redis.call('ZADD', delayedKey, firstRunScore, serializedTask)
-	return 1
-`
-
 func (c *client) RegisterCron(ctx context.Context, jobName string, spec string, task *Task) error {
 	sched, err := CronParser.Parse(spec)
 	if err != nil {
@@ -263,6 +321,16 @@ func (c *client) RegisterCron(ctx context.Context, jobName string, spec string, 
 	delayedKey := DelayedKey(task.Queue)
 	firstRun := sched.Next(time.Now())
 
-	_, err = c.rdb.Eval(ctx, luaRegisterCron, []string{configsKey, delayedKey}, jobName, spec, serialized, firstRun.UnixMilli()).Result()
+	_, err = registerCronCmd.Run(ctx, c.rdb, []string{configsKey, delayedKey}, jobName, spec, serialized, firstRun.UnixMilli()).Result()
 	return err
+}
+
+func (c *client) CancelTask(ctx context.Context, queue, taskID string) error {
+	cancelledKey := fmt.Sprintf("taskmq:{%s}:cancelled:%s", queue, taskID)
+	if err := c.rdb.Set(ctx, cancelledKey, "1", 24*time.Hour).Err(); err != nil {
+		return fmt.Errorf("taskmq: failed to set cancel marker: %w", err)
+	}
+
+	cancelChannel := fmt.Sprintf("taskmq:{%s}:cancel", queue)
+	return c.rdb.Publish(ctx, cancelChannel, taskID).Err()
 }

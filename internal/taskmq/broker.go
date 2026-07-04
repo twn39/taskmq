@@ -13,6 +13,7 @@ type TaskBroker interface {
 	ScheduleRetry(ctx context.Context, task *Task, streamKey, msgID, group string, runAt time.Time) error
 	DeferRateLimitedTask(ctx context.Context, msgID string, task *Task, group string, runAt time.Time) error
 	ReleaseUniqueLock(ctx context.Context, task *Task) error
+	CompleteTask(ctx context.Context, task *Task, streamKey, msgID, group string) error
 }
 
 type redisBroker struct {
@@ -38,8 +39,9 @@ const luaHandleFailure = `
 	local serializedTask = ARGV[5]
 	local expectedLockVal = ARGV[6]
 
-	-- Ack the processed message from stream
+	-- Ack and delete the processed message from stream
 	redis.call("XACK", streamKey, groupName, msgId)
+	redis.call("XDEL", streamKey, msgId)
 
 	-- Add to DLQ or Retry Delayed ZSet
 	redis.call("ZADD", targetKey, score, serializedTask)
@@ -80,6 +82,31 @@ const luaUnlock = `
 	end
 `
 
+const luaCompleteTask = `
+	local streamKey = KEYS[1]
+	local lockKey = KEYS[2]
+	local msgId = ARGV[1]
+	local groupName = ARGV[2]
+	local expectedLockVal = ARGV[3]
+
+	redis.call("XACK", streamKey, groupName, msgId)
+	redis.call("XDEL", streamKey, msgId)
+
+	if lockKey ~= "" and expectedLockVal ~= "" then
+		if redis.call("GET", lockKey) == expectedLockVal then
+			redis.call("DEL", lockKey)
+		end
+	end
+	return 1
+`
+
+var (
+	handleFailureCmd        = redis.NewScript(luaHandleFailure)
+	deferRateLimitedTaskCmd = redis.NewScript(luaDeferRateLimitedTask)
+	unlockCmd               = redis.NewScript(luaUnlock)
+	completeTaskCmd         = redis.NewScript(luaCompleteTask)
+)
+
 func (b *redisBroker) MoveToDLQ(ctx context.Context, task *Task, streamKey, msgID, group string, dlqQueueName string) error {
 	serialized, err := b.codec.Marshal(task)
 	if err != nil {
@@ -95,7 +122,7 @@ func (b *redisBroker) MoveToDLQ(ctx context.Context, task *Task, streamKey, msgI
 		uniqueLockVal = task.ID
 	}
 
-	_, err = b.rdb.Eval(ctx, luaHandleFailure, []string{dlqKey, streamKey, uniqueLockKey}, "dlq", msgID, group, nowMs, serialized, uniqueLockVal).Result()
+	_, err = handleFailureCmd.Run(ctx, b.rdb, []string{dlqKey, streamKey, uniqueLockKey}, "dlq", msgID, group, nowMs, serialized, uniqueLockVal).Result()
 	return err
 }
 
@@ -105,7 +132,7 @@ func (b *redisBroker) ScheduleRetry(ctx context.Context, task *Task, streamKey, 
 		return err
 	}
 	delayedKey := DelayedKey(task.Queue)
-	_, err = b.rdb.Eval(ctx, luaHandleFailure, []string{delayedKey, streamKey, ""}, "retry", msgID, group, runAt.UnixMilli(), serialized, "").Result()
+	_, err = handleFailureCmd.Run(ctx, b.rdb, []string{delayedKey, streamKey, ""}, "retry", msgID, group, runAt.UnixMilli(), serialized, "").Result()
 	return err
 }
 
@@ -116,7 +143,7 @@ func (b *redisBroker) DeferRateLimitedTask(ctx context.Context, msgID string, ta
 	}
 	delayedKey := DelayedKey(task.Queue)
 	streamKey := StreamKey(task.Queue)
-	_, err = b.rdb.Eval(ctx, luaDeferRateLimitedTask, []string{delayedKey, streamKey}, group, msgID, runAt.UnixMilli(), serialized).Result()
+	_, err = deferRateLimitedTaskCmd.Run(ctx, b.rdb, []string{delayedKey, streamKey}, group, msgID, runAt.UnixMilli(), serialized).Result()
 	return err
 }
 
@@ -125,5 +152,16 @@ func (b *redisBroker) ReleaseUniqueLock(ctx context.Context, task *Task) error {
 		return nil
 	}
 	uniqueKey := UniqueKey(task.Queue, task.UniqueKey)
-	return b.rdb.Eval(ctx, luaUnlock, []string{uniqueKey}, task.ID).Err()
+	return unlockCmd.Run(ctx, b.rdb, []string{uniqueKey}, task.ID).Err()
+}
+
+func (b *redisBroker) CompleteTask(ctx context.Context, task *Task, streamKey, msgID, group string) error {
+	var uniqueLockKey string
+	var uniqueLockVal string
+	if task.UniqueKey != "" {
+		uniqueLockKey = UniqueKey(task.Queue, task.UniqueKey)
+		uniqueLockVal = task.ID
+	}
+	_, err := completeTaskCmd.Run(ctx, b.rdb, []string{streamKey, uniqueLockKey}, msgID, group, uniqueLockVal).Result()
+	return err
 }

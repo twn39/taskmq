@@ -136,6 +136,9 @@ func (w *workerPool) Start(ctx context.Context) error {
 		}()
 	}
 
+	// Start Cancellation Subscriber loop
+	w.startCancelSubscriber(w.ctx, &w.wg, []string{w.queue})
+
 	// Start concurrent workers to consume queue
 	for i := 0; i < w.concurrency; i++ {
 		w.wg.Add(1)

@@ -438,7 +438,7 @@ func TestTaskMQ_RateLimitDeferralAtomicity(t *testing.T) {
 
 		t.Logf("CHECK: streamLen=%d, pelSize=%d, zsetSize=%d", streamLen, pelSize, zsetSize)
 
-		return streamLen == 1 && pelSize == 0 && zsetSize == 1
+		return streamLen == 0 && pelSize == 0 && zsetSize == 1
 	}, 3*time.Second, 100*time.Millisecond, "Task was not deferred atomically into delayed ZSET or cleaned from Stream/PEL")
 }
 

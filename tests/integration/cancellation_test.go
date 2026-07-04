@@ -1,0 +1,173 @@
+package integration
+
+import (
+	"context"
+	"sync"
+	"testing"
+	"time"
+
+	goredis "github.com/redis/go-redis/v9"
+	"github.com/stretchr/testify/assert"
+	"github.com/twn39/taskmq/internal/logger"
+	internalredis "github.com/twn39/taskmq/internal/redis"
+	"github.com/twn39/taskmq/internal/taskmq"
+	"go.uber.org/fx"
+	"go.uber.org/fx/fxtest"
+	"go.uber.org/zap"
+)
+
+func TestTaskMQ_TaskCancellationFlow(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	queueName := "cancel_test_queue"
+	streamKey := taskmq.StreamKey(queueName)
+
+	startedChan := make(chan string, 1)
+	resultChan := make(chan error, 1)
+
+	var rdb *goredis.Client
+	var client taskmq.Client
+
+	app := fxtest.New(t,
+		fx.Provide(
+			NewTestConfig,
+			logger.NewLogger,
+			internalredis.NewRedisClient,
+			taskmq.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
+				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
+					Group:       "cancel-group",
+					Consumer:    "cancel-consumer",
+					Concurrency: 1,
+				})
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool.Register("task:cancel_running", func(ctx context.Context, task *taskmq.Task) error {
+					startedChan <- task.ID
+					// Wait for cancellation signal up to 3 seconds
+					select {
+					case <-ctx.Done():
+						resultChan <- ctx.Err()
+						return ctx.Err()
+					case <-time.After(3 * time.Second):
+						resultChan <- nil
+						return nil
+					}
+				})
+				return pool
+			},
+		),
+		fx.Invoke(taskmq.RegisterWorkerPoolLifecycle),
+		fx.Populate(&rdb, &client),
+	)
+
+	rdb.Del(ctx, streamKey)
+	defer rdb.Del(ctx, streamKey)
+
+	app.RequireStart()
+	defer app.RequireStop()
+
+	// 1. Enqueue task
+	taskID := "test-running-cancel-id"
+	task := taskmq.NewTask("task:cancel_running", []byte("data"), taskmq.TaskOptions{
+		Queue: queueName,
+	})
+	task.ID = taskID
+	err := client.Enqueue(ctx, task)
+	assert.NoError(t, err)
+
+	// 2. Wait for it to start
+	var runningTaskID string
+	select {
+	case runningTaskID = <-startedChan:
+		assert.Equal(t, taskID, runningTaskID)
+	case <-ctx.Done():
+		t.Fatal("Timeout waiting for task execution to start")
+	}
+
+	// 3. Cancel the task while running
+	err = client.CancelTask(ctx, queueName, taskID)
+	assert.NoError(t, err)
+
+	// 4. Verify context is cancelled and handler returns context.Canceled
+	select {
+	case resErr := <-resultChan:
+		assert.ErrorIs(t, resErr, context.Canceled, "Expected task execution to be cancelled")
+	case <-ctx.Done():
+		t.Fatal("Timeout waiting for task to handle cancel signal")
+	}
+}
+
+func TestTaskMQ_TaskCancellationBeforeRun(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	queueName := "cancel_before_run_queue"
+	streamKey := taskmq.StreamKey(queueName)
+
+	var mu sync.Mutex
+	handlerInvoked := false
+
+	var rdb *goredis.Client
+	var client taskmq.Client
+
+	app := fxtest.New(t,
+		fx.Provide(
+			NewTestConfig,
+			logger.NewLogger,
+			internalredis.NewRedisClient,
+			taskmq.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
+				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
+					Group:       "cancel-before-run-group",
+					Consumer:    "cancel-before-run-consumer",
+					Concurrency: 1,
+				})
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool.Register("task:cancel_before", func(ctx context.Context, task *taskmq.Task) error {
+					mu.Lock()
+					handlerInvoked = true
+					mu.Unlock()
+					return nil
+				})
+				return pool
+			},
+		),
+		fx.Invoke(taskmq.RegisterWorkerPoolLifecycle),
+		fx.Populate(&rdb, &client),
+	)
+
+	rdb.Del(ctx, streamKey)
+	defer rdb.Del(ctx, streamKey)
+
+	// 1. Enqueue task before starting worker
+	taskID := "test-before-cancel-id"
+	task := taskmq.NewTask("task:cancel_before", []byte("data"), taskmq.TaskOptions{
+		Queue: queueName,
+	})
+	task.ID = taskID
+	err := client.Enqueue(ctx, task)
+	assert.NoError(t, err)
+
+	// 2. Cancel it immediately before worker starts
+	err = client.CancelTask(ctx, queueName, taskID)
+	assert.NoError(t, err)
+
+	// 3. Start worker pool
+	app.RequireStart()
+	defer app.RequireStop()
+
+	// Wait 1 second to let worker pull message and run pre-execution check
+	time.Sleep(1 * time.Second)
+
+	// 4. Verify handler was never invoked
+	mu.Lock()
+	invoked := handlerInvoked
+	mu.Unlock()
+	assert.False(t, invoked, "Handler should not be invoked for a pre-cancelled task")
+
+	// Verify that the task was completed and deleted from the stream
+	streamLen, err := rdb.XLen(ctx, streamKey).Result()
+	assert.NoError(t, err)
+	assert.Equal(t, int64(0), streamLen, "Pre-cancelled task should be completed and deleted from stream")
+}

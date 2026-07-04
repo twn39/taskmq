@@ -42,6 +42,7 @@ type baseWorker struct {
 	deadLetterPolicy DeadLetterPolicy
 
 	middlewareChain []CoreHandlerFunc
+	cancelations    *Cancelations
 }
 
 func (b *baseWorker) initBase(rdb *redis.Client, logger *zap.Logger, opt *workerOptions) {
@@ -50,6 +51,7 @@ func (b *baseWorker) initBase(rdb *redis.Client, logger *zap.Logger, opt *worker
 	b.handlers = make(map[string]HandlerFunc)
 	b.parentCtx = opt.context
 	b.limiter = NewGCRALimiter(rdb)
+	b.cancelations = NewCancelations()
 
 	b.group = opt.group
 	b.consumer = opt.consumer
@@ -169,25 +171,99 @@ func (b *baseWorker) processMessage(ctx context.Context, streamKey string, msg r
 		return
 	}
 
-	c := AcquireConsumeContext(ctx, &task, msg.ID, task.Queue, b.group, b.middlewareChain)
+	// Check if task is already cancelled before execution (pre-execution check for backlog tasks)
+	cancelledKey := fmt.Sprintf("taskmq:{%s}:cancelled:%s", task.Queue, task.ID)
+	isCancelled, err := b.rdb.Exists(ctx, cancelledKey).Result()
+	if err == nil && isCancelled > 0 {
+		b.logger.Warn("Task was cancelled before execution, discarding atomically", zap.String("task_id", task.ID))
+		_ = b.broker.CompleteTask(ctx, &task, streamKey, msg.ID, b.group)
+		return
+	}
+
+	// Create cancellable context and register it in b.cancelations map
+	cancellableCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	b.cancelations.Add(task.ID, cancel)
+	defer b.cancelations.Delete(task.ID)
+
+	c := AcquireConsumeContext(cancellableCtx, &task, msg.ID, task.Queue, b.group, b.middlewareChain)
 	defer ReleaseConsumeContext(c)
 
 	execErr := c.Next()
 
 	// If no error occurred during processing chain and it completed fully (not aborted)
 	if execErr == nil && !c.IsAborted() {
-		err = b.rdb.XAck(ctx, streamKey, b.group, msg.ID).Err()
+		err = b.broker.CompleteTask(ctx, &task, streamKey, msg.ID, b.group)
 		if err != nil {
-			b.logger.Error("Failed to ACK task stream message",
+			b.logger.Error("Failed to complete task",
 				zap.String("task_id", task.ID),
 				zap.String("stream_id", msg.ID),
 				zap.Error(err),
 			)
 			return
 		}
-
-		if task.UniqueKey != "" {
-			_ = b.broker.ReleaseUniqueLock(ctx, &task)
-		}
 	}
+}
+
+// Cancelations holds cancel functions for all active tasks.
+type Cancelations struct {
+	mu          sync.Mutex
+	cancelFuncs map[string]context.CancelFunc
+}
+
+func NewCancelations() *Cancelations {
+	return &Cancelations{
+		cancelFuncs: make(map[string]context.CancelFunc),
+	}
+}
+
+func (c *Cancelations) Add(id string, fn context.CancelFunc) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.cancelFuncs[id] = fn
+}
+
+func (c *Cancelations) Delete(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.cancelFuncs, id)
+}
+
+func (c *Cancelations) Cancel(id string) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if fn, ok := c.cancelFuncs[id]; ok {
+		fn()
+	}
+}
+
+func (b *baseWorker) startCancelSubscriber(ctx context.Context, wg *sync.WaitGroup, queues []string) {
+	if len(queues) == 0 {
+		return
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		channels := make([]string, len(queues))
+		for i, q := range queues {
+			channels[i] = fmt.Sprintf("taskmq:{%s}:cancel", q)
+		}
+		pubsub := b.rdb.Subscribe(ctx, channels...)
+		defer pubsub.Close()
+
+		ch := pubsub.Channel()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case msg, ok := <-ch:
+				if !ok {
+					return
+				}
+				taskID := msg.Payload
+				b.cancelations.Cancel(taskID)
+			}
+		}
+	}()
 }

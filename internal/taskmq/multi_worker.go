@@ -195,6 +195,13 @@ func (pw *priorityWorker) Start(ctx context.Context) error {
 	pw.ctx, pw.cancel = context.WithCancel(pw.parentCtx)
 	pw.consumerCtx, pw.consumerCancel = context.WithCancel(pw.ctx)
 
+	// Start Cancellation Subscriber loop
+	queues := make([]string, len(pw.queues))
+	for i, q := range pw.queues {
+		queues[i] = q.Name
+	}
+	pw.startCancelSubscriber(pw.ctx, &pw.wg, queues)
+
 	for i := 0; i < pw.concurrency; i++ {
 		pw.wg.Add(1)
 		go pw.worker()
