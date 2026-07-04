@@ -2,6 +2,9 @@ package server
 
 import (
 	"context"
+	"embed"
+	"html/template"
+	"io"
 	"net/http"
 
 	"github.com/labstack/echo/v5"
@@ -12,9 +15,26 @@ import (
 	"go.uber.org/zap"
 )
 
+//go:embed templates/*
+var templateFS embed.FS
+
+type Template struct {
+	templates *template.Template
+}
+
+func (t *Template) Render(c *echo.Context, w io.Writer, name string, data any) error {
+	return t.templates.ExecuteTemplate(w, name, data)
+}
+
 // NewServer defines the Echo server
-func NewServer(lc fx.Lifecycle, logger *zap.Logger, userHandler *handler.UserHandler, cfg *config.Config) *echo.Echo {
+func NewServer(lc fx.Lifecycle, logger *zap.Logger, adminHandler *handler.AdminHandler, cfg *config.Config) *echo.Echo {
 	e := echo.New()
+
+	// Register templates
+	t := &Template{
+		templates: template.Must(template.ParseFS(templateFS, "templates/*.html")),
+	}
+	e.Renderer = t
 
 	// Middleware
 	e.Use(middleware.RequestLoggerWithConfig(middleware.RequestLoggerConfig{
@@ -34,10 +54,15 @@ func NewServer(lc fx.Lifecycle, logger *zap.Logger, userHandler *handler.UserHan
 	}))
 	e.Use(middleware.Recover())
 
-	// Routes
-	e.GET("/", userHandler.GetHello)
-	e.POST("/users", userHandler.CreateUser)
-	e.GET("/users", userHandler.GetUsers)
+	// Admin Dashboard Routes
+	e.GET("/admin", adminHandler.GetDashboard)
+	e.GET("/api/stats", adminHandler.GetStats)
+	e.POST("/api/queues/:queue/pause", adminHandler.PauseQueue)
+	e.POST("/api/queues/:queue/resume", adminHandler.ResumeQueue)
+	e.GET("/api/queues/:queue/dlq", adminHandler.ListDLQ)
+	e.POST("/api/queues/:queue/dlq/:id/retry", adminHandler.RetryDLQ)
+	e.DELETE("/api/queues/:queue/dlq/:id", adminHandler.DeleteDLQ)
+	e.POST("/api/queues/:queue/enqueue", adminHandler.EnqueueTest)
 
 	// Lifecycle hooks
 	serverCtx, cancelServer := context.WithCancel(context.Background())

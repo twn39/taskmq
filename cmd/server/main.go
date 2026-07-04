@@ -18,7 +18,7 @@ func main() {
 			config.NewConfig,
 			logger.NewLogger,
 			redis.NewRedisClient,
-			handler.NewUserHandler,
+			handler.NewAdminHandler,
 			server.NewServer,
 		),
 		// Invoke the server to start it

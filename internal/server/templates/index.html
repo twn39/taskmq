@@ -1,0 +1,696 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{{.Title}}</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script>
+        tailwind.config = {
+            theme: {
+                extend: {
+                    fontFamily: {
+                        sans: ['Inter', 'sans-serif'],
+                    },
+                }
+            }
+        }
+    </script>
+    <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js"></script>
+    <style>
+        [x-cloak] { display: none !important; }
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #020617; /* slate-950 */
+        }
+    </style>
+</head>
+<body class="h-full text-slate-100 flex flex-col antialiased">
+    
+    <!-- Alpine App State -->
+    <div x-data="{
+        tab: 'overview',
+        queues: [],
+        selectedQueue: 'default',
+        dlqTasks: [],
+        selectedTask: null,
+        loading: false,
+        autoRefresh: '5',
+        refreshTimer: null,
+        notifications: [],
+        showTaskModal: false,
+        testTask: {
+            queue: 'default',
+            name: 'task:dummy',
+            payload: '{\n  &quot;user_id&quot;: 123,\n  &quot;action&quot;: &quot;process_data&quot;\n}',
+            delaySec: 0,
+            fail: false
+        },
+
+        init() {
+            this.fetchStats();
+            this.setupAutoRefresh();
+        },
+
+        setupAutoRefresh() {
+            if (this.refreshTimer) {
+                clearInterval(this.refreshTimer);
+                this.refreshTimer = null;
+            }
+            if (this.autoRefresh !== 'off') {
+                const interval = parseInt(this.autoRefresh) * 1000;
+                this.refreshTimer = setInterval(() => {
+                    this.fetchStats();
+                    if (this.tab === 'dlq' && this.selectedQueue) {
+                        this.fetchDLQ();
+                    }
+                }, interval);
+            }
+        },
+
+        addNotification(message, type = 'success') {
+            const id = Date.now();
+            this.notifications.push({ id, message, type });
+            setTimeout(() => {
+                this.notifications = this.notifications.filter(n => n.id !== id);
+            }, 3000);
+        },
+
+        async fetchStats() {
+            try {
+                const res = await fetch('/api/stats');
+                if (!res.ok) throw new Error('Failed to fetch stats');
+                this.queues = await res.json();
+            } catch (err) {
+                this.addNotification(err.message, 'error');
+            }
+        },
+
+        async fetchDLQ() {
+            if (!this.selectedQueue) return;
+            this.loading = true;
+            try {
+                const res = await fetch(`/api/queues/${this.selectedQueue}/dlq?limit=50`);
+                if (!res.ok) throw new Error('Failed to fetch DLQ tasks');
+                this.dlqTasks = await res.json();
+            } catch (err) {
+                this.addNotification(err.message, 'error');
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        async toggleQueue(queue, currentStatus) {
+            const action = currentStatus === 'Paused' ? 'resume' : 'pause';
+            try {
+                const res = await fetch(`/api/queues/${queue}/${action}`, { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to toggle queue');
+                this.addNotification(data.message || `Queue ${action}d successfully`);
+                this.fetchStats();
+            } catch (err) {
+                this.addNotification(err.message, 'error');
+            }
+        },
+
+        async retryDLQ(queue, id) {
+            try {
+                const res = await fetch(`/api/queues/${queue}/dlq/${id}/retry`, { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to retry task');
+                this.addNotification(data.message);
+                this.fetchDLQ();
+                this.fetchStats();
+            } catch (err) {
+                this.addNotification(err.message, 'error');
+            }
+        },
+
+        async deleteDLQ(queue, id) {
+            if (!confirm('Are you sure you want to permanently delete this dead letter task?')) return;
+            try {
+                const res = await fetch(`/api/queues/${queue}/dlq/${id}`, { method: 'DELETE' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to delete task');
+                this.addNotification(data.message);
+                this.fetchDLQ();
+                this.fetchStats();
+            } catch (err) {
+                this.addNotification(err.message, 'error');
+            }
+        },
+
+        async submitTestTask() {
+            this.loading = true;
+            try {
+                // If fail is checked, change task name to unregistered name to force failure
+                const taskName = this.testTask.fail ? 'task:undefined_trigger_fail' : this.testTask.name;
+                const res = await fetch(`/api/queues/${this.testTask.queue}/enqueue`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        queue: this.testTask.queue,
+                        name: taskName,
+                        payload: this.testTask.payload,
+                        delay_sec: parseInt(this.testTask.delaySec)
+                    })
+                });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to enqueue task');
+                this.addNotification(data.message);
+                this.fetchStats();
+            } catch (err) {
+                this.addNotification(err.message, 'error');
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        getTotals() {
+            return this.queues.reduce((acc, q) => {
+                acc.active += q.active;
+                acc.scheduled += q.scheduled;
+                acc.dead_letter += q.dead_letter;
+                return acc;
+            }, { active: 0, scheduled: 0, dead_letter: 0 });
+        }
+    }" class="min-h-screen flex flex-col bg-slate-950 selection:bg-indigo-500 selection:text-white">
+        
+        <!-- Header -->
+        <header class="border-b border-slate-900 bg-slate-950/80 backdrop-blur-md sticky top-0 z-40">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 h-16 flex items-center justify-between">
+                <div class="flex items-center space-x-3">
+                    <div class="h-10 w-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                        <svg class="h-5 w-5 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                    </div>
+                    <div>
+                        <span class="text-lg font-bold tracking-tight text-white">TaskMQ</span>
+                        <span class="text-xs block text-slate-400 font-medium">Distributed Queue Dashboard</span>
+                    </div>
+                </div>
+
+                <div class="flex items-center space-x-4">
+                    <!-- Connection Status Badge -->
+                    <span class="inline-flex items-center px-2.5 py-1 rounded-md text-xs font-semibold bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                        <span class="w-1.5 h-1.5 mr-1.5 bg-emerald-400 rounded-full animate-pulse"></span>
+                        Redis Connected
+                    </span>
+
+                    <div class="flex items-center space-x-2">
+                        <!-- Auto-refresh interval select -->
+                        <span class="text-xs text-slate-400">Refresh:</span>
+                        <select 
+                            x-model="autoRefresh" 
+                            @change="setupAutoRefresh()"
+                            class="bg-slate-900 border border-slate-800 text-slate-300 text-xs rounded-md focus:ring-indigo-500 focus:border-indigo-500 p-1 font-medium focus:outline-none"
+                        >
+                            <option value="off">Off</option>
+                            <option value="2">2s</option>
+                            <option value="5">5s</option>
+                            <option value="10">10s</option>
+                        </select>
+                    </div>
+
+                    <!-- Force Refresh Button -->
+                    <button 
+                        @click="fetchStats(); if(tab === 'dlq') fetchDLQ();"
+                        class="p-2 text-slate-400 hover:text-white bg-slate-900 hover:bg-slate-800 border border-slate-800/80 rounded-lg transition duration-200"
+                        title="Force Refresh"
+                    >
+                        <svg class="h-4 w-4" :class="loading ? 'animate-spin' : ''" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M4 4v5h.582m15.356 2A8.001 8.001 0 1121.21 7.89H18" />
+                        </svg>
+                    </button>
+                </div>
+            </div>
+        </header>
+
+        <!-- Main Workspace -->
+        <main class="flex-grow max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8 flex flex-col space-y-8">
+            
+            <!-- Overall Stats Summary Cards -->
+            <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-6">
+                <!-- Total Queues -->
+                <div class="relative overflow-hidden bg-slate-900/40 border border-slate-800/60 rounded-2xl p-6 shadow-xl backdrop-blur-md">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <span class="text-sm text-slate-400 font-medium">Discovered Queues</span>
+                            <span class="block text-3xl font-extrabold text-white mt-1" x-text="queues.length">0</span>
+                        </div>
+                        <div class="h-12 w-12 rounded-xl bg-slate-800/50 flex items-center justify-center text-slate-300">
+                            <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Active Tasks -->
+                <div class="relative overflow-hidden bg-slate-900/40 border border-slate-800/60 rounded-2xl p-6 shadow-xl backdrop-blur-md">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <span class="text-sm text-slate-400 font-medium">Active Tasks (Streams)</span>
+                            <span class="block text-3xl font-extrabold text-white mt-1" x-text="getTotals().active">0</span>
+                        </div>
+                        <div class="h-12 w-12 rounded-xl bg-indigo-500/10 flex items-center justify-center text-indigo-400 border border-indigo-500/20">
+                            <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" />
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Scheduled Tasks -->
+                <div class="relative overflow-hidden bg-slate-900/40 border border-slate-800/60 rounded-2xl p-6 shadow-xl backdrop-blur-md">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <span class="text-sm text-slate-400 font-medium">Scheduled Tasks (Zset)</span>
+                            <span class="block text-3xl font-extrabold text-white mt-1" x-text="getTotals().scheduled">0</span>
+                        </div>
+                        <div class="h-12 w-12 rounded-xl bg-emerald-500/10 flex items-center justify-center text-emerald-400 border border-emerald-500/20">
+                            <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Dead Letter Queue (DLQ) -->
+                <div class="relative overflow-hidden bg-slate-900/40 border border-slate-800/60 rounded-2xl p-6 shadow-xl backdrop-blur-md transition duration-300"
+                     :class="getTotals().dead_letter > 0 ? 'border-rose-500/30 bg-rose-500/5' : ''">
+                    <div class="flex items-center justify-between">
+                        <div>
+                            <span class="text-sm font-medium" :class="getTotals().dead_letter > 0 ? 'text-rose-400' : 'text-slate-400'">Dead Letter Tasks</span>
+                            <span class="block text-3xl font-extrabold mt-1" :class="getTotals().dead_letter > 0 ? 'text-rose-500' : 'text-white'" x-text="getTotals().dead_letter">0</span>
+                        </div>
+                        <div class="h-12 w-12 rounded-xl flex items-center justify-center border"
+                             :class="getTotals().dead_letter > 0 ? 'bg-rose-500/20 text-rose-400 border-rose-500/30 animate-pulse' : 'bg-slate-800/50 text-slate-300 border-slate-800'">
+                            <svg class="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                                <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                            </svg>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Tab Switcher -->
+            <div class="flex border-b border-slate-950">
+                <nav class="flex space-x-1 bg-slate-900/40 p-1 border border-slate-850 rounded-xl" aria-label="Tabs">
+                    <button 
+                        @click="tab = 'overview'"
+                        :class="tab === 'overview' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/25' : 'text-slate-400 hover:text-white'"
+                        class="px-4 py-2 text-sm font-semibold rounded-lg transition duration-200"
+                    >
+                        Overview & Queues
+                    </button>
+                    <button 
+                        @click="tab = 'dlq'; fetchDLQ();"
+                        :class="tab === 'dlq' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/25' : 'text-slate-400 hover:text-white'"
+                        class="px-4 py-2 text-sm font-semibold rounded-lg transition duration-200"
+                    >
+                        DLQ Inspector
+                    </button>
+                    <button 
+                        @click="tab = 'actions'"
+                        :class="tab === 'actions' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/25' : 'text-slate-400 hover:text-white'"
+                        class="px-4 py-2 text-sm font-semibold rounded-lg transition duration-200"
+                    >
+                        Test Console
+                    </button>
+                </nav>
+            </div>
+
+            <!-- TAB CONTENT: OVERVIEW -->
+            <div x-show="tab === 'overview'" class="flex flex-col space-y-6">
+                <!-- Queues Table Panel -->
+                <div class="bg-slate-900/30 border border-slate-800/60 rounded-2xl overflow-hidden shadow-xl">
+                    <div class="px-6 py-5 border-b border-slate-850 flex items-center justify-between">
+                        <h2 class="text-base font-bold text-white">Active Queue Registry</h2>
+                        <span class="text-xs text-slate-400" x-text="`Total active consumers: ${queues.length}`"></span>
+                    </div>
+
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse">
+                            <thead>
+                                <tr class="border-b border-slate-850 bg-slate-900/40 text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                                    <th class="px-6 py-4">Queue Name</th>
+                                    <th class="px-6 py-4">Status</th>
+                                    <th class="px-6 py-4 text-right">Active (Streams)</th>
+                                    <th class="px-6 py-4 text-right">Scheduled (Zset)</th>
+                                    <th class="px-6 py-4 text-right">Dead Letter (DLQ)</th>
+                                    <th class="px-6 py-4 text-center">Operations</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-850 text-sm">
+                                <template x-for="q in queues" :key="q.name">
+                                    <tr class="hover:bg-slate-900/20 transition duration-150">
+                                        <td class="px-6 py-4 font-bold text-white" x-text="q.name"></td>
+                                        <td class="px-6 py-4">
+                                            <template x-if="q.status === 'Active'">
+                                                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
+                                                    <span class="w-1.5 h-1.5 mr-1.5 bg-emerald-400 rounded-full animate-pulse"></span>
+                                                    Active
+                                                </span>
+                                            </template>
+                                            <template x-if="q.status === 'Paused'">
+                                                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-amber-500/10 text-amber-400 border border-amber-500/20">
+                                                    <span class="w-1.5 h-1.5 mr-1.5 bg-amber-400 rounded-full"></span>
+                                                    Paused
+                                                </span>
+                                            </template>
+                                        </td>
+                                        <td class="px-6 py-4 text-right font-medium text-slate-300" x-text="q.active"></td>
+                                        <td class="px-6 py-4 text-right font-medium text-slate-300" x-text="q.scheduled"></td>
+                                        <td class="px-6 py-4 text-right font-medium" :class="q.dead_letter > 0 ? 'text-rose-400 font-bold' : 'text-slate-300'" x-text="q.dead_letter"></td>
+                                        <td class="px-6 py-4 text-center">
+                                            <button 
+                                                @click="toggleQueue(q.name, q.status)"
+                                                :class="q.status === 'Active' ? 'bg-amber-600/10 text-amber-400 border border-amber-500/20 hover:bg-amber-600/20' : 'bg-emerald-600/10 text-emerald-400 border border-emerald-500/20 hover:bg-emerald-600/20'"
+                                                class="px-3 py-1.5 rounded-lg text-xs font-bold transition duration-200 focus:outline-none"
+                                                x-text="q.status === 'Active' ? 'Pause Consumption' : 'Resume Consumption'"
+                                            ></button>
+                                        </td>
+                                    </tr>
+                                </template>
+                                <tr x-show="queues.length === 0">
+                                    <td colspan="6" class="px-6 py-12 text-center text-slate-500 font-medium">
+                                        No active queues discovered in Redis.
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB CONTENT: DLQ INSPECTOR -->
+            <div x-show="tab === 'dlq'" class="flex flex-col space-y-6">
+                <!-- DLQ Settings bar -->
+                <div class="bg-slate-900/30 border border-slate-800/60 rounded-2xl p-6 shadow-xl backdrop-blur-md flex flex-col md:flex-row md:items-center justify-between gap-4">
+                    <div class="flex items-center space-x-3">
+                        <span class="text-sm font-semibold text-slate-300">Select Target Queue:</span>
+                        <select 
+                            x-model="selectedQueue"
+                            @change="fetchDLQ()"
+                            class="bg-slate-900 border border-slate-800 text-slate-200 text-sm rounded-xl focus:ring-indigo-500 focus:border-indigo-500 p-2.5 pr-8 font-medium focus:outline-none"
+                        >
+                            <template x-for="q in queues" :key="q.name">
+                                <option :value="q.name" x-text="q.name" :selected="q.name === selectedQueue"></option>
+                            </template>
+                        </select>
+                    </div>
+
+                    <span class="text-xs text-rose-400 bg-rose-500/10 border border-rose-500/20 px-3 py-1.5 rounded-xl font-medium"
+                          x-show="dlqTasks.length > 0">
+                        🚨 Showing up to 50 dead lettered tasks. Active remediation required.
+                    </span>
+                </div>
+
+                <!-- DLQ Tasks Table -->
+                <div class="bg-slate-900/30 border border-slate-800/60 rounded-2xl overflow-hidden shadow-xl">
+                    <div class="px-6 py-5 border-b border-slate-850 flex items-center justify-between">
+                        <h2 class="text-base font-bold text-white" x-text="`Dead Letter Queue: ${selectedQueue}`"></h2>
+                        <span class="text-xs text-slate-400" x-text="`Failure Records: ${dlqTasks.length}`"></span>
+                    </div>
+
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse">
+                            <thead>
+                                <tr class="border-b border-slate-850 bg-slate-900/40 text-xs font-semibold text-slate-400 uppercase tracking-wider">
+                                    <th class="px-6 py-4">Task ID</th>
+                                    <th class="px-6 py-4">Task Name</th>
+                                    <th class="px-6 py-4 text-center">Retries</th>
+                                    <th class="px-6 py-4">Last Error</th>
+                                    <th class="px-6 py-4 text-center">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-850 text-sm">
+                                <template x-for="task in dlqTasks" :key="task.id">
+                                    <tr class="hover:bg-slate-900/20 transition duration-150">
+                                        <td class="px-6 py-4 font-mono text-slate-400 text-xs" x-text="task.id.substring(0, 8) + '...'"></td>
+                                        <td class="px-6 py-4 font-bold text-white" x-text="task.name"></td>
+                                        <td class="px-6 py-4 text-center text-slate-300" x-text="`${task.retry} / ${task.max_retry}`"></td>
+                                        <td class="px-6 py-4 text-rose-400 max-w-xs truncate font-mono text-xs" :title="task.last_error" x-text="task.last_error"></td>
+                                        <td class="px-6 py-4 text-center flex items-center justify-center space-x-2">
+                                            <!-- Inspect -->
+                                            <button 
+                                                @click="selectedTask = task; showTaskModal = true"
+                                                class="bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-750 px-2.5 py-1.5 rounded-lg text-xs font-bold transition duration-200"
+                                            >
+                                                Inspect
+                                            </button>
+                                            <!-- Retry -->
+                                            <button 
+                                                @click="retryDLQ(selectedQueue, task.id)"
+                                                class="bg-indigo-600 hover:bg-indigo-500 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold transition duration-200 shadow-md shadow-indigo-600/10"
+                                            >
+                                                Retry
+                                            </button>
+                                            <!-- Delete -->
+                                            <button 
+                                                @click="deleteDLQ(selectedQueue, task.id)"
+                                                class="bg-rose-600/15 hover:bg-rose-600/25 text-rose-400 border border-rose-500/10 px-2.5 py-1.5 rounded-lg text-xs font-bold transition duration-200"
+                                            >
+                                                Purge
+                                            </button>
+                                        </td>
+                                    </tr>
+                                </template>
+                                <tr x-show="dlqTasks.length === 0">
+                                    <td colspan="5" class="px-6 py-12 text-center text-slate-500 font-medium">
+                                        No dead letter tasks found in this queue. Everything healthy!
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+
+            <!-- TAB CONTENT: TEST CONSOLE -->
+            <div x-show="tab === 'actions'" class="grid grid-cols-1 lg:grid-cols-3 gap-8">
+                <!-- Instructions / Guidance -->
+                <div class="bg-slate-900/30 border border-slate-800/60 rounded-2xl p-6 shadow-xl backdrop-blur-md flex flex-col space-y-4">
+                    <h3 class="text-lg font-bold text-white flex items-center">
+                        <svg class="h-5 w-5 mr-2 text-indigo-400" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                        </svg>
+                        Test Console Guide
+                    </h3>
+                    <p class="text-sm text-slate-400 leading-relaxed">
+                        Use this panel to easily schedule dummy tasks and observe the task queue lifecycle directly in the web UI.
+                    </p>
+                    <div class="border-t border-slate-850 pt-4 flex flex-col space-y-3">
+                        <div class="flex items-start space-x-2">
+                            <span class="text-emerald-400 font-bold text-xs mt-0.5">✔</span>
+                            <span class="text-xs text-slate-400"><strong>Queue:</strong> Target one of your discovered queues.</span>
+                        </div>
+                        <div class="flex items-start space-x-2">
+                            <span class="text-emerald-400 font-bold text-xs mt-0.5">✔</span>
+                            <span class="text-xs text-slate-400"><strong>Delay:</strong> Delay task execution to watch the Scheduled metric update.</span>
+                        </div>
+                        <div class="flex items-start space-x-2">
+                            <span class="text-rose-400 font-bold text-xs mt-0.5">✖</span>
+                            <span class="text-xs text-slate-400"><strong>Force Failure:</strong> Triggers a task name with no worker registered. Watch it run, retry, and land in the DLQ automatically.</span>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Test Form Panel -->
+                <div class="lg:col-span-2 bg-slate-900/30 border border-slate-800/60 rounded-2xl p-6 shadow-xl backdrop-blur-md">
+                    <h3 class="text-base font-bold text-white mb-6">Dispatch Custom Test Task</h3>
+                    
+                    <form @submit.prevent="submitTestTask()" class="space-y-6">
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <!-- Target Queue -->
+                            <div>
+                                <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Target Queue</label>
+                                <select 
+                                    x-model="testTask.queue"
+                                    class="w-full bg-slate-950 border border-slate-800 text-slate-200 text-sm rounded-xl focus:ring-indigo-500 focus:border-indigo-500 p-3 font-medium focus:outline-none"
+                                >
+                                    <template x-for="q in queues" :key="q.name">
+                                        <option :value="q.name" x-text="q.name"></option>
+                                    </template>
+                                </select>
+                            </div>
+
+                            <!-- Task Name -->
+                            <div>
+                                <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Task Type (Name)</label>
+                                <input 
+                                    type="text" 
+                                    x-model="testTask.name" 
+                                    class="w-full bg-slate-950 border border-slate-800 text-slate-200 text-sm rounded-xl focus:ring-indigo-500 focus:border-indigo-500 p-3 font-medium focus:outline-none"
+                                    :disabled="testTask.fail"
+                                />
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <!-- Delay Seconds -->
+                            <div>
+                                <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Execution Delay (Seconds)</label>
+                                <input 
+                                    type="number" 
+                                    x-model="testTask.delaySec" 
+                                    class="w-full bg-slate-950 border border-slate-800 text-slate-200 text-sm rounded-xl focus:ring-indigo-500 focus:border-indigo-500 p-3 font-medium focus:outline-none"
+                                    min="0"
+                                />
+                            </div>
+
+                            <!-- Force Failure Toggle -->
+                            <div class="flex items-center space-x-3 pt-6">
+                                <input 
+                                    type="checkbox" 
+                                    id="force-fail"
+                                    x-model="testTask.fail" 
+                                    class="h-4 w-4 rounded border-slate-800 bg-slate-950 text-indigo-600 focus:ring-indigo-500 focus:ring-offset-slate-950"
+                                />
+                                <label for="force-fail" class="text-sm font-semibold text-slate-300 select-none cursor-pointer">
+                                    Force failure (triggers auto-retry and DLQ landing)
+                                </label>
+                            </div>
+                        </div>
+
+                        <!-- Payload -->
+                        <div>
+                            <label class="block text-xs font-bold text-slate-400 uppercase tracking-wider mb-2">Task Payload (JSON)</label>
+                            <textarea 
+                                x-model="testTask.payload" 
+                                rows="4" 
+                                class="w-full bg-slate-950 border border-slate-800 text-slate-200 font-mono text-xs rounded-xl focus:ring-indigo-500 focus:border-indigo-500 p-3 focus:outline-none"
+                            ></textarea>
+                        </div>
+
+                        <!-- Submit -->
+                        <div class="flex justify-end">
+                            <button 
+                                type="submit" 
+                                class="bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-bold px-6 py-3 rounded-xl transition duration-200 shadow-lg shadow-indigo-500/25 flex items-center space-x-2"
+                                :disabled="loading"
+                            >
+                                <svg x-show="loading" class="animate-spin -ml-1 mr-2 h-4 w-4 text-white" fill="none" viewBox="0 0 24 24">
+                                    <circle class="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" stroke-width="4"></circle>
+                                    <path class="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                                </svg>
+                                <span x-text="loading ? 'Dispatching...' : 'Dispatch Test Task'"></span>
+                            </button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+        </main>
+
+        <!-- Footer -->
+        <footer class="border-t border-slate-900 bg-slate-950 text-slate-500 text-xs py-6">
+            <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col sm:flex-row items-center justify-between gap-4">
+                <span>© 2026 TaskMQ Distributed Queue Engine.</span>
+                <span class="font-medium text-slate-400">Tailwind CSS & Alpine.js Enabled Admin Panel.</span>
+            </div>
+        </footer>
+
+        <!-- Task Inspector Modal -->
+        <div 
+            x-show="showTaskModal" 
+            class="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/80 backdrop-blur-sm"
+            x-transition:enter="transition ease-out duration-200"
+            x-transition:enter-start="opacity-0"
+            x-transition:enter-end="opacity-100"
+            x-transition:leave="transition ease-in duration-150"
+            x-transition:leave-start="opacity-100"
+            x-transition:leave-end="opacity-0"
+            x-cloak
+        >
+            <div 
+                @click.away="showTaskModal = false"
+                class="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-3xl overflow-hidden shadow-2xl flex flex-col max-h-[85vh]"
+            >
+                <div class="px-6 py-4 border-b border-slate-850 flex items-center justify-between">
+                    <h3 class="text-base font-bold text-white">Task Details Inspector</h3>
+                    <button @click="showTaskModal = false" class="text-slate-400 hover:text-white transition duration-150">
+                        <svg class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor" stroke-width="2">
+                            <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                    </button>
+                </div>
+
+                <div class="p-6 overflow-y-auto space-y-6 text-sm" x-if="selectedTask">
+                    <!-- General Details Grid -->
+                    <div class="grid grid-cols-1 md:grid-cols-3 gap-6 bg-slate-950 p-5 rounded-2xl border border-slate-850">
+                        <div>
+                            <span class="text-xs font-bold text-slate-400 uppercase tracking-wider block">Task ID</span>
+                            <span class="font-mono text-slate-200 font-medium block mt-1" x-text="selectedTask.id"></span>
+                        </div>
+                        <div>
+                            <span class="text-xs font-bold text-slate-400 uppercase tracking-wider block">Task Type</span>
+                            <span class="text-slate-200 font-bold block mt-1" x-text="selectedTask.name"></span>
+                        </div>
+                        <div>
+                            <span class="text-xs font-bold text-slate-400 uppercase tracking-wider block">Retry Status</span>
+                            <span class="text-slate-200 font-medium block mt-1" x-text="`${selectedTask.retry} / ${selectedTask.max_retry}`"></span>
+                        </div>
+                    </div>
+
+                    <!-- Last Error -->
+                    <div>
+                        <span class="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">Last Error Trace</span>
+                        <pre class="bg-rose-950/20 border border-rose-500/10 text-rose-300 p-4 rounded-xl font-mono text-xs overflow-x-auto whitespace-pre-wrap leading-relaxed" x-text="selectedTask.last_error"></pre>
+                    </div>
+
+                    <!-- Payload -->
+                    <div>
+                        <span class="text-xs font-bold text-slate-400 uppercase tracking-wider block mb-2">Task Payload</span>
+                        <pre class="bg-slate-950 border border-slate-850 text-slate-300 p-4 rounded-xl font-mono text-xs overflow-x-auto whitespace-pre-wrap" x-text="selectedTask.payload ? selectedTask.payload : 'Empty'"></pre>
+                    </div>
+                </div>
+
+                <div class="px-6 py-4 border-t border-slate-850 bg-slate-900/50 flex justify-end space-x-3">
+                    <button 
+                        @click="showTaskModal = false"
+                        class="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-xl text-sm font-bold transition duration-200"
+                    >
+                        Close
+                    </button>
+                    <button 
+                        @click="retryDLQ(selectedQueue, selectedTask.id); showTaskModal = false"
+                        class="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2 rounded-xl text-sm font-bold transition duration-200 shadow-md shadow-indigo-600/10"
+                    >
+                        Retry Task
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Toast Notifications Overlay -->
+        <div class="fixed bottom-6 right-6 z-50 flex flex-col space-y-3 max-w-sm w-full">
+            <template x-for="n in notifications" :key="n.id">
+                <div 
+                    class="p-4 rounded-xl border flex items-center space-x-3 shadow-2xl transition duration-300 transform translate-y-0"
+                    :class="n.type === 'success' ? 'bg-slate-900 text-slate-100 border-emerald-500/30' : 'bg-slate-900 text-slate-100 border-rose-500/30'"
+                    x-transition:enter="transition ease-out duration-300"
+                    x-transition:enter-start="opacity-0 translate-y-2 scale-95"
+                    x-transition:enter-end="opacity-100 translate-y-0 scale-100"
+                    x-transition:leave="transition ease-in duration-200"
+                    x-transition:leave-start="opacity-100 translate-y-0 scale-100"
+                    x-transition:leave-end="opacity-0 translate-y-2 scale-95"
+                >
+                    <template x-if="n.type === 'success'">
+                        <span class="h-6 w-6 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-xs">✓</span>
+                    </template>
+                    <template x-if="n.type === 'error'">
+                        <span class="h-6 w-6 rounded-full bg-rose-500/10 border border-rose-500/20 text-rose-400 flex items-center justify-center font-bold text-xs">✗</span>
+                    </template>
+                    <div class="flex-1 text-sm font-semibold" x-text="n.message"></div>
+                </div>
+            </template>
+        </div>
+
+    </div>
+</body>
+</html>
