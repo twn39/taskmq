@@ -36,12 +36,11 @@ func TestTaskMQ_PauseResume_SingleQueue(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
-					Group:       "pause-group",
-					Consumer:    "pause-consumer",
-					Concurrency: 2,
-				})
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithGroup("pause-group"),
+					taskmq.WithConsumer("pause-consumer"),
+					taskmq.WithConcurrency(2),
+				)
 				pool.Register("task:pause_resume", func(ctx context.Context, task *taskmq.Task) error {
 					runChan <- string(task.Payload)
 					return nil
@@ -137,17 +136,16 @@ func TestTaskMQ_PauseResume_MultiQueuePriority(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, "", taskmq.JSONCodec{}, taskmq.WorkerOptions{
-					Group:            "priority-group",
-					Consumer:         "priority-consumer",
-					Concurrency:      2,
-					PriorityStrategy: "strict",
-					PriorityQueues: []taskmq.QueuePriority{
+				pw := taskmq.NewPriorityWorker(rdb, logger,
+					taskmq.WithGroup("priority-group"),
+					taskmq.WithConsumer("priority-consumer"),
+					taskmq.WithConcurrency(2),
+					taskmq.WithPriorityStrategy("strict"),
+					taskmq.WithPriorityQueues([]taskmq.QueuePriority{
 						{Name: queueActive, Weight: 10},
 						{Name: queuePaused, Weight: 5},
-					},
-				})
-				pw := taskmq.NewPriorityWorker(rdb, logger, opts)
+					}),
+				)
 				pw.Register("task:priority_test", func(ctx context.Context, task *taskmq.Task) error {
 					runChan <- string(task.Payload)
 					return nil

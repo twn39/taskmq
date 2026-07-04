@@ -37,12 +37,11 @@ func TestTaskMQ_CronFlow(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
-					Concurrency:         2,
-					CronHealingInterval: 2 * time.Second,
-					CronHealingLockTTL:  1800 * time.Millisecond,
-				})
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithConcurrency(2),
+					taskmq.WithCronHealingInterval(2*time.Second),
+					taskmq.WithCronHealingLockTTL(1800*time.Millisecond),
+				)
 				// Register handler for the cron job
 				pool.Register("cron:ticker", func(ctx context.Context, task *taskmq.Task) error {
 					val := atomic.AddInt64(&runCount, 1)
@@ -146,12 +145,11 @@ func TestTaskMQ_CronSelfHealing_CustomConfig(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
-					Concurrency:         1,
-					CronHealingInterval: 1 * time.Second,
-					CronHealingLockTTL:  800 * time.Millisecond,
-				})
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithConcurrency(1),
+					taskmq.WithCronHealingInterval(1*time.Second),
+					taskmq.WithCronHealingLockTTL(800*time.Millisecond),
+				)
 				pool.Register("cron:healing:custom", func(ctx context.Context, task *taskmq.Task) error {
 					val := atomic.AddInt64(&runCount, 1)
 					if val >= 1 {
@@ -248,14 +246,13 @@ func TestTaskMQ_CronSelfHealing_Pagination_ExceededLimit(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
-					Concurrency:              1,
-					CronHealingInterval:      1 * time.Second,
-					CronHealingLockTTL:       800 * time.Millisecond,
-					CronHealingScanBatchSize: 2,
-					CronHealingScanMaxCount:  5, // will not reach the cron task if we put 8 dummy tasks first
-				})
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithConcurrency(1),
+					taskmq.WithCronHealingInterval(1*time.Second),
+					taskmq.WithCronHealingLockTTL(800*time.Millisecond),
+					taskmq.WithCronHealingScanBatchSize(2),
+					taskmq.WithCronHealingScanMaxCount(5),
+				)
 				return pool
 			},
 		),
@@ -339,14 +336,13 @@ func TestTaskMQ_CronSelfHealing_Pagination_WithinLimit(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
-					Concurrency:              1,
-					CronHealingInterval:      1 * time.Second,
-					CronHealingLockTTL:       800 * time.Millisecond,
-					CronHealingScanBatchSize: 2,
-					CronHealingScanMaxCount:  15, // large enough to find the cron task at position 9
-				})
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithConcurrency(1),
+					taskmq.WithCronHealingInterval(1*time.Second),
+					taskmq.WithCronHealingLockTTL(800*time.Millisecond),
+					taskmq.WithCronHealingScanBatchSize(2),
+					taskmq.WithCronHealingScanMaxCount(15),
+				)
 				return pool
 			},
 		),

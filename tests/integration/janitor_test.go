@@ -36,12 +36,11 @@ func TestTaskMQ_JanitorRecoveryFlow(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
-					Group:       "janitor-group",
-					Consumer:    "janitor-consumer",
-					Concurrency: 1,
-				})
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithGroup("janitor-group"),
+					taskmq.WithConsumer("janitor-consumer"),
+					taskmq.WithConcurrency(1),
+				)
 				pool.Register("task:crash", func(ctx context.Context, task *taskmq.Task) error {
 					count := atomic.AddInt64(&runCount, 1)
 					if count == 1 {

@@ -36,12 +36,11 @@ func TestTaskMQ_DelayedFlow(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
-					Group:       "delayed-group",
-					Consumer:    "delayed-consumer",
-					Concurrency: 1,
-				})
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithGroup("delayed-group"),
+					taskmq.WithConsumer("delayed-consumer"),
+					taskmq.WithConcurrency(1),
+				)
 				pool.Register("task:delayed", func(ctx context.Context, task *taskmq.Task) error {
 					runChan <- time.Now()
 					return nil
@@ -98,12 +97,11 @@ func TestTaskMQ_TimeoutCancellationFlow(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
-					Group:       "timeout-group",
-					Consumer:    "timeout-consumer",
-					Concurrency: 1,
-				})
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithGroup("timeout-group"),
+					taskmq.WithConsumer("timeout-consumer"),
+					taskmq.WithConcurrency(1),
+				)
 				pool.Register("task:slow", func(ctx context.Context, task *taskmq.Task) error {
 					atomic.AddInt64(&execCount, 1)
 

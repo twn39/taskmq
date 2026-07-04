@@ -38,12 +38,11 @@ func TestTaskMQ_DLQFlow(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
-					Group:       "dlq-group",
-					Consumer:    "dlq-consumer",
-					Concurrency: 1,
-				})
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithGroup("dlq-group"),
+					taskmq.WithConsumer("dlq-consumer"),
+					taskmq.WithConcurrency(1),
+				)
 				pool.Register("task:fail", func(ctx context.Context, task *taskmq.Task) error {
 					att := atomic.AddInt64(&attempt, 1)
 					if att == 1 {

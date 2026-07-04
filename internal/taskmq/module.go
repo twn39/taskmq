@@ -91,7 +91,7 @@ func ProvideWorkers(p ProvideWorkersParams) (Worker, error) {
 			priorityConcurrency = 5
 		}
 
-		var opts []any
+		var opts []WorkerOption
 		opts = append(opts, WithGroup("taskmq-priority-group"))
 		opts = append(opts, WithConsumer("taskmq-priority-consumer-1"))
 		opts = append(opts, WithConcurrency(priorityConcurrency))
@@ -146,7 +146,7 @@ func ProvideWorkers(p ProvideWorkersParams) (Worker, error) {
 			consumer = qCfg.Consumer
 		}
 
-		var opts []any
+		var opts []WorkerOption
 		opts = append(opts, WithGroup(group))
 		opts = append(opts, WithConsumer(consumer))
 		opts = append(opts, WithConcurrency(concurrency))

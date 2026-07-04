@@ -35,12 +35,11 @@ func TestTaskMQ_UniquenessFlow(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
-					Group:       "unique-group",
-					Consumer:    "unique-consumer",
-					Concurrency: 1,
-				})
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithGroup("unique-group"),
+					taskmq.WithConsumer("unique-consumer"),
+					taskmq.WithConcurrency(1),
+				)
 				pool.Register("task:unique", func(ctx context.Context, task *taskmq.Task) error {
 					runChan <- true
 					return nil

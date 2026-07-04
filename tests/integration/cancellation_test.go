@@ -36,12 +36,11 @@ func TestTaskMQ_TaskCancellationFlow(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
-					Group:       "cancel-group",
-					Consumer:    "cancel-consumer",
-					Concurrency: 1,
-				})
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithGroup("cancel-group"),
+					taskmq.WithConsumer("cancel-consumer"),
+					taskmq.WithConcurrency(1),
+				)
 				pool.Register("task:cancel_running", func(ctx context.Context, task *taskmq.Task) error {
 					startedChan <- task.ID
 					// Wait for cancellation signal up to 3 seconds
@@ -118,12 +117,11 @@ func TestTaskMQ_TaskCancellationBeforeRun(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
-					Group:       "cancel-before-run-group",
-					Consumer:    "cancel-before-run-consumer",
-					Concurrency: 1,
-				})
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithGroup("cancel-before-run-group"),
+					taskmq.WithConsumer("cancel-before-run-consumer"),
+					taskmq.WithConcurrency(1),
+				)
 				pool.Register("task:cancel_before", func(ctx context.Context, task *taskmq.Task) error {
 					mu.Lock()
 					handlerInvoked = true

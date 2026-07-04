@@ -38,12 +38,11 @@ func TestTaskMQ_RetryFlow(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
-					Group:       "retry-group",
-					Consumer:    "retry-consumer",
-					Concurrency: 1,
-				})
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithGroup("retry-group"),
+					taskmq.WithConsumer("retry-consumer"),
+					taskmq.WithConcurrency(1),
+				)
 				pool.Register("task:fail", func(ctx context.Context, task *taskmq.Task) error {
 					current := atomic.AddInt64(&execCount, 1)
 					if current >= 3 {

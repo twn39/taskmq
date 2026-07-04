@@ -104,12 +104,11 @@ func TestTaskMQ_AtomicCompleteAndRelease(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
-					Group:       "complete-group",
-					Consumer:    "complete-consumer",
-					Concurrency: 1,
-				})
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithGroup("complete-group"),
+					taskmq.WithConsumer("complete-consumer"),
+					taskmq.WithConcurrency(1),
+				)
 				pool.Register("task:complete", func(ctx context.Context, task *taskmq.Task) error {
 					runChan <- true
 					return nil

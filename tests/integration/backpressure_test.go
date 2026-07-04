@@ -38,11 +38,10 @@ func TestTaskMQ_BackpressureFlow(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
-					Concurrency:       1,
-					ExecutionPoolSize: 1, // Only 1 concurrent task execution allowed
-				})
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithConcurrency(1),
+					taskmq.WithExecutionPoolSize(1),
+				)
 				pool.Register("task:slow", func(ctx context.Context, task *taskmq.Task) error {
 					atomic.AddInt64(&runCount, 1)
 					if task.Retry > 0 {

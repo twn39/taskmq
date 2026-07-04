@@ -39,11 +39,10 @@ func TestTaskMQ_BinaryCodec(t *testing.T) {
 				return taskmq.NewClient(rdb, taskmq.WithClientCodec(binaryCodec))
 			},
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, binaryCodec, taskmq.WorkerOptions{
-					Concurrency: 2,
-					Codec:       binaryCodec,
-				})
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithConcurrency(2),
+					taskmq.WithCodec(binaryCodec),
+				)
 				pool.Register("task:binary-test", func(ctx context.Context, task *taskmq.Task) error {
 					runChan <- string(task.Payload)
 					return nil

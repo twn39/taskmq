@@ -97,14 +97,11 @@ func TestWorkerPool_DecoupledAbtractionAndFailureHandling(t *testing.T) {
 		}
 		dlPolicy := NewStandardDeadLetterPolicy("custom-dead-letters", dlHook)
 
-		opts := WorkerOptions{
-			Broker:           mb,
-			RetryPolicy:      mp,
-			DeadLetterPolicy: dlPolicy,
-		}
-		opts.ApplyDefaults(rdb, logger, "test-q", JSONCodec{})
-
-		pool := NewWorkerPool(rdb, logger, "test-q", opts).(*workerPool)
+		pool := NewWorkerPool(rdb, logger, "test-q",
+			WithBroker(mb),
+			WithRetryPolicy(mp),
+			WithDeadLetterPolicy(dlPolicy),
+		).(*workerPool)
 
 		msg := redis.XMessage{
 			ID:     "1-0",
@@ -143,13 +140,10 @@ func TestWorkerPool_DecoupledAbtractionAndFailureHandling(t *testing.T) {
 		basePolicy := &mockRetryPolicy{should: true}
 		filterPolicy := NewErrorFilterRetryPolicy(basePolicy, []error{nonRetryableErr})
 
-		opts := WorkerOptions{
-			Broker:      mb,
-			RetryPolicy: filterPolicy,
-		}
-		opts.ApplyDefaults(rdb, logger, "test-q", JSONCodec{})
-
-		pool := NewWorkerPool(rdb, logger, "test-q", opts).(*workerPool)
+		pool := NewWorkerPool(rdb, logger, "test-q",
+			WithBroker(mb),
+			WithRetryPolicy(filterPolicy),
+		).(*workerPool)
 
 		msg := redis.XMessage{
 			ID:     "3-0",
@@ -192,17 +186,14 @@ func TestPriorityWorker_DecoupledAbstractionAndFailureHandling(t *testing.T) {
 		}
 		dlPolicy := NewStandardDeadLetterPolicy("priority-dead-letters", dlHook)
 
-		opts := WorkerOptions{
-			Broker:           mb,
-			RetryPolicy:      mp,
-			DeadLetterPolicy: dlPolicy,
-			PriorityQueues: []QueuePriority{
+		pw := NewPriorityWorker(rdb, logger,
+			WithBroker(mb),
+			WithRetryPolicy(mp),
+			WithDeadLetterPolicy(dlPolicy),
+			WithPriorityQueues([]QueuePriority{
 				{Name: "high", Weight: 10},
-			},
-		}
-		opts.ApplyDefaults(rdb, logger, "", JSONCodec{})
-
-		pw := NewPriorityWorker(rdb, logger, opts).(*priorityWorker)
+			}),
+		).(*priorityWorker)
 
 		msg := redis.XMessage{
 			ID:     "4-0",

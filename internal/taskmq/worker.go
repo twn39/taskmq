@@ -39,21 +39,9 @@ type workerPool struct {
 	cronManager CronManager
 }
 
-func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...any) Worker {
-	var options []WorkerOption
-	for _, opt := range opts {
-		switch o := opt.(type) {
-		case WorkerOption:
-			options = append(options, o)
-		case []WorkerOption:
-			options = append(options, o...)
-		case WorkerOptions:
-			options = append(options, NewDefaultWorkerOptions(rdb, logger, queue, o.Codec, o)...)
-		}
-	}
-
+func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...WorkerOption) Worker {
 	opt := defaultWorkerOptions(JSONCodec{})
-	for _, o := range options {
+	for _, o := range opts {
 		if err := o(&opt); err != nil {
 			panic(fmt.Errorf("invalid option: %w", err))
 		}

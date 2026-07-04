@@ -39,10 +39,9 @@ func TestTaskMQ_GRPCFlow(t *testing.T) {
 			taskmq.NewClient,
 			taskmq.NewGRPCServer,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
-					Concurrency: 2,
-				})
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithConcurrency(2),
+				)
 				pool.Register("task:grpc-test", func(ctx context.Context, task *taskmq.Task) error {
 					runChan <- string(task.Payload)
 					return nil

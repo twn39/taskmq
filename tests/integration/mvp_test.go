@@ -42,12 +42,11 @@ func TestTaskMQ_MVPFlow(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
-					Group:       "test-group",
-					Consumer:    "test-consumer",
-					Concurrency: 2,
-				})
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithGroup("test-group"),
+					taskmq.WithConsumer("test-consumer"),
+					taskmq.WithConcurrency(2),
+				)
 				pool.Register("email:welcome", func(ctx context.Context, task *taskmq.Task) error {
 					var email WelcomeEmail
 					if err := json.Unmarshal(task.Payload, &email); err != nil {
@@ -120,11 +119,10 @@ func TestTaskMQ_SyncExecution(t *testing.T) {
 				return taskmq.NewClient(rdb)
 			},
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
-					Concurrency:   2,
-					SyncExecution: true,
-				})
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithConcurrency(2),
+					taskmq.WithSyncExecution(true),
+				)
 				pool.Register("task:sync-exec-test", func(ctx context.Context, task *taskmq.Task) error {
 					runChan <- string(task.Payload)
 					return nil
@@ -179,10 +177,9 @@ func TestTaskMQ_ExecutionPoolPanicRecovery(t *testing.T) {
 				return taskmq.NewClient(rdb)
 			},
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
-					Concurrency: 2,
-				})
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithConcurrency(2),
+				)
 				pool.Register("task:panic-test", func(ctx context.Context, task *taskmq.Task) error {
 					panic("something went terribly wrong")
 				})

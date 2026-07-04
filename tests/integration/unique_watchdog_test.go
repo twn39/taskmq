@@ -37,12 +37,11 @@ func TestTaskMQ_UniqueScope_UntilStart(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
-					Group:       "start-group",
-					Consumer:    "start-consumer",
-					Concurrency: 1,
-				})
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithGroup("start-group"),
+					taskmq.WithConsumer("start-consumer"),
+					taskmq.WithConcurrency(1),
+				)
 				pool.Register("task:unq_start", func(ctx context.Context, task *taskmq.Task) error {
 					startedChan <- true
 					<-handlerSleepChan // Keep handler running
@@ -113,12 +112,11 @@ func TestTaskMQ_UniqueScope_UntilSuccess(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
-					Group:       "success-group",
-					Consumer:    "success-consumer",
-					Concurrency: 1,
-				})
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithGroup("success-group"),
+					taskmq.WithConsumer("success-consumer"),
+					taskmq.WithConcurrency(1),
+				)
 				pool.Register("task:unq_success", func(ctx context.Context, task *taskmq.Task) error {
 					if string(task.Payload) == "fail" {
 						runChan <- errors.New("fail")
@@ -202,12 +200,11 @@ func TestTaskMQ_Unique_WatchdogRenewal(t *testing.T) {
 			internalredis.NewRedisClient,
 			taskmq.NewClient,
 			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				opts := taskmq.NewDefaultWorkerOptions(rdb, logger, queueName, taskmq.JSONCodec{}, taskmq.WorkerOptions{
-					Group:       "watchdog-group",
-					Consumer:    "watchdog-consumer",
-					Concurrency: 1,
-				})
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithGroup("watchdog-group"),
+					taskmq.WithConsumer("watchdog-consumer"),
+					taskmq.WithConcurrency(1),
+				)
 				pool.Register("task:unq_watchdog", func(ctx context.Context, task *taskmq.Task) error {
 					startedChan <- true
 					<-handlerSleepChan // Keep handler running to test watchdog
