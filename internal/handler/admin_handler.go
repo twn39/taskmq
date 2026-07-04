@@ -223,3 +223,62 @@ func (h *AdminHandler) EnqueueTest(c *echo.Context) error {
 		"task_id": task.ID,
 	})
 }
+
+func (h *AdminHandler) ListScheduled(c *echo.Context) error {
+	ctx := c.Request().Context()
+	queue := c.Param("queue")
+	if queue == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue parameter"})
+	}
+
+	limitStr := c.QueryParam("limit")
+	limit := 50
+	if limitStr != "" {
+		if lim, err := strconv.Atoi(limitStr); err == nil && lim > 0 {
+			limit = lim
+		}
+	}
+
+	tasks, err := h.client.ListScheduledTasks(ctx, queue, limit)
+	if err != nil {
+		h.logger.Error("Failed to list scheduled tasks", zap.String("queue", queue), zap.Error(err))
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	if tasks == nil {
+		return c.JSON(http.StatusOK, []interface{}{})
+	}
+	return c.JSON(http.StatusOK, tasks)
+}
+
+func (h *AdminHandler) RunScheduled(c *echo.Context) error {
+	ctx := c.Request().Context()
+	queue := c.Param("queue")
+	id := c.Param("id")
+	if queue == "" || id == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue or id parameter"})
+	}
+
+	if err := h.client.RunScheduledTask(ctx, queue, id); err != nil {
+		h.logger.Error("Failed to run scheduled task", zap.String("queue", queue), zap.String("id", id), zap.Error(err))
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{"message": fmt.Sprintf("Task '%s' successfully promoted to run immediately", id)})
+}
+
+func (h *AdminHandler) DeleteScheduled(c *echo.Context) error {
+	ctx := c.Request().Context()
+	queue := c.Param("queue")
+	id := c.Param("id")
+	if queue == "" || id == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue or id parameter"})
+	}
+
+	if err := h.client.DeleteScheduledTask(ctx, queue, id); err != nil {
+		h.logger.Error("Failed to delete scheduled task", zap.String("queue", queue), zap.String("id", id), zap.Error(err))
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{"message": fmt.Sprintf("Task '%s' successfully deleted from scheduled tasks", id)})
+}

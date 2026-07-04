@@ -63,6 +63,9 @@ func NewServer(lc fx.Lifecycle, logger *zap.Logger, adminHandler *handler.AdminH
 	e.POST("/api/queues/:queue/dlq/:id/retry", adminHandler.RetryDLQ)
 	e.DELETE("/api/queues/:queue/dlq/:id", adminHandler.DeleteDLQ)
 	e.POST("/api/queues/:queue/enqueue", adminHandler.EnqueueTest)
+	e.GET("/api/queues/:queue/scheduled", adminHandler.ListScheduled)
+	e.POST("/api/queues/:queue/scheduled/:id/run", adminHandler.RunScheduled)
+	e.DELETE("/api/queues/:queue/scheduled/:id", adminHandler.DeleteScheduled)
 
 	// Lifecycle hooks
 	serverCtx, cancelServer := context.WithCancel(context.Background())

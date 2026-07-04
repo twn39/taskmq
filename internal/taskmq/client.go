@@ -78,6 +78,11 @@ var deleteDeadLetterCmd = redis.NewScript(`
 	return 0
 `)
 
+type ScheduledTask struct {
+	*Task
+	RunAt time.Time `json:"run_at"`
+}
+
 type Client interface {
 	Enqueue(ctx context.Context, task *Task) error
 	EnqueueIn(ctx context.Context, task *Task, delay time.Duration) error
@@ -90,6 +95,9 @@ type Client interface {
 	Pause(ctx context.Context, queue string) error
 	Resume(ctx context.Context, queue string) error
 	IsPaused(ctx context.Context, queue string) (bool, error)
+	ListScheduledTasks(ctx context.Context, queue string, limit int) ([]*ScheduledTask, error)
+	RunScheduledTask(ctx context.Context, queue string, taskID string) error
+	DeleteScheduledTask(ctx context.Context, queue string, taskID string) error
 }
 
 type client struct {
@@ -366,4 +374,110 @@ func (c *client) IsPaused(ctx context.Context, queue string) (bool, error) {
 		return false, err
 	}
 	return val > 0, nil
+}
+
+func (c *client) ListScheduledTasks(ctx context.Context, queue string, limit int) ([]*ScheduledTask, error) {
+	delayedKey := DelayedKey(queue)
+	zs, err := c.rdb.ZRangeWithScores(ctx, delayedKey, 0, int64(limit-1)).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	scheduled := make([]*ScheduledTask, 0, len(zs))
+	for _, z := range zs {
+		task := &Task{}
+		memberStr, ok := z.Member.(string)
+		if !ok {
+			continue
+		}
+		err := c.codec.Unmarshal([]byte(memberStr), task)
+		if err != nil {
+			continue
+		}
+		runAt := time.UnixMilli(int64(z.Score))
+		scheduled = append(scheduled, &ScheduledTask{
+			Task:  task,
+			RunAt: runAt,
+		})
+	}
+	return scheduled, nil
+}
+
+func (c *client) RunScheduledTask(ctx context.Context, queue string, taskID string) error {
+	delayedKey := DelayedKey(queue)
+	members, err := c.rdb.ZRange(ctx, delayedKey, 0, -1).Result()
+	if err != nil {
+		return err
+	}
+
+	var targetMember string
+	for _, m := range members {
+		task := &Task{}
+		if err := c.codec.Unmarshal([]byte(m), task); err == nil {
+			if task.ID == taskID {
+				targetMember = m
+				break
+			}
+		}
+	}
+
+	if targetMember == "" {
+		return fmt.Errorf("taskmq: task not found in scheduled tasks: %s", taskID)
+	}
+
+	res, err := c.rdb.ZRem(ctx, delayedKey, targetMember).Result()
+	if err != nil {
+		return err
+	}
+	if res == 0 {
+		return fmt.Errorf("taskmq: task already processed or deleted: %s", taskID)
+	}
+
+	streamKey := StreamKey(queue)
+	return c.rdb.XAdd(ctx, &redis.XAddArgs{
+		Stream: streamKey,
+		ID:     "*",
+		Values: map[string]interface{}{
+			"task": targetMember,
+		},
+	}).Err()
+}
+
+func (c *client) DeleteScheduledTask(ctx context.Context, queue string, taskID string) error {
+	delayedKey := DelayedKey(queue)
+	members, err := c.rdb.ZRange(ctx, delayedKey, 0, -1).Result()
+	if err != nil {
+		return err
+	}
+
+	var targetMember string
+	var targetTask *Task
+	for _, m := range members {
+		task := &Task{}
+		if err := c.codec.Unmarshal([]byte(m), task); err == nil {
+			if task.ID == taskID {
+				targetMember = m
+				targetTask = task
+				break
+			}
+		}
+	}
+
+	if targetMember == "" {
+		return fmt.Errorf("taskmq: task not found in scheduled tasks: %s", taskID)
+	}
+
+	res, err := c.rdb.ZRem(ctx, delayedKey, targetMember).Result()
+	if err != nil {
+		return err
+	}
+	if res == 0 {
+		return fmt.Errorf("taskmq: task already processed or deleted: %s", taskID)
+	}
+
+	if targetTask.UniqueKey != "" {
+		lockKey := UniqueKey(targetTask.Queue, targetTask.UniqueKey)
+		_ = c.rdb.Del(ctx, lockKey).Err()
+	}
+	return nil
 }

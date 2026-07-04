@@ -7,7 +7,7 @@ func NewTestConfig() *config.Config {
 	return &config.Config{
 		Server: config.ServerConfig{
 			Port:     ":8081",
-			GRPCPort: ":50051",
+			GRPCPort: ":50085",
 		},
 		Logger: config.LoggerConfig{
 			Level: "error", // Quiet logs during test

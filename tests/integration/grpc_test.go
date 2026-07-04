@@ -8,6 +8,7 @@ import (
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	taskmqv1 "github.com/twn39/taskmq/api/proto/taskmq/v1"
+	"github.com/twn39/taskmq/internal/config"
 	"github.com/twn39/taskmq/internal/logger"
 	internalredis "github.com/twn39/taskmq/internal/redis"
 	"github.com/twn39/taskmq/internal/taskmq"
@@ -30,6 +31,7 @@ func TestTaskMQ_GRPCFlow(t *testing.T) {
 	var rdb *goredis.Client
 	var client taskmq.Client
 	var worker taskmq.Worker
+	var cfg *config.Config
 
 	app := fxtest.New(t,
 		fx.Provide(
@@ -51,7 +53,7 @@ func TestTaskMQ_GRPCFlow(t *testing.T) {
 		),
 		fx.Invoke(taskmq.RegisterWorkerPoolLifecycle),
 		fx.Invoke(taskmq.RegisterGRPCServerLifecycle),
-		fx.Populate(&rdb, &client, &worker),
+		fx.Populate(&rdb, &client, &worker, &cfg),
 	)
 
 	// Clean up Redis
@@ -61,8 +63,8 @@ func TestTaskMQ_GRPCFlow(t *testing.T) {
 	app.RequireStart()
 	defer app.RequireStop()
 
-	// 1. Establish gRPC Client Connection to localhost:50051 (default port in config)
-	conn, err := grpc.Dial("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	// 1. Establish gRPC Client Connection to localhost + dynamic port in config
+	conn, err := grpc.Dial("localhost"+cfg.Server.GRPCPort, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatalf("Failed to dial gRPC: %v", err)
 	}

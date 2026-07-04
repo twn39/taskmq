@@ -41,6 +41,7 @@
         queues: [],
         selectedQueue: 'default',
         dlqTasks: [],
+        scheduledTasks: [],
         selectedTask: null,
         loading: false,
         autoRefresh: '5',
@@ -86,6 +87,9 @@
                     if (this.tab === 'dlq' && this.selectedQueue) {
                         this.fetchDLQ();
                     }
+                    if (this.tab === 'scheduled' && this.selectedQueue) {
+                        this.fetchScheduled();
+                    }
                 }, interval);
             }
         },
@@ -119,6 +123,47 @@
                 this.addNotification(err.message, 'error');
             } finally {
                 this.loading = false;
+            }
+        },
+
+        async fetchScheduled() {
+            if (!this.selectedQueue) return;
+            this.loading = true;
+            try {
+                const res = await fetch(`/api/queues/${this.selectedQueue}/scheduled?limit=50`);
+                if (!res.ok) throw new Error('Failed to fetch scheduled tasks');
+                this.scheduledTasks = await res.json();
+            } catch (err) {
+                this.addNotification(err.message, 'error');
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        async runScheduled(queue, id) {
+            try {
+                const res = await fetch(`/api/queues/${queue}/scheduled/${id}/run`, { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to trigger task');
+                this.addNotification(data.message);
+                this.fetchScheduled();
+                this.fetchStats();
+            } catch (err) {
+                this.addNotification(err.message, 'error');
+            }
+        },
+
+        async deleteScheduled(queue, id) {
+            if (!confirm('Are you sure you want to permanently cancel/delete this scheduled task?')) return;
+            try {
+                const res = await fetch(`/api/queues/${queue}/scheduled/${id}`, { method: 'DELETE' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to delete task');
+                this.addNotification(data.message);
+                this.fetchScheduled();
+                this.fetchStats();
+            } catch (err) {
+                this.addNotification(err.message, 'error');
             }
         },
 
@@ -237,7 +282,7 @@
 
                     <!-- Force Refresh Button -->
                     <button 
-                        @click="fetchStats(); if(tab === 'dlq') fetchDLQ();"
+                        @click="fetchStats(); if(tab === 'dlq') fetchDLQ(); if(tab === 'scheduled') fetchScheduled();"
                         class="p-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800/80 rounded-lg transition duration-200"
                         title="Force Refresh"
                     >
@@ -344,6 +389,13 @@
                         Overview & Queues
                     </button>
                     <button 
+                        @click="tab = 'scheduled'; fetchScheduled();"
+                        :class="tab === 'scheduled' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/25' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'"
+                        class="px-4 py-2 text-sm font-semibold rounded-lg transition duration-200"
+                    >
+                        Scheduled Tasks
+                    </button>
+                    <button 
                         @click="tab = 'dlq'; fetchDLQ();"
                         :class="tab === 'dlq' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/25' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'"
                         class="px-4 py-2 text-sm font-semibold rounded-lg transition duration-200"
@@ -422,6 +474,90 @@
                     </div>
                 </div>
             </div>
+
+            <!-- TAB CONTENT: SCHEDULED TASKS -->
+            <div x-show="tab === 'scheduled'" class="flex flex-col space-y-6">
+                <!-- Settings bar -->
+                <div class="bg-white dark:bg-slate-900/30 border border-slate-200 dark:border-slate-800/60 rounded-2xl p-6 shadow-sm dark:shadow-xl backdrop-blur-md flex flex-col md:flex-row md:items-center justify-between gap-4 transition duration-200">
+                    <div class="flex items-center space-x-3">
+                        <span class="text-sm font-semibold text-slate-700 dark:text-slate-300">Select Target Queue:</span>
+                        <select 
+                            x-model="selectedQueue"
+                            @change="fetchScheduled()"
+                            class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 text-sm rounded-xl focus:ring-indigo-500 focus:border-indigo-500 p-2.5 pr-8 font-medium focus:outline-none"
+                        >
+                            <template x-for="q in queues" :key="q.name">
+                                <option :value="q.name" x-text="q.name" :selected="q.name === selectedQueue"></option>
+                            </template>
+                        </select>
+                    </div>
+
+                    <span class="text-xs text-indigo-600 dark:text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-3 py-1.5 rounded-xl font-medium"
+                          x-show="scheduledTasks.length > 0">
+                        ⏰ Showing up to 50 scheduled tasks waiting to run.
+                    </span>
+                </div>
+
+                <!-- Scheduled Tasks Table -->
+                <div class="bg-white dark:bg-slate-900/30 border border-slate-200 dark:border-slate-800/60 rounded-2xl overflow-hidden shadow-sm dark:shadow-xl transition duration-200">
+                    <div class="px-6 py-5 border-b border-slate-200 dark:border-slate-800/80 flex items-center justify-between">
+                        <h2 class="text-base font-bold text-slate-900 dark:text-white" x-text="`Scheduled Tasks Queue: ${selectedQueue}`"></h2>
+                        <span class="text-xs text-slate-500 dark:text-slate-400" x-text="`Scheduled Count: ${scheduledTasks.length}`"></span>
+                    </div>
+
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse">
+                            <thead>
+                                <tr class="border-b border-slate-200 dark:border-slate-800/50 bg-slate-50 dark:bg-slate-900/40 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                                    <th class="px-6 py-4">Task ID</th>
+                                    <th class="px-6 py-4">Task Name</th>
+                                    <th class="px-6 py-4">Scheduled Execution Time</th>
+                                    <th class="px-6 py-4 text-center">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-200 dark:divide-slate-800/40 text-sm">
+                                <template x-for="stask in scheduledTasks" :key="stask.id">
+                                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-900/20 transition duration-150">
+                                        <td class="px-6 py-4 font-mono text-slate-500 dark:text-slate-400 text-xs" x-text="stask.id.substring(0, 8) + '...'"></td>
+                                        <td class="px-6 py-4 font-bold text-slate-900 dark:text-white" x-text="stask.name"></td>
+                                        <td class="px-6 py-4 text-slate-700 dark:text-slate-300 font-mono text-xs">
+                                            <span x-text="new Date(stask.run_at).toLocaleString()"></span>
+                                        </td>
+                                        <td class="px-6 py-4 text-center flex items-center justify-center space-x-2">
+                                            <!-- Inspect -->
+                                            <button 
+                                                @click="selectedTask = stask; showTaskModal = true"
+                                                class="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-750 px-2.5 py-1.5 rounded-lg text-xs font-bold transition duration-200"
+                                            >
+                                                Inspect
+                                            </button>
+                                            <!-- Trigger Now -->
+                                            <button 
+                                                @click="runScheduled(selectedQueue, stask.id)"
+                                                class="bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold transition duration-200 shadow-md shadow-emerald-600/10"
+                                            >
+                                                Run Now
+                                            </button>
+                                            <!-- Cancel / Delete -->
+                                            <button 
+                                                @click="deleteScheduled(selectedQueue, stask.id)"
+                                                class="bg-rose-600/15 hover:bg-rose-600/25 text-rose-600 dark:text-rose-400 border border-rose-500/10 px-2.5 py-1.5 rounded-lg text-xs font-bold transition duration-200"
+                                            >
+                                                Cancel
+                                            </button>
+                                        </td>
+                                    </tr>
+                                </template>
+                                <tr x-show="scheduledTasks.length === 0">
+                                    <td colspan="4" class="px-6 py-12 text-center text-slate-500 font-medium">
+                                        No scheduled tasks found in this queue.
+                                    </td>
+                                </tr>
+                              </tbody>
+                          </table>
+                      </div>
+                  </div>
+              </div>
 
             <!-- TAB CONTENT: DLQ INSPECTOR -->
             <div x-show="tab === 'dlq'" class="flex flex-col space-y-6">

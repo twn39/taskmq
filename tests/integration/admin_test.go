@@ -181,4 +181,61 @@ func TestAdminDashboard(t *testing.T) {
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.Contains(t, rec.Body.String(), "successfully deleted from DLQ")
 	})
+
+	t.Run("Scheduled Tasks Management APIs", func(t *testing.T) {
+		queueName := "test-admin-queue"
+		delayedKey := taskmq.DelayedKey(queueName)
+
+		rdb.Del(ctx, delayedKey)
+		defer rdb.Del(ctx, delayedKey)
+
+		// Enqueue a delayed task via the API
+		reqBody, _ := json.Marshal(map[string]interface{}{
+			"queue":     queueName,
+			"name":      "task:delayed-test",
+			"payload":   `{"test":true}`,
+			"delay_sec": 60,
+		})
+		req := httptest.NewRequest(http.MethodPost, "/api/queues/test-admin-queue/enqueue", bytes.NewReader(reqBody))
+		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		var resp map[string]interface{}
+		_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+		taskID := resp["task_id"].(string)
+
+		// 1. List Scheduled Tasks
+		req = httptest.NewRequest(http.MethodGet, "/api/queues/test-admin-queue/scheduled", nil)
+		rec = httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), taskID)
+		assert.Contains(t, rec.Body.String(), "task:delayed-test")
+
+		// 2. Promote / Run Scheduled Task Immediately
+		req = httptest.NewRequest(http.MethodPost, "/api/queues/test-admin-queue/scheduled/"+taskID+"/run", nil)
+		rec = httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), "promoted to run immediately")
+
+		// Enqueue another delayed task to test deletion
+		req = httptest.NewRequest(http.MethodPost, "/api/queues/test-admin-queue/enqueue", bytes.NewReader(reqBody))
+		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
+		rec = httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		_ = json.Unmarshal(rec.Body.Bytes(), &resp)
+		taskID2 := resp["task_id"].(string)
+
+		// 3. Delete Scheduled Task
+		req = httptest.NewRequest(http.MethodDelete, "/api/queues/test-admin-queue/scheduled/"+taskID2, nil)
+		rec = httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), "deleted from scheduled tasks")
+	})
 }
