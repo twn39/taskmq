@@ -43,6 +43,11 @@ type baseWorker struct {
 
 	middlewareChain []CoreHandlerFunc
 	cancelations    *Cancelations
+
+	// Queue Pause/Resume Tracking
+	mu           sync.RWMutex
+	pausedQueues map[string]bool
+	pauseChans   map[string]chan struct{}
 }
 
 func (b *baseWorker) initBase(rdb *redis.Client, logger *zap.Logger, opt *workerOptions) {
@@ -52,6 +57,9 @@ func (b *baseWorker) initBase(rdb *redis.Client, logger *zap.Logger, opt *worker
 	b.parentCtx = opt.context
 	b.limiter = NewGCRALimiter(rdb)
 	b.cancelations = NewCancelations()
+
+	b.pausedQueues = make(map[string]bool)
+	b.pauseChans = make(map[string]chan struct{})
 
 	b.group = opt.group
 	b.consumer = opt.consumer
@@ -176,7 +184,10 @@ func (b *baseWorker) processMessage(ctx context.Context, streamKey string, msg r
 	isCancelled, err := b.rdb.Exists(ctx, cancelledKey).Result()
 	if err == nil && isCancelled > 0 {
 		b.logger.Warn("Task was cancelled before execution, discarding atomically", zap.String("task_id", task.ID))
-		_ = b.broker.CompleteTask(ctx, &task, streamKey, msg.ID, b.group)
+		errComplete := b.broker.CompleteTask(ctx, &task, streamKey, msg.ID, b.group)
+		if errComplete != nil {
+			b.logger.Error("Failed to complete task in cancel check", zap.Error(errComplete))
+		}
 		return
 	}
 
@@ -263,6 +274,108 @@ func (b *baseWorker) startCancelSubscriber(ctx context.Context, wg *sync.WaitGro
 				}
 				taskID := msg.Payload
 				b.cancelations.Cancel(taskID)
+			}
+		}
+	}()
+}
+
+func (b *baseWorker) isQueuePaused(queue string) bool {
+	b.mu.RLock()
+	defer b.mu.RUnlock()
+	return b.pausedQueues[queue]
+}
+
+func (b *baseWorker) setQueuePaused(queue string, paused bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	oldPaused := b.pausedQueues[queue]
+	b.pausedQueues[queue] = paused
+
+	// If transitioning from paused to active, close the channel to broadcast to all waiting workers
+	if oldPaused && !paused {
+		if ch, ok := b.pauseChans[queue]; ok {
+			close(ch)
+			delete(b.pauseChans, queue)
+		}
+	}
+}
+
+func (b *baseWorker) getOrInitPauseChan(queue string) chan struct{} {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+
+	ch, ok := b.pauseChans[queue]
+	if !ok {
+		ch = make(chan struct{})
+		b.pauseChans[queue] = ch
+	}
+	return ch
+}
+
+func (b *baseWorker) reconcilePausedStates(ctx context.Context, queues []string) {
+	for _, q := range queues {
+		pausedKey := PausedKey(q)
+		val, err := b.rdb.Exists(ctx, pausedKey).Result()
+		if err == nil {
+			isPaused := val > 0
+			b.setQueuePaused(q, isPaused)
+		}
+	}
+}
+
+func (b *baseWorker) startControlSubscriber(ctx context.Context, wg *sync.WaitGroup, queues []string) {
+	if len(queues) == 0 {
+		return
+	}
+
+	// Initialize state
+	b.reconcilePausedStates(ctx, queues)
+
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		channels := make([]string, len(queues))
+		for i, q := range queues {
+			channels[i] = ControlChannel(q)
+		}
+		pubsub := b.rdb.Subscribe(ctx, channels...)
+		defer pubsub.Close()
+
+		ch := pubsub.Channel()
+		reconcileTicker := time.NewTicker(5 * time.Second)
+		defer reconcileTicker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-reconcileTicker.C:
+				b.reconcilePausedStates(ctx, queues)
+			case msg, ok := <-ch:
+				if !ok {
+					return
+				}
+
+				// Find which queue channel this message belongs to
+				var matchedQueue string
+				for _, q := range queues {
+					if msg.Channel == ControlChannel(q) {
+						matchedQueue = q
+						break
+					}
+				}
+
+				if matchedQueue == "" {
+					continue
+				}
+
+				switch msg.Payload {
+				case "pause":
+					b.setQueuePaused(matchedQueue, true)
+				case "resume":
+					b.setQueuePaused(matchedQueue, false)
+				}
 			}
 		}
 	}()

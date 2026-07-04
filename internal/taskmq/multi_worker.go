@@ -202,6 +202,9 @@ func (pw *priorityWorker) Start(ctx context.Context) error {
 	}
 	pw.startCancelSubscriber(pw.ctx, &pw.wg, queues)
 
+	// Start Queue Control (Pause/Resume) Subscriber loop
+	pw.startControlSubscriber(pw.ctx, &pw.wg, queues)
+
 	for i := 0; i < pw.concurrency; i++ {
 		pw.wg.Add(1)
 		go pw.worker()
@@ -250,8 +253,13 @@ func (pw *priorityWorker) worker() {
 			}
 
 			messageFetched := false
+			allQueuesPaused := true
 
 			for _, qName := range queueNames {
+				if pw.isQueuePaused(qName) {
+					continue
+				}
+				allQueuesPaused = false
 				streamKey := StreamKey(qName)
 
 				streams, err := pw.rdb.XReadGroup(pw.consumerCtx, &redis.XReadGroupArgs{
@@ -306,7 +314,11 @@ func (pw *priorityWorker) worker() {
 			}
 
 			if !messageFetched {
-				time.Sleep(50 * time.Millisecond)
+				if allQueuesPaused {
+					time.Sleep(200 * time.Millisecond)
+				} else {
+					time.Sleep(50 * time.Millisecond)
+				}
 			}
 		}
 	}

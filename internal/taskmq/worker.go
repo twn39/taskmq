@@ -139,6 +139,9 @@ func (w *workerPool) Start(ctx context.Context) error {
 	// Start Cancellation Subscriber loop
 	w.startCancelSubscriber(w.ctx, &w.wg, []string{w.queue})
 
+	// Start Queue Control (Pause/Resume) Subscriber loop
+	w.startControlSubscriber(w.ctx, &w.wg, []string{w.queue})
+
 	// Start concurrent workers to consume queue
 	for i := 0; i < w.concurrency; i++ {
 		w.wg.Add(1)
@@ -164,6 +167,19 @@ func (w *workerPool) runBackgroundLoop(workerID int) {
 			w.logger.Debug("Worker consumer context cancelled, exiting loop", zap.String("consumer", consumerName))
 			return
 		default:
+			// Check if queue is paused before fetching
+			if w.isQueuePaused(w.queue) {
+				w.logger.Debug("Queue is paused, consumer waiting for resume signal", zap.String("queue", w.queue), zap.String("consumer", consumerName))
+				pauseCh := w.getOrInitPauseChan(w.queue)
+				select {
+				case <-w.consumerCtx.Done():
+					return
+				case <-pauseCh:
+					w.logger.Debug("Queue resumed, worker waking up", zap.String("queue", w.queue), zap.String("consumer", consumerName))
+				}
+				continue
+			}
+
 			// Read messages from the stream
 			streams, err := w.rdb.XReadGroup(w.consumerCtx, &redis.XReadGroupArgs{
 				Group:    w.group,

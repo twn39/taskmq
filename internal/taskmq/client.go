@@ -73,6 +73,9 @@ type Client interface {
 	DeleteDeadLetter(ctx context.Context, queue string, taskID string) error
 	RetryDeadLetter(ctx context.Context, queue string, taskID string) error
 	CancelTask(ctx context.Context, queue, taskID string) error
+	Pause(ctx context.Context, queue string) error
+	Resume(ctx context.Context, queue string) error
+	IsPaused(ctx context.Context, queue string) (bool, error)
 }
 
 type client struct {
@@ -333,4 +336,33 @@ func (c *client) CancelTask(ctx context.Context, queue, taskID string) error {
 
 	cancelChannel := fmt.Sprintf("taskmq:{%s}:cancel", queue)
 	return c.rdb.Publish(ctx, cancelChannel, taskID).Err()
+}
+
+func (c *client) Pause(ctx context.Context, queue string) error {
+	pausedKey := PausedKey(queue)
+	if err := c.rdb.Set(ctx, pausedKey, "1", 0).Err(); err != nil {
+		return fmt.Errorf("taskmq: failed to set pause marker: %w", err)
+	}
+
+	controlChannel := ControlChannel(queue)
+	return c.rdb.Publish(ctx, controlChannel, "pause").Err()
+}
+
+func (c *client) Resume(ctx context.Context, queue string) error {
+	pausedKey := PausedKey(queue)
+	if err := c.rdb.Del(ctx, pausedKey).Err(); err != nil {
+		return fmt.Errorf("taskmq: failed to delete pause marker: %w", err)
+	}
+
+	controlChannel := ControlChannel(queue)
+	return c.rdb.Publish(ctx, controlChannel, "resume").Err()
+}
+
+func (c *client) IsPaused(ctx context.Context, queue string) (bool, error) {
+	pausedKey := PausedKey(queue)
+	val, err := c.rdb.Exists(ctx, pausedKey).Result()
+	if err != nil {
+		return false, err
+	}
+	return val > 0, nil
 }

@@ -23,3 +23,11 @@ func UniqueKey(queue, uniqueKey string) string {
 func CronConfigsKey(queue string) string {
 	return fmt.Sprintf("taskmq:{%s}:cron_configs", queue)
 }
+
+func PausedKey(queue string) string {
+	return fmt.Sprintf("taskmq:{%s}:paused", queue)
+}
+
+func ControlChannel(queue string) string {
+	return fmt.Sprintf("taskmq:{%s}:control", queue)
+}
