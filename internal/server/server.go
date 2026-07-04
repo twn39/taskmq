@@ -66,6 +66,9 @@ func NewServer(lc fx.Lifecycle, logger *zap.Logger, adminHandler *handler.AdminH
 	e.GET("/api/queues/:queue/scheduled", adminHandler.ListScheduled)
 	e.POST("/api/queues/:queue/scheduled/:id/run", adminHandler.RunScheduled)
 	e.DELETE("/api/queues/:queue/scheduled/:id", adminHandler.DeleteScheduled)
+	e.GET("/api/queues/:queue/cron", adminHandler.ListCron)
+	e.POST("/api/queues/:queue/cron/:job_name/run", adminHandler.RunCron)
+	e.DELETE("/api/queues/:queue/cron/:job_name", adminHandler.DeleteCron)
 
 	// Lifecycle hooks
 	serverCtx, cancelServer := context.WithCancel(context.Background())

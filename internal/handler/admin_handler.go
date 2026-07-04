@@ -282,3 +282,54 @@ func (h *AdminHandler) DeleteScheduled(c *echo.Context) error {
 
 	return c.JSON(http.StatusOK, map[string]string{"message": fmt.Sprintf("Task '%s' successfully deleted from scheduled tasks", id)})
 }
+
+func (h *AdminHandler) ListCron(c *echo.Context) error {
+	ctx := c.Request().Context()
+	queue := c.Param("queue")
+	if queue == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue parameter"})
+	}
+
+	jobs, err := h.client.ListCronJobs(ctx, queue)
+	if err != nil {
+		h.logger.Error("Failed to list cron jobs", zap.String("queue", queue), zap.Error(err))
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	if jobs == nil {
+		return c.JSON(http.StatusOK, []interface{}{})
+	}
+	return c.JSON(http.StatusOK, jobs)
+}
+
+func (h *AdminHandler) RunCron(c *echo.Context) error {
+	ctx := c.Request().Context()
+	queue := c.Param("queue")
+	jobName := c.Param("job_name")
+	if queue == "" || jobName == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue or job_name parameter"})
+	}
+
+	if err := h.client.RunCronJob(ctx, queue, jobName); err != nil {
+		h.logger.Error("Failed to trigger cron job", zap.String("queue", queue), zap.String("jobName", jobName), zap.Error(err))
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{"message": fmt.Sprintf("Cron job '%s' successfully triggered to run immediately", jobName)})
+}
+
+func (h *AdminHandler) DeleteCron(c *echo.Context) error {
+	ctx := c.Request().Context()
+	queue := c.Param("queue")
+	jobName := c.Param("job_name")
+	if queue == "" || jobName == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue or job_name parameter"})
+	}
+
+	if err := h.client.DeleteCronJob(ctx, queue, jobName); err != nil {
+		h.logger.Error("Failed to delete cron job", zap.String("queue", queue), zap.String("jobName", jobName), zap.Error(err))
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{"message": fmt.Sprintf("Cron job '%s' successfully deleted", jobName)})
+}

@@ -83,6 +83,12 @@ type ScheduledTask struct {
 	RunAt time.Time `json:"run_at"`
 }
 
+type CronJob struct {
+	JobName     string    `json:"job_name"`
+	*Task
+	NextRunTime time.Time `json:"next_run_time"`
+}
+
 type Client interface {
 	Enqueue(ctx context.Context, task *Task) error
 	EnqueueIn(ctx context.Context, task *Task, delay time.Duration) error
@@ -98,6 +104,9 @@ type Client interface {
 	ListScheduledTasks(ctx context.Context, queue string, limit int) ([]*ScheduledTask, error)
 	RunScheduledTask(ctx context.Context, queue string, taskID string) error
 	DeleteScheduledTask(ctx context.Context, queue string, taskID string) error
+	ListCronJobs(ctx context.Context, queue string) ([]*CronJob, error)
+	RunCronJob(ctx context.Context, queue string, jobName string) error
+	DeleteCronJob(ctx context.Context, queue string, jobName string) error
 }
 
 type client struct {
@@ -480,4 +489,70 @@ func (c *client) DeleteScheduledTask(ctx context.Context, queue string, taskID s
 		_ = c.rdb.Del(ctx, lockKey).Err()
 	}
 	return nil
+}
+
+func (c *client) ListCronJobs(ctx context.Context, queue string) ([]*CronJob, error) {
+	configsKey := CronConfigsKey(queue)
+	configs, err := c.rdb.HGetAll(ctx, configsKey).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	jobs := make([]*CronJob, 0, len(configs))
+	for jobName, configStr := range configs {
+		task := &Task{}
+		err := c.codec.Unmarshal([]byte(configStr), task)
+		if err != nil {
+			continue
+		}
+
+		nextRun := time.Time{}
+		if task.CronSpec != "" {
+			if sched, err := CronParser.Parse(task.CronSpec); err == nil {
+				nextRun = sched.Next(time.Now())
+			}
+		}
+
+		jobs = append(jobs, &CronJob{
+			JobName:     jobName,
+			Task:        task,
+			NextRunTime: nextRun,
+		})
+	}
+	return jobs, nil
+}
+
+func (c *client) RunCronJob(ctx context.Context, queue string, jobName string) error {
+	configsKey := CronConfigsKey(queue)
+	configStr, err := c.rdb.HGet(ctx, configsKey, jobName).Result()
+	if err == redis.Nil {
+		return fmt.Errorf("taskmq: cron job not found: %s", jobName)
+	} else if err != nil {
+		return err
+	}
+
+	streamKey := StreamKey(queue)
+	return c.rdb.XAdd(ctx, &redis.XAddArgs{
+		Stream: streamKey,
+		ID:     "*",
+		Values: map[string]interface{}{
+			"task": configStr,
+		},
+	}).Err()
+}
+
+func (c *client) DeleteCronJob(ctx context.Context, queue string, jobName string) error {
+	configsKey := CronConfigsKey(queue)
+	delayedKey := DelayedKey(queue)
+
+	serialized, err := c.rdb.HGet(ctx, configsKey, jobName).Result()
+	if err == redis.Nil {
+		return fmt.Errorf("taskmq: cron job not found: %s", jobName)
+	} else if err != nil {
+		return err
+	}
+
+	_, _ = c.rdb.ZRem(ctx, delayedKey, serialized).Result()
+	_, err = c.rdb.HDel(ctx, configsKey, jobName).Result()
+	return err
 }

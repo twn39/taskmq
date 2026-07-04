@@ -27,6 +27,7 @@ func TestAdminDashboard(t *testing.T) {
 
 	var e *echo.Echo
 	var rdb *goredis.Client
+	var client taskmq.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
@@ -37,7 +38,7 @@ func TestAdminDashboard(t *testing.T) {
 			handler.NewAdminHandler,
 			server.NewServer,
 		),
-		fx.Populate(&e, &rdb),
+		fx.Populate(&e, &rdb, &client),
 	)
 
 	app.RequireStart()
@@ -237,5 +238,51 @@ func TestAdminDashboard(t *testing.T) {
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.Contains(t, rec.Body.String(), "deleted from scheduled tasks")
+	})
+
+	t.Run("Cron Schedules Management APIs", func(t *testing.T) {
+		queueName := "test-admin-queue"
+		configsKey := taskmq.CronConfigsKey(queueName)
+		delayedKey := taskmq.DelayedKey(queueName)
+
+		rdb.Del(ctx, configsKey, delayedKey)
+		defer rdb.Del(ctx, configsKey, delayedKey)
+
+		// Register a cron job
+		jobName := "test-cron-job"
+		cronSpec := "*/5 * * * * *" // every 5 seconds
+		cronTask := taskmq.NewTask("task:cron-test", []byte("cron-payload"), taskmq.TaskOptions{Queue: queueName})
+		
+		err := client.RegisterCron(ctx, jobName, cronSpec, cronTask)
+		assert.NoError(t, err)
+
+		// 1. List Cron Jobs
+		req := httptest.NewRequest(http.MethodGet, "/api/queues/test-admin-queue/cron", nil)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), jobName)
+		assert.Contains(t, rec.Body.String(), "Y3Jvbi1wYXlsb2Fk")
+
+		// 2. Trigger Cron Job Immediately
+		req = httptest.NewRequest(http.MethodPost, "/api/queues/test-admin-queue/cron/"+jobName+"/run", nil)
+		rec = httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), "successfully triggered to run immediately")
+
+		// 3. Delete Cron Job
+		req = httptest.NewRequest(http.MethodDelete, "/api/queues/test-admin-queue/cron/"+jobName, nil)
+		rec = httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), "successfully deleted")
+
+		// Verify deletion
+		req = httptest.NewRequest(http.MethodGet, "/api/queues/test-admin-queue/cron", nil)
+		rec = httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.NotContains(t, rec.Body.String(), jobName)
 	})
 }

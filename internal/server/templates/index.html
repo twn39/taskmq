@@ -42,6 +42,7 @@
         selectedQueue: 'default',
         dlqTasks: [],
         scheduledTasks: [],
+        cronJobs: [],
         selectedTask: null,
         loading: false,
         autoRefresh: '5',
@@ -89,6 +90,9 @@
                     }
                     if (this.tab === 'scheduled' && this.selectedQueue) {
                         this.fetchScheduled();
+                    }
+                    if (this.tab === 'cron' && this.selectedQueue) {
+                        this.fetchCron();
                     }
                 }, interval);
             }
@@ -161,6 +165,47 @@
                 if (!res.ok) throw new Error(data.error || 'Failed to delete task');
                 this.addNotification(data.message);
                 this.fetchScheduled();
+                this.fetchStats();
+            } catch (err) {
+                this.addNotification(err.message, 'error');
+            }
+        },
+
+        async fetchCron() {
+            if (!this.selectedQueue) return;
+            this.loading = true;
+            try {
+                const res = await fetch(`/api/queues/${this.selectedQueue}/cron`);
+                if (!res.ok) throw new Error('Failed to fetch Cron jobs');
+                this.cronJobs = await res.json();
+            } catch (err) {
+                this.addNotification(err.message, 'error');
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        async runCron(queue, jobName) {
+            try {
+                const res = await fetch(`/api/queues/${queue}/cron/${jobName}/run`, { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to trigger cron job');
+                this.addNotification(data.message);
+                this.fetchCron();
+                this.fetchStats();
+            } catch (err) {
+                this.addNotification(err.message, 'error');
+            }
+        },
+
+        async deleteCron(queue, jobName) {
+            if (!confirm(`Are you sure you want to permanently delete cron job '${jobName}'?`)) return;
+            try {
+                const res = await fetch(`/api/queues/${queue}/cron/${jobName}`, { method: 'DELETE' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to delete cron job');
+                this.addNotification(data.message);
+                this.fetchCron();
                 this.fetchStats();
             } catch (err) {
                 this.addNotification(err.message, 'error');
@@ -282,7 +327,7 @@
 
                     <!-- Force Refresh Button -->
                     <button 
-                        @click="fetchStats(); if(tab === 'dlq') fetchDLQ(); if(tab === 'scheduled') fetchScheduled();"
+                        @click="fetchStats(); if(tab === 'dlq') fetchDLQ(); if(tab === 'scheduled') fetchScheduled(); if(tab === 'cron') fetchCron();"
                         class="p-2 text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-white bg-white dark:bg-slate-900 hover:bg-slate-100 dark:hover:bg-slate-800 border border-slate-200 dark:border-slate-800/80 rounded-lg transition duration-200"
                         title="Force Refresh"
                     >
@@ -394,6 +439,13 @@
                         class="px-4 py-2 text-sm font-semibold rounded-lg transition duration-200"
                     >
                         Scheduled Tasks
+                    </button>
+                    <button 
+                        @click="tab = 'cron'; fetchCron();"
+                        :class="tab === 'cron' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-500/25' : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'"
+                        class="px-4 py-2 text-sm font-semibold rounded-lg transition duration-200"
+                    >
+                        Cron Schedules
                     </button>
                     <button 
                         @click="tab = 'dlq'; fetchDLQ();"
@@ -558,6 +610,93 @@
                       </div>
                   </div>
               </div>
+
+            <!-- TAB CONTENT: CRON SCHEDULES -->
+            <div x-show="tab === 'cron'" class="flex flex-col space-y-6">
+                <!-- Settings bar -->
+                <div class="bg-white dark:bg-slate-900/30 border border-slate-200 dark:border-slate-800/60 rounded-2xl p-6 shadow-sm dark:shadow-xl backdrop-blur-md flex flex-col md:flex-row md:items-center justify-between gap-4 transition duration-200">
+                    <div class="flex items-center space-x-3">
+                        <span class="text-sm font-semibold text-slate-700 dark:text-slate-300">Select Target Queue:</span>
+                        <select 
+                            x-model="selectedQueue"
+                            @change="fetchCron()"
+                            class="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-800 dark:text-slate-200 text-sm rounded-xl focus:ring-indigo-500 focus:border-indigo-500 p-2.5 pr-8 font-medium focus:outline-none"
+                        >
+                            <template x-for="q in queues" :key="q.name">
+                                <option :value="q.name" x-text="q.name" :selected="q.name === selectedQueue"></option>
+                            </template>
+                        </select>
+                    </div>
+
+                    <span class="text-xs text-indigo-600 dark:text-indigo-400 bg-indigo-500/10 border border-indigo-500/20 px-3 py-1.5 rounded-xl font-medium"
+                          x-show="cronJobs.length > 0">
+                        ⏰ Showing all distributed cron schedules registered for this queue.
+                    </span>
+                </div>
+
+                <!-- Cron Schedules Table -->
+                <div class="bg-white dark:bg-slate-900/30 border border-slate-200 dark:border-slate-800/60 rounded-2xl overflow-hidden shadow-sm dark:shadow-xl transition duration-200">
+                    <div class="px-6 py-5 border-b border-slate-200 dark:border-slate-800/80 flex items-center justify-between">
+                        <h2 class="text-base font-bold text-slate-900 dark:text-white" x-text="`Cron Jobs Queue: ${selectedQueue}`"></h2>
+                        <span class="text-xs text-slate-500 dark:text-slate-400" x-text="`Cron Count: ${cronJobs.length}`"></span>
+                    </div>
+
+                    <div class="overflow-x-auto">
+                        <table class="w-full text-left border-collapse">
+                            <thead>
+                                <tr class="border-b border-slate-200 dark:border-slate-800/50 bg-slate-50 dark:bg-slate-900/40 text-xs font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                                    <th class="px-6 py-4">Job Name</th>
+                                    <th class="px-6 py-4">Task Type</th>
+                                    <th class="px-6 py-4">Cron Expression</th>
+                                    <th class="px-6 py-4">Next Execution Time</th>
+                                    <th class="px-6 py-4 text-center">Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody class="divide-y divide-slate-200 dark:divide-slate-800/40 text-sm">
+                                <template x-for="job in cronJobs" :key="job.job_name">
+                                    <tr class="hover:bg-slate-50 dark:hover:bg-slate-900/20 transition duration-150">
+                                        <td class="px-6 py-4 font-bold text-slate-900 dark:text-white" x-text="job.job_name"></td>
+                                        <td class="px-6 py-4 text-slate-700 dark:text-slate-300" x-text="job.name"></td>
+                                        <td class="px-6 py-4 font-mono text-xs text-indigo-600 dark:text-indigo-400 font-semibold" x-text="job.cron_spec"></td>
+                                        <td class="px-6 py-4 text-slate-700 dark:text-slate-300 font-mono text-xs">
+                                            <span x-text="new Date(job.next_run_time).toLocaleString()"></span>
+                                        </td>
+                                        <td class="px-6 py-4 text-center flex items-center justify-center space-x-2">
+                                            <!-- Inspect -->
+                                            <button 
+                                                @click="selectedTask = job; showTaskModal = true"
+                                                class="bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-750 px-2.5 py-1.5 rounded-lg text-xs font-bold transition duration-200"
+                                            >
+                                                Inspect
+                                            </button>
+                                            <!-- Trigger Now -->
+                                            <button 
+                                                @click="runCron(selectedQueue, job.job_name)"
+                                                class="bg-emerald-600 hover:bg-emerald-500 text-white px-2.5 py-1.5 rounded-lg text-xs font-bold transition duration-200 shadow-md shadow-emerald-600/10"
+                                                title="Trigger this task once immediately"
+                                            >
+                                                Trigger Now
+                                            </button>
+                                            <!-- Delete -->
+                                            <button 
+                                                @click="deleteCron(selectedQueue, job.job_name)"
+                                                class="bg-rose-600/15 hover:bg-rose-600/25 text-rose-600 dark:text-rose-400 border border-rose-500/10 px-2.5 py-1.5 rounded-lg text-xs font-bold transition duration-200"
+                                            >
+                                                Delete
+                                            </button>
+                                        </td>
+                                    </tr>
+                                </template>
+                                <tr x-show="cronJobs.length === 0">
+                                    <td colspan="5" class="px-6 py-12 text-center text-slate-500 font-medium">
+                                        No registered cron jobs found for this queue.
+                                    </td>
+                                </tr>
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
 
             <!-- TAB CONTENT: DLQ INSPECTOR -->
             <div x-show="tab === 'dlq'" class="flex flex-col space-y-6">
