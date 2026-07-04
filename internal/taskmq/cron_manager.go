@@ -86,6 +86,7 @@ func (m *cronManager) Run(ctx context.Context) error {
 			for jobName, configStr := range configs {
 				task := &Task{}
 				if err := m.codec.Unmarshal(unsafeStringToBytes(configStr), task); err != nil {
+					m.logger.Error("Cron Self-Healing: failed to deserialize cron config", zap.String("job_name", jobName), zap.String("config", configStr), zap.Error(err))
 					continue
 				}
 				parsedConfigs[jobName] = task
@@ -133,7 +134,11 @@ func (m *cronManager) Run(ctx context.Context) error {
 				for _, member := range delayedMembers {
 					task := &Task{}
 					err := m.codec.Unmarshal(unsafeStringToBytes(member), task)
-					if err == nil && task.CronSpec != "" {
+					if err != nil {
+						m.logger.Error("Cron Self-Healing: failed to deserialize active cron task from delayed ZSET", zap.String("raw_member", member), zap.Error(err))
+						continue
+					}
+					if task.CronSpec != "" {
 						activeCrons[task.Name] = true
 					}
 				}

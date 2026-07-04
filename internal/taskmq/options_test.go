@@ -4,6 +4,9 @@ import (
 	"context"
 	"testing"
 	"time"
+
+	"github.com/redis/go-redis/v9"
+	"go.uber.org/zap"
 )
 
 func TestDefaultWorkerOptions(t *testing.T) {
@@ -184,5 +187,74 @@ func TestExtractGroupKey(t *testing.T) {
 				t.Errorf("expected %q, got %q", tt.expected, result)
 			}
 		})
+	}
+}
+
+type dummyCronManager struct{}
+func (d *dummyCronManager) Run(ctx context.Context) error { return nil }
+func (d *dummyCronManager) Reschedule(ctx context.Context, task *Task) error { return nil }
+
+type dummyScheduler struct{}
+func (d *dummyScheduler) Run(ctx context.Context) error { return nil }
+
+type dummyJanitor struct{}
+func (d *dummyJanitor) Run(ctx context.Context) error { return nil }
+func (d *dummyJanitor) RegisterProcessor(fn func(ctx context.Context, msg redis.XMessage)) {}
+
+func TestCustomFactories(t *testing.T) {
+	opts := defaultWorkerOptions(JSONCodec{})
+
+	cronCalled := false
+	schedulerCalled := false
+	janitorCalled := false
+
+	cronFactory := func(rdb *redis.Client, logger *zap.Logger, queue string, codec Codec, healingInterval time.Duration, healingLockTTL time.Duration, scanBatchSize int, scanMaxCount int) CronManager {
+		cronCalled = true
+		return &dummyCronManager{}
+	}
+	schedulerFactory := func(rdb *redis.Client, logger *zap.Logger, queue string, cronManager CronManager, codec Codec, pollInterval time.Duration) Runner {
+		schedulerCalled = true
+		return &dummyScheduler{}
+	}
+	janitorFactory := func(rdb *redis.Client, logger *zap.Logger, queue string, group string, consumer string, concurrency int, checkInterval time.Duration, minIdleTime time.Duration) PELRecoveryJanitor {
+		janitorCalled = true
+		return &dummyJanitor{}
+	}
+
+	err := WithCronManagerFactory(cronFactory)(&opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	err = WithSchedulerFactory(schedulerFactory)(&opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	err = WithJanitorFactory(janitorFactory)(&opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	// Verify buildDefaultComponents uses them
+	buildDefaultComponents(nil, nil, "test-queue", &opts)
+
+	if !cronCalled {
+		t.Error("expected cronManagerFactory to be called")
+	}
+	if !schedulerCalled {
+		t.Error("expected schedulerFactory to be called")
+	}
+	if !janitorCalled {
+		t.Error("expected janitorFactory to be called")
+	}
+
+	// Test nil errors
+	if WithCronManagerFactory(nil)(&opts) == nil {
+		t.Error("expected error with nil factory")
+	}
+	if WithSchedulerFactory(nil)(&opts) == nil {
+		t.Error("expected error with nil factory")
+	}
+	if WithJanitorFactory(nil)(&opts) == nil {
+		t.Error("expected error with nil factory")
 	}
 }

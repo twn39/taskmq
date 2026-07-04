@@ -136,9 +136,26 @@ func NewPriorityWorker(rdb *redis.Client, logger *zap.Logger, opts ...any) Worke
 
 	// Multi-queue priority mode components initialization
 	for _, q := range pw.queues {
-		qCron := newCronManager(rdb, logger, q.Name, pw.codec, opt.cronHealingInterval, opt.cronHealingLockTTL, opt.cronHealingScanBatchSize, opt.cronHealingScanMaxCount)
-		qSched := newDelayedScheduler(rdb, logger, q.Name, qCron, pw.codec, opt.schedulerPollInterval)
-		qJan := newPELRecoveryJanitor(rdb, logger, q.Name, pw.group, pw.consumer, pw.concurrency, opt.janitorInterval, opt.janitorMinIdleTime, nil)
+		var qCron CronManager
+		if opt.cronManagerFactory != nil {
+			qCron = opt.cronManagerFactory(rdb, logger, q.Name, pw.codec, opt.cronHealingInterval, opt.cronHealingLockTTL, opt.cronHealingScanBatchSize, opt.cronHealingScanMaxCount)
+		} else {
+			qCron = newCronManager(rdb, logger, q.Name, pw.codec, opt.cronHealingInterval, opt.cronHealingLockTTL, opt.cronHealingScanBatchSize, opt.cronHealingScanMaxCount)
+		}
+
+		var qSched Runner
+		if opt.schedulerFactory != nil {
+			qSched = opt.schedulerFactory(rdb, logger, q.Name, qCron, pw.codec, opt.schedulerPollInterval)
+		} else {
+			qSched = newDelayedScheduler(rdb, logger, q.Name, qCron, pw.codec, opt.schedulerPollInterval)
+		}
+
+		var qJan PELRecoveryJanitor
+		if opt.janitorFactory != nil {
+			qJan = opt.janitorFactory(rdb, logger, q.Name, pw.group, pw.consumer, pw.concurrency, opt.janitorInterval, opt.janitorMinIdleTime)
+		} else {
+			qJan = newPELRecoveryJanitor(rdb, logger, q.Name, pw.group, pw.consumer, pw.concurrency, opt.janitorInterval, opt.janitorMinIdleTime, nil)
+		}
 
 		pw.cronManagers[q.Name] = qCron
 		pw.schedulers[q.Name] = qSched

@@ -10,6 +10,10 @@ import (
 	"go.uber.org/zap"
 )
 
+type CronManagerFactory func(rdb *redis.Client, logger *zap.Logger, queue string, codec Codec, healingInterval time.Duration, healingLockTTL time.Duration, scanBatchSize int, scanMaxCount int) CronManager
+type SchedulerFactory func(rdb *redis.Client, logger *zap.Logger, queue string, cronManager CronManager, codec Codec, pollInterval time.Duration) Runner
+type JanitorFactory func(rdb *redis.Client, logger *zap.Logger, queue string, group string, consumer string, concurrency int, checkInterval time.Duration, minIdleTime time.Duration) PELRecoveryJanitor
+
 // workerOptions is the internal configuration struct for WorkerPool.
 type workerOptions struct {
 	group                    string
@@ -34,6 +38,10 @@ type workerOptions struct {
 	janitorInterval       time.Duration
 	janitorMinIdleTime    time.Duration
 
+	cronManagerFactory CronManagerFactory
+	schedulerFactory   SchedulerFactory
+	janitorFactory     JanitorFactory
+
 	context context.Context
 
 	priorityQueues   []QueuePriority
@@ -48,6 +56,18 @@ type workerOptions struct {
 // WorkerOption defines the functional option signature.
 type WorkerOption func(*workerOptions) error
 
+func DefaultCronManagerFactory(rdb *redis.Client, logger *zap.Logger, queue string, codec Codec, healingInterval time.Duration, healingLockTTL time.Duration, scanBatchSize int, scanMaxCount int) CronManager {
+	return newCronManager(rdb, logger, queue, codec, healingInterval, healingLockTTL, scanBatchSize, scanMaxCount)
+}
+
+func DefaultSchedulerFactory(rdb *redis.Client, logger *zap.Logger, queue string, cronManager CronManager, codec Codec, pollInterval time.Duration) Runner {
+	return newDelayedScheduler(rdb, logger, queue, cronManager, codec, pollInterval)
+}
+
+func DefaultJanitorFactory(rdb *redis.Client, logger *zap.Logger, queue string, group string, consumer string, concurrency int, checkInterval time.Duration, minIdleTime time.Duration) PELRecoveryJanitor {
+	return newPELRecoveryJanitor(rdb, logger, queue, group, consumer, concurrency, checkInterval, minIdleTime, nil)
+}
+
 func defaultWorkerOptions(codec Codec) workerOptions {
 	return workerOptions{
 		concurrency:              5,
@@ -61,19 +81,22 @@ func defaultWorkerOptions(codec Codec) workerOptions {
 		schedulerPollInterval:    500 * time.Millisecond,
 		janitorInterval:          3 * time.Second,
 		janitorMinIdleTime:       5 * time.Second,
+		cronManagerFactory:       DefaultCronManagerFactory,
+		schedulerFactory:         DefaultSchedulerFactory,
+		janitorFactory:           DefaultJanitorFactory,
 		context:                  context.Background(),
 	}
 }
 
 func buildDefaultComponents(rdb *redis.Client, logger *zap.Logger, queue string, opts *workerOptions) {
-	if opts.cronManager == nil {
-		opts.cronManager = newCronManager(rdb, logger, queue, opts.codec, opts.cronHealingInterval, opts.cronHealingLockTTL, opts.cronHealingScanBatchSize, opts.cronHealingScanMaxCount)
+	if opts.cronManager == nil && opts.cronManagerFactory != nil {
+		opts.cronManager = opts.cronManagerFactory(rdb, logger, queue, opts.codec, opts.cronHealingInterval, opts.cronHealingLockTTL, opts.cronHealingScanBatchSize, opts.cronHealingScanMaxCount)
 	}
-	if opts.scheduler == nil {
-		opts.scheduler = newDelayedScheduler(rdb, logger, queue, opts.cronManager, opts.codec, opts.schedulerPollInterval)
+	if opts.scheduler == nil && opts.schedulerFactory != nil {
+		opts.scheduler = opts.schedulerFactory(rdb, logger, queue, opts.cronManager, opts.codec, opts.schedulerPollInterval)
 	}
-	if opts.janitor == nil {
-		opts.janitor = newPELRecoveryJanitor(rdb, logger, queue, opts.group, opts.consumer, opts.concurrency, opts.janitorInterval, opts.janitorMinIdleTime, nil)
+	if opts.janitor == nil && opts.janitorFactory != nil {
+		opts.janitor = opts.janitorFactory(rdb, logger, queue, opts.group, opts.consumer, opts.concurrency, opts.janitorInterval, opts.janitorMinIdleTime)
 	}
 	if opts.broker == nil {
 		opts.broker = NewRedisBroker(rdb, opts.codec)
@@ -319,6 +342,36 @@ func WithDeadLetterPolicy(p DeadLetterPolicy) WorkerOption {
 			return errors.New("dead letter policy cannot be nil")
 		}
 		o.deadLetterPolicy = p
+		return nil
+	}
+}
+
+func WithCronManagerFactory(f CronManagerFactory) WorkerOption {
+	return func(o *workerOptions) error {
+		if f == nil {
+			return errors.New("cron manager factory cannot be nil")
+		}
+		o.cronManagerFactory = f
+		return nil
+	}
+}
+
+func WithSchedulerFactory(f SchedulerFactory) WorkerOption {
+	return func(o *workerOptions) error {
+		if f == nil {
+			return errors.New("scheduler factory cannot be nil")
+		}
+		o.schedulerFactory = f
+		return nil
+	}
+}
+
+func WithJanitorFactory(f JanitorFactory) WorkerOption {
+	return func(o *workerOptions) error {
+		if f == nil {
+			return errors.New("janitor factory cannot be nil")
+		}
+		o.janitorFactory = f
 		return nil
 	}
 }
