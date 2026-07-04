@@ -156,3 +156,63 @@ func TestWorkerPool_DecoupledAbtractionAndFailureHandling(t *testing.T) {
 		}
 	})
 }
+
+func TestPriorityWorker_DecoupledAbstractionAndFailureHandling(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("failed to start miniredis: %v", err)
+	}
+	defer mr.Close()
+
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	logger := zap.NewNop()
+
+	t.Run("Task fails on priority worker - Should move to custom DLQ via injected Broker & Policies", func(t *testing.T) {
+		mb := &mockBroker{}
+		mp := &mockRetryPolicy{should: false} // do not retry
+
+		var hookTriggered bool
+		dlHook := func(ctx context.Context, task *Task, err error) {
+			hookTriggered = true
+		}
+		dlPolicy := NewStandardDeadLetterPolicy("priority-dead-letters", dlHook)
+
+		opts := WorkerOptions{
+			Broker:           mb,
+			RetryPolicy:      mp,
+			DeadLetterPolicy: dlPolicy,
+			PriorityQueues: []QueuePriority{
+				{Name: "high", Weight: 10},
+			},
+		}
+		opts.ApplyDefaults(rdb, logger, "", JSONCodec{})
+
+		pw := NewPriorityWorker(rdb, logger, opts).(*priorityWorker)
+
+		msg := redis.XMessage{
+			ID:     "4-0",
+			Values: map[string]interface{}{},
+		}
+		pw.Register("test-task", func(ctx context.Context, task *Task) error {
+			return errors.New("priority worker fatal error")
+		})
+
+		taskBytes := []byte(`{"id":"t-4","queue":"high","name":"test-task","retry":2,"max_retry":3}`)
+		msg.Values["payload"] = taskBytes
+
+		pw.processMessage(context.Background(), "taskmq:{high}:queue", msg)
+
+		mb.mu.Lock()
+		if mb.moveToDLQCnt != 1 {
+			t.Errorf("expected MoveToDLQ to be called 1 time, got %d", mb.moveToDLQCnt)
+		}
+		if mb.lastDLQName != "priority-dead-letters" {
+			t.Errorf("expected DLQ target to be 'priority-dead-letters', got '%s'", mb.lastDLQName)
+		}
+		mb.mu.Unlock()
+
+		if !hookTriggered {
+			t.Error("expected Dead-Letter hook to be triggered, but was not")
+		}
+	})
+}

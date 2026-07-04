@@ -96,6 +96,12 @@ type priorityWorker struct {
 	rateLimitMax      int64
 	rateLimitDuration time.Duration
 	rateLimitKeyField string
+
+	// Decoupled abstractions
+	broker           TaskBroker
+	retryPolicy      RetryPolicy
+	deadLetterPolicy DeadLetterPolicy
+	middlewareChain  []CoreHandlerFunc
 }
 
 func NewPriorityWorker(rdb *redis.Client, logger *zap.Logger, opts WorkerOptions) Worker {
@@ -127,6 +133,44 @@ func NewPriorityWorker(rdb *redis.Client, logger *zap.Logger, opts WorkerOptions
 	}
 	if pw.priorityStrategy == "" {
 		pw.priorityStrategy = "weighted"
+	}
+
+	if opts.Broker != nil {
+		pw.broker = opts.Broker
+	} else {
+		pw.broker = NewRedisBroker(rdb, pw.codec)
+	}
+
+	if opts.RetryPolicy != nil {
+		pw.retryPolicy = opts.RetryPolicy
+	} else {
+		pw.retryPolicy = NewExponentialBackoff(100*time.Millisecond, 1*time.Hour, true)
+	}
+
+	if opts.DeadLetterPolicy != nil {
+		pw.deadLetterPolicy = opts.DeadLetterPolicy
+	} else {
+		pw.deadLetterPolicy = NewStandardDeadLetterPolicy("", nil)
+	}
+
+	pw.middlewareChain = []CoreHandlerFunc{
+		RetryAndDLQMiddleware(pw.broker, pw.retryPolicy, pw.deadLetterPolicy, pw.logger),
+		RateLimitMiddleware(pw.limiter, pw.broker, pw.getQueueRateLimit, pw.logger),
+		RecoveryMiddleware(pw.logger),
+		func(c *ConsumeContext) error {
+			handler, exists := pw.handlers[c.Task.Name]
+			if !exists {
+				return fmt.Errorf("no handler registered: %s", c.Task.Name)
+			}
+			if c.Task.TimeoutMs > 0 {
+				timeoutCtx, cancel := context.WithTimeout(c.Context, time.Duration(c.Task.TimeoutMs)*time.Millisecond)
+				defer cancel()
+				oldCtx := c.Context
+				c.Context = timeoutCtx
+				defer func() { c.Context = oldCtx }()
+			}
+			return handler(c.Context, c.Task)
+		},
 	}
 
 	pw.sem = make(chan struct{}, pw.execPoolSize)
@@ -344,177 +388,32 @@ func (pw *priorityWorker) processMessage(ctx context.Context, streamKey string, 
 		return
 	}
 
-	handler, exists := pw.handlers[task.Name]
+	_, exists := pw.handlers[task.Name]
 	if !exists {
 		pw.logger.Error("No handler registered", zap.String("task_name", task.Name))
 		return
 	}
 
-	rlMax, rlDuration, rlKeyField := pw.getQueueRateLimit(task.Queue)
+	c := AcquireConsumeContext(ctx, &task, msg.ID, task.Queue, pw.group, pw.middlewareChain)
+	defer ReleaseConsumeContext(c)
 
-	if rlMax > 0 && rlDuration > 0 {
-		var groupKeyVal string
-		if rlKeyField != "" {
-			groupKeyVal = extractGroupKey(task.Payload, rlKeyField)
-		}
-		limitKey := RateLimitKey(task.Queue, groupKeyVal)
+	execErr := c.Next()
 
-		wait, rlErr := pw.limiter.TryConsume(ctx, limitKey, rlMax, rlDuration)
-		if rlErr != nil {
-			pw.logger.Error("Failed to apply rate limiting", zap.Error(rlErr))
-		} else if wait > 0 {
-			pw.logger.Debug("Rate limit exceeded, deferring task", zap.String("queue", task.Queue), zap.String("group_key", groupKeyVal), zap.Duration("wait", wait))
-			if err := pw.deferRateLimitedTask(ctx, streamKey, msg.ID, &task, wait); err != nil {
-				pw.logger.Error("Failed to defer rate limited task atomically",
-					zap.String("task_id", task.ID),
-					zap.String("task_name", task.Name),
-					zap.Error(err),
-				)
-			}
+	// If no error occurred during processing chain and it completed fully (not aborted)
+	if execErr == nil && !c.IsAborted() {
+		err = pw.rdb.XAck(ctx, streamKey, pw.group, msg.ID).Err()
+		if err != nil {
+			pw.logger.Error("Failed to ACK task stream message",
+				zap.String("task_id", task.ID),
+				zap.String("stream_id", msg.ID),
+				zap.Error(err),
+			)
 			return
 		}
-	}
 
-	pw.logger.Info("Priority executing task",
-		zap.String("task_id", task.ID),
-		zap.String("task_name", task.Name),
-		zap.Int("retry", task.Retry),
-	)
-
-	err = pw.runHandlerWithRecovery(ctx, &task, handler)
-	if err != nil {
-		pw.logger.Error("Task execution failed",
-			zap.String("task_id", task.ID),
-			zap.String("task_name", task.Name),
-			zap.Error(err),
-		)
-		pw.handleFailure(ctx, streamKey, msg, &task, err)
-		return
-	}
-
-	// ACK the message in the stream to remove it from PEL
-	err = pw.rdb.XAck(ctx, streamKey, pw.group, msg.ID).Err()
-	if err != nil {
-		pw.logger.Error("Failed to ACK task stream message",
-			zap.String("task_id", task.ID),
-			zap.String("stream_id", msg.ID),
-			zap.Error(err),
-		)
-		return
-	}
-
-	// Uniqueness locks release (if lock is active)
-	if task.UniqueKey != "" {
-		pw.releaseUniqueLock(ctx, &task)
-	}
-}
-
-func (pw *priorityWorker) runHandlerWithRecovery(ctx context.Context, task *Task, handler HandlerFunc) (err error) {
-	defer func() {
-		if r := recover(); r != nil {
-			err = fmt.Errorf("task panicked: %v", r)
-			pw.logger.Error("Panic recovered in priority task handler execution",
-				zap.String("task_id", task.ID),
-				zap.String("task_name", task.Name),
-				zap.Any("panic", r),
-			)
-		}
-	}()
-
-	if task.TimeoutMs > 0 {
-		var cancel context.CancelFunc
-		ctx, cancel = context.WithTimeout(ctx, time.Duration(task.TimeoutMs)*time.Millisecond)
-		defer cancel()
-	}
-
-	return handler(ctx, task)
-}
-
-func (pw *priorityWorker) handleFailure(ctx context.Context, streamKey string, msg redis.XMessage, task *Task, err error) {
-	task.Retry++
-
-	if task.Retry >= task.MaxRetry {
-		task.LastError = err.Error()
-		pw.logger.Error("Task exhausted all retries, moving to DLQ",
-			zap.String("task_id", task.ID),
-			zap.String("task_name", task.Name),
-			zap.Int("retry", task.Retry),
-			zap.String("error", task.LastError),
-		)
-
-		serialized, _ := pw.codec.Marshal(task)
-		dlqKey := DLQKey(task.Queue)
-		nowMs := time.Now().UnixMilli()
-
-		var uniqueLockKey string
-		var uniqueLockVal string
 		if task.UniqueKey != "" {
-			uniqueLockKey = UniqueKey(task.Queue, task.UniqueKey)
-			uniqueLockVal = task.ID
+			_ = pw.broker.ReleaseUniqueLock(ctx, &task)
 		}
-
-		_, zerr := pw.rdb.Eval(ctx, luaHandleFailure, []string{dlqKey, streamKey, uniqueLockKey}, "dlq", msg.ID, pw.group, nowMs, string(serialized), uniqueLockVal).Result()
-		if zerr != nil {
-			pw.logger.Error("Failed to move task to DLQ atomically", zap.Error(zerr))
-		}
-		return
-	}
-
-	backoff := time.Millisecond * time.Duration(100*(1<<uint(task.Retry)))
-
-	pw.logger.Info("Scheduling task retry with exponential backoff",
-		zap.String("task_id", task.ID),
-		zap.String("task_name", task.Name),
-		zap.Int("retry", task.Retry),
-		zap.Duration("backoff", backoff),
-	)
-
-	serialized, err := pw.codec.Marshal(task)
-	if err != nil {
-		pw.logger.Error("Failed to serialize retry task", zap.Error(err))
-		return
-	}
-
-	delayedKey := DelayedKey(task.Queue)
-	at := time.Now().Add(backoff)
-
-	_, zerr := pw.rdb.Eval(ctx, luaHandleFailure, []string{delayedKey, streamKey, ""}, "retry", msg.ID, pw.group, at.UnixMilli(), string(serialized), "").Result()
-	if zerr != nil {
-		pw.logger.Error("Failed to schedule task retry atomically", zap.Error(zerr))
-	}
-}
-
-func (pw *priorityWorker) deferRateLimitedTask(ctx context.Context, streamKey string, msgID string, task *Task, delay time.Duration) error {
-	serialized, err := pw.codec.Marshal(task)
-	if err != nil {
-		return fmt.Errorf("failed to serialize rate-limited task: %w", err)
-	}
-	delayedKey := DelayedKey(task.Queue)
-	at := time.Now().Add(delay)
-
-	_, err = pw.rdb.Eval(ctx, luaDeferRateLimitedTask, []string{delayedKey, streamKey}, pw.group, msgID, at.UnixMilli(), string(serialized)).Result()
-	return err
-}
-
-func (pw *priorityWorker) releaseUniqueLock(ctx context.Context, task *Task) {
-	if task.UniqueKey == "" {
-		return
-	}
-	uniqueKey := UniqueKey(task.Queue, task.UniqueKey)
-	luaUnlock := `
-		if redis.call("get", KEYS[1]) == ARGV[1] then
-			return redis.call("del", KEYS[1])
-		else
-			return 0
-		end
-	`
-	err := pw.rdb.Eval(ctx, luaUnlock, []string{uniqueKey}, task.ID).Err()
-	if err != nil {
-		pw.logger.Error("Failed to release task uniqueness lock",
-			zap.String("task_id", task.ID),
-			zap.String("unique_key", task.UniqueKey),
-			zap.Error(err),
-		)
 	}
 }
 

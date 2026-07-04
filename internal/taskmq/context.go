@@ -65,3 +65,42 @@ func (c *ConsumeContext) Abort() {
 func (c *ConsumeContext) IsAborted() bool {
 	return c.aborted
 }
+
+var consumeContextPool = sync.Pool{
+	New: func() any {
+		return &ConsumeContext{
+			index: -1,
+		}
+	},
+}
+
+// AcquireConsumeContext retrieves a clean ConsumeContext from the pool.
+func AcquireConsumeContext(ctx context.Context, task *Task, msgID, queue, group string, handlers []CoreHandlerFunc) *ConsumeContext {
+	c := consumeContextPool.Get().(*ConsumeContext)
+	c.Context = ctx
+	c.Task = task
+	c.MessageID = msgID
+	c.Queue = queue
+	c.Group = group
+	c.handlers = handlers
+	c.index = -1
+	c.aborted = false
+	return c
+}
+
+// ReleaseConsumeContext returns a ConsumeContext back to the pool after clearing its state.
+func ReleaseConsumeContext(c *ConsumeContext) {
+	c.Context = nil
+	c.Task = nil
+	c.MessageID = ""
+	c.Queue = ""
+	c.Group = ""
+	c.handlers = nil
+	c.aborted = false
+	c.keysMu.Lock()
+	for k := range c.Keys {
+		delete(c.Keys, k)
+	}
+	c.keysMu.Unlock()
+	consumeContextPool.Put(c)
+}

@@ -63,6 +63,8 @@ type workerPool struct {
 	broker           TaskBroker
 	retryPolicy      RetryPolicy
 	deadLetterPolicy DeadLetterPolicy
+
+	middlewareChain []CoreHandlerFunc
 }
 
 type WorkerOptions struct {
@@ -168,6 +170,27 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 	}
 
 	pool.sem = make(chan struct{}, pool.execPoolSize)
+
+	// Pre-build static middleware chain
+	pool.middlewareChain = []CoreHandlerFunc{
+		RetryAndDLQMiddleware(pool.broker, pool.retryPolicy, pool.deadLetterPolicy, pool.logger),
+		RateLimitMiddleware(pool.limiter, pool.broker, pool.getQueueRateLimit, pool.logger),
+		RecoveryMiddleware(pool.logger),
+		func(c *ConsumeContext) error {
+			handler, exists := pool.handlers[c.Task.Name]
+			if !exists {
+				return fmt.Errorf("no handler registered: %s", c.Task.Name)
+			}
+			if c.Task.TimeoutMs > 0 {
+				timeoutCtx, cancel := context.WithTimeout(c.Context, time.Duration(c.Task.TimeoutMs)*time.Millisecond)
+				defer cancel()
+				oldCtx := c.Context
+				c.Context = timeoutCtx
+				defer func() { c.Context = oldCtx }()
+			}
+			return handler(c.Context, c.Task)
+		},
+	}
 
 	// Register processors for janitor
 	if j, ok := pool.janitor.(PELRecoveryJanitor); ok {
@@ -373,41 +396,14 @@ func (w *workerPool) ProcessMessage(ctx context.Context, msg redis.XMessage) {
 		return
 	}
 
-	handler, exists := w.handlers[task.Name]
+	_, exists := w.handlers[task.Name]
 	if !exists {
 		w.logger.Error("No handler registered", zap.String("task_name", task.Name))
 		return
 	}
 
-	// GCRA dynamic limits parsing
-	rlMax, rlDuration, rlKeyField := w.getQueueRateLimit(task.Queue)
-
-	// Built-in handlers/middleware chain assembly
-	handlers := []CoreHandlerFunc{
-		RetryAndDLQMiddleware(w.broker, w.retryPolicy, w.deadLetterPolicy, w.logger),
-		RateLimitMiddleware(w.limiter, w.broker, rlMax, rlDuration, rlKeyField, w.logger),
-		RecoveryMiddleware(w.logger),
-		func(c *ConsumeContext) error {
-			if c.Task.TimeoutMs > 0 {
-				timeoutCtx, cancel := context.WithTimeout(c.Context, time.Duration(c.Task.TimeoutMs)*time.Millisecond)
-				defer cancel()
-				oldCtx := c.Context
-				c.Context = timeoutCtx
-				defer func() { c.Context = oldCtx }()
-			}
-			return handler(c.Context, c.Task)
-		},
-	}
-
-	c := &ConsumeContext{
-		Context:   ctx,
-		Task:      &task,
-		MessageID: msg.ID,
-		Queue:     w.queue,
-		Group:     w.group,
-		handlers:  handlers,
-		index:     -1,
-	}
+	c := AcquireConsumeContext(ctx, &task, msg.ID, w.queue, w.group, w.middlewareChain)
+	defer ReleaseConsumeContext(c)
 
 	execErr := c.Next()
 

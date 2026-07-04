@@ -53,7 +53,9 @@ func TestMiddleware_RateLimiter(t *testing.T) {
 	t.Run("Rate limit not exceeded runs next", func(t *testing.T) {
 		mb.deferCnt = 0
 		handlers := []CoreHandlerFunc{
-			RateLimitMiddleware(limiter, mb, 5, time.Minute, "", logger),
+			RateLimitMiddleware(limiter, mb, func(queue string) (int64, time.Duration, string) {
+				return 5, time.Minute, ""
+			}, logger),
 			func(c *ConsumeContext) error {
 				return nil
 			},
@@ -63,6 +65,7 @@ func TestMiddleware_RateLimiter(t *testing.T) {
 			Context:   context.Background(),
 			Task:      &Task{ID: "t-1", Queue: "q-1"},
 			MessageID: "1-0",
+			Queue:     "q-1",
 			handlers:  handlers,
 			index:     -1,
 		}
@@ -80,7 +83,9 @@ func TestMiddleware_RateLimiter(t *testing.T) {
 		mb.deferCnt = 0
 		// Max limit of 1 per minute, trigger twice to force limit exceedance
 		handlers := []CoreHandlerFunc{
-			RateLimitMiddleware(limiter, mb, 1, time.Minute, "", logger),
+			RateLimitMiddleware(limiter, mb, func(queue string) (int64, time.Duration, string) {
+				return 1, time.Minute, ""
+			}, logger),
 			func(c *ConsumeContext) error {
 				return nil
 			},
@@ -91,6 +96,7 @@ func TestMiddleware_RateLimiter(t *testing.T) {
 				Context:   context.Background(),
 				Task:      &Task{ID: taskID, Queue: queue},
 				MessageID: "2-0",
+				Queue:     queue,
 				handlers:  handlers,
 				index:     -1,
 			}
