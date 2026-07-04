@@ -37,18 +37,23 @@ type workerPool struct {
 	cronManager CronManager
 }
 
-func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...WorkerOption) Worker {
-	opt := defaultWorkerOptions(JSONCodec{})
+func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...WorkerPoolOption) Worker {
+	opt := defaultWorkerPoolOptions(JSONCodec{})
 	for _, o := range opts {
-		if err := o(&opt); err != nil {
+		if err := o.ApplyWorkerPool(&opt); err != nil {
 			panic(fmt.Errorf("invalid option: %w", err))
 		}
 	}
 
-	buildDefaultComponents(rdb, logger, queue, &opt)
+	buildDefaultPoolComponents(rdb, logger, queue, &opt)
 
 	base := &baseWorker{}
-	base.initBase(rdb, logger, &opt)
+	base.initBase(rdb, logger, &opt.BaseWorkerOptions)
+
+	// Set pool-specific settings on baseWorker
+	base.rateLimitMax = opt.rateLimitMax
+	base.rateLimitDuration = opt.rateLimitDuration
+	base.rateLimitKeyField = opt.rateLimitKeyField
 
 	pool := &workerPool{
 		baseWorker:  base,

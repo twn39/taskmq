@@ -50,7 +50,7 @@ type baseWorker struct {
 	pauseChans   map[string]chan struct{}
 }
 
-func (b *baseWorker) initBase(rdb *redis.Client, logger *zap.Logger, opt *workerOptions) {
+func (b *baseWorker) initBase(rdb *redis.Client, logger *zap.Logger, opt *BaseWorkerOptions) {
 	b.rdb = rdb
 	b.logger = logger
 	b.handlers = make(map[string]HandlerFunc)
@@ -71,9 +71,6 @@ func (b *baseWorker) initBase(rdb *redis.Client, logger *zap.Logger, opt *worker
 		b.execPoolSize = opt.executionPoolSize
 	}
 
-	b.rateLimitMax = opt.rateLimitMax
-	b.rateLimitDuration = opt.rateLimitDuration
-	b.rateLimitKeyField = opt.rateLimitKeyField
 	b.groupKeyExtractor = opt.groupKeyExtractor
 
 	b.broker = opt.broker

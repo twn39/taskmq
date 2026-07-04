@@ -76,18 +76,18 @@ type priorityWorker struct {
 	cronManagers     map[string]CronManager
 }
 
-func NewPriorityWorker(rdb *redis.Client, logger *zap.Logger, opts ...WorkerOption) Worker {
-	opt := defaultWorkerOptions(JSONCodec{})
+func NewPriorityWorker(rdb *redis.Client, logger *zap.Logger, opts ...PriorityWorkerOption) Worker {
+	opt := defaultPriorityWorkerOptions(JSONCodec{})
 	for _, o := range opts {
-		if err := o(&opt); err != nil {
+		if err := o.ApplyPriorityWorker(&opt); err != nil {
 			panic(fmt.Errorf("invalid option: %w", err))
 		}
 	}
 
-	buildSharedDefaults(rdb, &opt)
+	buildSharedPriorityDefaults(rdb, &opt)
 
 	base := &baseWorker{}
-	base.initBase(rdb, logger, &opt)
+	base.initBase(rdb, logger, &opt.BaseWorkerOptions)
 
 	pw := &priorityWorker{
 		baseWorker:       base,

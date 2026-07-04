@@ -11,7 +11,7 @@ import (
 
 func TestDefaultWorkerOptions(t *testing.T) {
 	codec := JSONCodec{}
-	opts := defaultWorkerOptions(codec)
+	opts := defaultWorkerPoolOptions(codec)
 
 	if opts.concurrency != 5 {
 		t.Errorf("expected default concurrency to be 5, got %d", opts.concurrency)
@@ -38,10 +38,10 @@ func TestDefaultWorkerOptions(t *testing.T) {
 
 func TestWithOptionFunctions(t *testing.T) {
 	codec := JSONCodec{}
-	opts := defaultWorkerOptions(codec)
+	opts := defaultWorkerPoolOptions(codec)
 
 	// Test WithConcurrency
-	err := WithConcurrency(10)(&opts)
+	err := WithConcurrency(10).ApplyWorkerPool(&opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -49,13 +49,13 @@ func TestWithOptionFunctions(t *testing.T) {
 		t.Errorf("expected concurrency to be 10, got %d", opts.concurrency)
 	}
 
-	err = WithConcurrency(-1)(&opts)
+	err = WithConcurrency(-1).ApplyWorkerPool(&opts)
 	if err == nil {
 		t.Error("expected error for invalid concurrency, got nil")
 	}
 
 	// Test WithGroup
-	err = WithGroup("my-group")(&opts)
+	err = WithGroup("my-group").ApplyWorkerPool(&opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -63,13 +63,13 @@ func TestWithOptionFunctions(t *testing.T) {
 		t.Errorf("expected group to be 'my-group', got %s", opts.group)
 	}
 
-	err = WithGroup("")(&opts)
+	err = WithGroup("").ApplyWorkerPool(&opts)
 	if err == nil {
 		t.Error("expected error for empty group, got nil")
 	}
 
 	// Test WithConsumer
-	err = WithConsumer("my-consumer")(&opts)
+	err = WithConsumer("my-consumer").ApplyWorkerPool(&opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -77,13 +77,13 @@ func TestWithOptionFunctions(t *testing.T) {
 		t.Errorf("expected consumer to be 'my-consumer', got %s", opts.consumer)
 	}
 
-	err = WithConsumer("")(&opts)
+	err = WithConsumer("").ApplyWorkerPool(&opts)
 	if err == nil {
 		t.Error("expected error for empty consumer, got nil")
 	}
 
 	// Test WithExecutionPoolSize
-	err = WithExecutionPoolSize(20)(&opts)
+	err = WithExecutionPoolSize(20).ApplyWorkerPool(&opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -91,13 +91,13 @@ func TestWithOptionFunctions(t *testing.T) {
 		t.Errorf("expected execution pool size to be 20, got %d", opts.executionPoolSize)
 	}
 
-	err = WithExecutionPoolSize(0)(&opts)
+	err = WithExecutionPoolSize(0).ApplyWorkerPool(&opts)
 	if err == nil {
 		t.Error("expected error for invalid execution pool size, got nil")
 	}
 
 	// Test WithRateLimit
-	err = WithRateLimit(100, 10*time.Second)(&opts)
+	err = WithRateLimit(100, 10*time.Second).ApplyWorkerPool(&opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -105,14 +105,14 @@ func TestWithOptionFunctions(t *testing.T) {
 		t.Errorf("expected rate limits to be max=100, dur=10s, got max=%d, dur=%v", opts.rateLimitMax, opts.rateLimitDuration)
 	}
 
-	err = WithRateLimit(-1, 10*time.Second)(&opts)
+	err = WithRateLimit(-1, 10*time.Second).ApplyWorkerPool(&opts)
 	if err == nil {
 		t.Error("expected error for invalid rate limit max, got nil")
 	}
 
 	// Test WithContext
 	customCtx := context.WithValue(context.Background(), "test", "val")
-	err = WithContext(customCtx)(&opts)
+	err = WithContext(customCtx).ApplyWorkerPool(&opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -120,14 +120,14 @@ func TestWithOptionFunctions(t *testing.T) {
 		t.Error("expected custom context to be set")
 	}
 
-	err = WithContext(nil)(&opts)
+	err = WithContext(nil).ApplyWorkerPool(&opts)
 	if err == nil {
 		t.Error("expected error for nil context, got nil")
 	}
 
 	// Test WithGroupKeyExtractor
 	extractor := func(payload []byte) string { return "custom" }
-	err = WithGroupKeyExtractor(extractor)(&opts)
+	err = WithGroupKeyExtractor(extractor).ApplyWorkerPool(&opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
@@ -135,9 +135,45 @@ func TestWithOptionFunctions(t *testing.T) {
 		t.Error("expected groupKeyExtractor to be set correctly")
 	}
 
-	err = WithGroupKeyExtractor(nil)(&opts)
+	err = WithGroupKeyExtractor(nil).ApplyWorkerPool(&opts)
 	if err == nil {
 		t.Error("expected error for nil extractor, got nil")
+	}
+}
+
+func TestPriorityOptionFunctions(t *testing.T) {
+	codec := JSONCodec{}
+	opts := defaultPriorityWorkerOptions(codec)
+
+	// Test WithPriorityStrategy
+	err := WithPriorityStrategy("strict").ApplyPriorityWorker(&opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if opts.priorityStrategy != "strict" {
+		t.Errorf("expected strategy 'strict', got %s", opts.priorityStrategy)
+	}
+
+	err = WithPriorityStrategy("invalid").ApplyPriorityWorker(&opts)
+	if err == nil {
+		t.Error("expected error for invalid priority strategy, got nil")
+	}
+
+	// Test WithPriorityQueues
+	queues := []QueuePriority{
+		{Name: "q1", Weight: 10},
+	}
+	err = WithPriorityQueues(queues).ApplyPriorityWorker(&opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(opts.priorityQueues) != 1 || opts.priorityQueues[0].Name != "q1" {
+		t.Error("expected priorityQueues to be set")
+	}
+
+	err = WithPriorityQueues(nil).ApplyPriorityWorker(&opts)
+	if err == nil {
+		t.Error("expected error for empty queues, got nil")
 	}
 }
 
@@ -202,7 +238,7 @@ func (d *dummyJanitor) Run(ctx context.Context) error { return nil }
 func (d *dummyJanitor) RegisterProcessor(fn func(ctx context.Context, msg redis.XMessage)) {}
 
 func TestCustomFactories(t *testing.T) {
-	opts := defaultWorkerOptions(JSONCodec{})
+	opts := defaultWorkerPoolOptions(JSONCodec{})
 
 	cronCalled := false
 	schedulerCalled := false
@@ -221,21 +257,21 @@ func TestCustomFactories(t *testing.T) {
 		return &dummyJanitor{}
 	}
 
-	err := WithCronManagerFactory(cronFactory)(&opts)
+	err := WithCronManagerFactory(cronFactory).ApplyWorkerPool(&opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	err = WithSchedulerFactory(schedulerFactory)(&opts)
+	err = WithSchedulerFactory(schedulerFactory).ApplyWorkerPool(&opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
-	err = WithJanitorFactory(janitorFactory)(&opts)
+	err = WithJanitorFactory(janitorFactory).ApplyWorkerPool(&opts)
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)
 	}
 
-	// Verify buildDefaultComponents uses them
-	buildDefaultComponents(nil, nil, "test-queue", &opts)
+	// Verify buildDefaultPoolComponents uses them
+	buildDefaultPoolComponents(nil, nil, "test-queue", &opts)
 
 	if !cronCalled {
 		t.Error("expected cronManagerFactory to be called")
@@ -248,13 +284,13 @@ func TestCustomFactories(t *testing.T) {
 	}
 
 	// Test nil errors
-	if WithCronManagerFactory(nil)(&opts) == nil {
+	if WithCronManagerFactory(nil).ApplyWorkerPool(&opts) == nil {
 		t.Error("expected error with nil factory")
 	}
-	if WithSchedulerFactory(nil)(&opts) == nil {
+	if WithSchedulerFactory(nil).ApplyWorkerPool(&opts) == nil {
 		t.Error("expected error with nil factory")
 	}
-	if WithJanitorFactory(nil)(&opts) == nil {
+	if WithJanitorFactory(nil).ApplyWorkerPool(&opts) == nil {
 		t.Error("expected error with nil factory")
 	}
 }
