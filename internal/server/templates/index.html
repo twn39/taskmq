@@ -252,6 +252,40 @@
             }
         },
 
+        async retryAllDLQ(queue) {
+            if (!confirm('Are you sure you want to retry all tasks in this DLQ?')) return;
+            this.loading = true;
+            try {
+                const res = await fetch(`/api/queues/${queue}/dlq/retry`, { method: 'POST' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to retry tasks');
+                this.addNotification(data.message);
+                this.fetchDLQ();
+                this.fetchStats();
+            } catch (err) {
+                this.addNotification(err.message, 'error');
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        async purgeAllDLQ(queue) {
+            if (!confirm('Are you sure you want to permanently delete/purge all tasks in this DLQ?')) return;
+            this.loading = true;
+            try {
+                const res = await fetch(`/api/queues/${queue}/dlq`, { method: 'DELETE' });
+                const data = await res.json();
+                if (!res.ok) throw new Error(data.error || 'Failed to purge DLQ');
+                this.addNotification(data.message);
+                this.fetchDLQ();
+                this.fetchStats();
+            } catch (err) {
+                this.addNotification(err.message, 'error');
+            } finally {
+                this.loading = false;
+            }
+        },
+
         async submitTestTask() {
             this.loading = true;
             try {
@@ -724,8 +758,26 @@
                 <!-- DLQ Tasks Table -->
                 <div class="bg-white dark:bg-slate-900/30 border border-slate-200 dark:border-slate-800/60 rounded-2xl overflow-hidden shadow-sm dark:shadow-xl transition duration-200">
                     <div class="px-6 py-5 border-b border-slate-200 dark:border-slate-800/80 flex items-center justify-between">
-                        <h2 class="text-base font-bold text-slate-900 dark:text-white" x-text="`Dead Letter Queue: ${selectedQueue}`"></h2>
-                        <span class="text-xs text-slate-500 dark:text-slate-400" x-text="`Failure Records: ${dlqTasks.length}`"></span>
+                        <div class="flex items-center space-x-4">
+                            <h2 class="text-base font-bold text-slate-900 dark:text-white" x-text="`Dead Letter Queue: ${selectedQueue}`"></h2>
+                            <span class="text-xs text-slate-500 dark:text-slate-400" x-text="`Failure Records: ${dlqTasks.length}`"></span>
+                        </div>
+                        <div class="flex items-center space-x-2" x-show="dlqTasks.length > 0">
+                            <!-- Retry All -->
+                            <button 
+                                @click="retryAllDLQ(selectedQueue)"
+                                class="bg-indigo-600 hover:bg-indigo-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition duration-200 shadow-md shadow-indigo-600/10 flex items-center space-x-1"
+                            >
+                                <span>Re-enqueue All</span>
+                            </button>
+                            <!-- Purge All -->
+                            <button 
+                                @click="purgeAllDLQ(selectedQueue)"
+                                class="bg-rose-600 hover:bg-rose-500 text-white px-3 py-1.5 rounded-lg text-xs font-bold transition duration-200 shadow-md shadow-rose-600/10 flex items-center space-x-1"
+                            >
+                                <span>Purge DLQ</span>
+                            </button>
+                        </div>
                     </div>
 
                     <div class="overflow-x-auto">

@@ -60,6 +60,8 @@ func NewServer(lc fx.Lifecycle, logger *zap.Logger, adminHandler *handler.AdminH
 	e.POST("/api/queues/:queue/pause", adminHandler.PauseQueue)
 	e.POST("/api/queues/:queue/resume", adminHandler.ResumeQueue)
 	e.GET("/api/queues/:queue/dlq", adminHandler.ListDLQ)
+	e.POST("/api/queues/:queue/dlq/retry", adminHandler.RetryAllDLQ)
+	e.DELETE("/api/queues/:queue/dlq", adminHandler.PurgeAllDLQ)
 	e.POST("/api/queues/:queue/dlq/:id/retry", adminHandler.RetryDLQ)
 	e.DELETE("/api/queues/:queue/dlq/:id", adminHandler.DeleteDLQ)
 	e.POST("/api/queues/:queue/enqueue", adminHandler.EnqueueTest)

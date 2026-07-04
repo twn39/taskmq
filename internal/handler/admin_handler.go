@@ -333,3 +333,41 @@ func (h *AdminHandler) DeleteCron(c *echo.Context) error {
 
 	return c.JSON(http.StatusOK, map[string]string{"message": fmt.Sprintf("Cron job '%s' successfully deleted", jobName)})
 }
+
+func (h *AdminHandler) RetryAllDLQ(c *echo.Context) error {
+	ctx := c.Request().Context()
+	queue := c.Param("queue")
+	if queue == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue parameter"})
+	}
+
+	count, err := h.client.RetryAllDeadLetters(ctx, queue)
+	if err != nil {
+		h.logger.Error("Failed to retry all DLQ tasks", zap.String("queue", queue), zap.Error(err))
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"message": fmt.Sprintf("Successfully re-enqueued %d tasks from DLQ", count),
+		"count":   count,
+	})
+}
+
+func (h *AdminHandler) PurgeAllDLQ(c *echo.Context) error {
+	ctx := c.Request().Context()
+	queue := c.Param("queue")
+	if queue == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue parameter"})
+	}
+
+	count, err := h.client.PurgeAllDeadLetters(ctx, queue)
+	if err != nil {
+		h.logger.Error("Failed to purge all DLQ tasks", zap.String("queue", queue), zap.Error(err))
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{
+		"message": fmt.Sprintf("Successfully purged %d tasks from DLQ", count),
+		"count":   count,
+	})
+}

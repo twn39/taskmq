@@ -97,6 +97,8 @@ type Client interface {
 	ListDeadLetters(ctx context.Context, queue string, limit int) ([]*Task, error)
 	DeleteDeadLetter(ctx context.Context, queue string, taskID string) error
 	RetryDeadLetter(ctx context.Context, queue string, taskID string) error
+	RetryAllDeadLetters(ctx context.Context, queue string) (int64, error)
+	PurgeAllDeadLetters(ctx context.Context, queue string) (int64, error)
 	CancelTask(ctx context.Context, queue, taskID string) error
 	Pause(ctx context.Context, queue string) error
 	Resume(ctx context.Context, queue string) error
@@ -555,4 +557,59 @@ func (c *client) DeleteCronJob(ctx context.Context, queue string, jobName string
 	_, _ = c.rdb.ZRem(ctx, delayedKey, serialized).Result()
 	_, err = c.rdb.HDel(ctx, configsKey, jobName).Result()
 	return err
+}
+
+func (c *client) RetryAllDeadLetters(ctx context.Context, queue string) (int64, error) {
+	dlqKey := DLQKey(queue)
+
+	var totalRetried int64
+	for {
+		members, err := c.rdb.ZRange(ctx, dlqKey, 0, 99).Result()
+		if err != nil {
+			return totalRetried, err
+		}
+		if len(members) == 0 {
+			break
+		}
+
+		for _, m := range members {
+			task := &Task{}
+			if err := c.codec.Unmarshal(unsafeStringToBytes(m), task); err != nil {
+				_ = c.DeleteDeadLetter(ctx, queue, task.ID)
+				continue
+			}
+
+			task.Retry = 0
+			task.LastError = ""
+
+			if err := c.Enqueue(ctx, task); err != nil {
+				return totalRetried, err
+			}
+
+			if err := c.DeleteDeadLetter(ctx, queue, task.ID); err != nil {
+				return totalRetried, err
+			}
+			totalRetried++
+		}
+	}
+	return totalRetried, nil
+}
+
+func (c *client) PurgeAllDeadLetters(ctx context.Context, queue string) (int64, error) {
+	dlqKey := DLQKey(queue)
+	dlqIndexKey := DLQIndexKey(queue)
+
+	count, err := c.rdb.ZCard(ctx, dlqKey).Result()
+	if err != nil {
+		return 0, err
+	}
+	if count == 0 {
+		return 0, nil
+	}
+
+	err = c.rdb.Del(ctx, dlqKey, dlqIndexKey).Err()
+	if err != nil {
+		return 0, err
+	}
+	return count, nil
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -181,6 +182,75 @@ func TestAdminDashboard(t *testing.T) {
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.Contains(t, rec.Body.String(), "successfully deleted from DLQ")
+	})
+
+	t.Run("DLQ Bulk Operations Management APIs", func(t *testing.T) {
+		queueName := "test-admin-queue"
+		dlqKey := taskmq.DLQKey(queueName)
+		dlqIndexKey := taskmq.DLQIndexKey(queueName)
+
+		rdb.Del(ctx, dlqKey, dlqIndexKey)
+		defer rdb.Del(ctx, dlqKey, dlqIndexKey)
+
+		// Create 5 dead tasks
+		for i := 0; i < 5; i++ {
+			deadTask := taskmq.NewTask("task:bulk-failed", []byte("bad-data"), taskmq.TaskOptions{Queue: queueName})
+			deadTask.ID = fmt.Sprintf("dead-id-%d", i)
+			deadTask.Retry = 3
+			deadTask.LastError = "bulk error"
+			serialized, _ := json.Marshal(deadTask)
+
+			rdb.ZAdd(ctx, dlqKey, goredis.Z{Score: float64(time.Now().UnixMilli()), Member: serialized})
+			rdb.HSet(ctx, dlqIndexKey, deadTask.ID, serialized)
+		}
+
+		// 1. Verify 5 tasks in DLQ
+		req := httptest.NewRequest(http.MethodGet, "/api/queues/test-admin-queue/dlq", nil)
+		rec := httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		var tasks []*taskmq.Task
+		json.Unmarshal(rec.Body.Bytes(), &tasks)
+		assert.Len(t, tasks, 5)
+
+		// 2. Retry All DLQ tasks
+		req = httptest.NewRequest(http.MethodPost, "/api/queues/test-admin-queue/dlq/retry", nil)
+		rec = httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), "Successfully re-enqueued 5 tasks")
+
+		// 3. Verify DLQ is empty after retry all
+		req = httptest.NewRequest(http.MethodGet, "/api/queues/test-admin-queue/dlq", nil)
+		rec = httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		json.Unmarshal(rec.Body.Bytes(), &tasks)
+		assert.Len(t, tasks, 0)
+
+		// 4. Create 3 more dead tasks to test Purge
+		for i := 0; i < 3; i++ {
+			deadTask := taskmq.NewTask("task:bulk-failed", []byte("bad-data"), taskmq.TaskOptions{Queue: queueName})
+			deadTask.ID = fmt.Sprintf("dead-id-purge-%d", i)
+			serialized, _ := json.Marshal(deadTask)
+			rdb.ZAdd(ctx, dlqKey, goredis.Z{Score: float64(time.Now().UnixMilli()), Member: serialized})
+			rdb.HSet(ctx, dlqIndexKey, deadTask.ID, serialized)
+		}
+
+		// 5. Purge DLQ
+		req = httptest.NewRequest(http.MethodDelete, "/api/queues/test-admin-queue/dlq", nil)
+		rec = httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Contains(t, rec.Body.String(), "Successfully purged 3 tasks")
+
+		// 6. Verify DLQ is empty
+		req = httptest.NewRequest(http.MethodGet, "/api/queues/test-admin-queue/dlq", nil)
+		rec = httptest.NewRecorder()
+		e.ServeHTTP(rec, req)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		json.Unmarshal(rec.Body.Bytes(), &tasks)
+		assert.Len(t, tasks, 0)
 	})
 
 	t.Run("Scheduled Tasks Management APIs", func(t *testing.T) {
