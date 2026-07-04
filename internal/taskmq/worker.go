@@ -82,8 +82,6 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 	return pool
 }
 
-
-
 // Start starts the worker pool consumers, scheduler, and janitor loops
 func (w *workerPool) Start(ctx context.Context) error {
 	streamKey := StreamKey(w.queue)
@@ -142,8 +140,6 @@ func (w *workerPool) Start(ctx context.Context) error {
 	w.logger.Info("Worker pool started successfully", zap.String("queue", w.queue), zap.Int("concurrency", w.concurrency))
 	return nil
 }
-
-
 
 func (w *workerPool) runBackgroundLoop(workerID int) {
 	defer w.wg.Done()
@@ -233,8 +229,6 @@ func RateLimitKey(queue string, groupKey string) string {
 	return fmt.Sprintf("taskmq:{%s}:rate_limit", queue)
 }
 
-
-
 func shuffleQueues(queues []QueuePriority) []string {
 	temp := make([]QueuePriority, len(queues))
 	copy(temp, queues)
@@ -297,4 +291,3 @@ func sortQueues(queues []QueuePriority) []string {
 	}
 	return result
 }
-

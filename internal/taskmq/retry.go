@@ -44,13 +44,13 @@ func (e *ExponentialBackoff) NextBackoff(task *Task) time.Duration {
 }
 
 type ErrorFilterRetryPolicy struct {
-	BasePolicy        RetryPolicy
+	BasePolicy         RetryPolicy
 	NonRetryableErrors []error
 }
 
 func NewErrorFilterRetryPolicy(base RetryPolicy, nonRetryable []error) RetryPolicy {
 	return &ErrorFilterRetryPolicy{
-		BasePolicy:        base,
+		BasePolicy:         base,
 		NonRetryableErrors: nonRetryable,
 	}
 }

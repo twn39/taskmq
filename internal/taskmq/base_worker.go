@@ -11,22 +11,22 @@ import (
 )
 
 type baseWorker struct {
-	rdb               *redis.Client
-	logger            *zap.Logger
-	group             string
-	consumer          string
-	concurrency       int
-	handlers          map[string]HandlerFunc
-	codec             Codec
-	syncExecution     bool
-	execPoolSize      int
-	sem               chan struct{}
-	parentCtx         context.Context
-	ctx               context.Context
-	cancel            context.CancelFunc
-	consumerCtx       context.Context
-	consumerCancel    context.CancelFunc
-	wg                sync.WaitGroup
+	rdb            *redis.Client
+	logger         *zap.Logger
+	group          string
+	consumer       string
+	concurrency    int
+	handlers       map[string]HandlerFunc
+	codec          Codec
+	syncExecution  bool
+	execPoolSize   int
+	sem            chan struct{}
+	parentCtx      context.Context
+	ctx            context.Context
+	cancel         context.CancelFunc
+	consumerCtx    context.Context
+	consumerCancel context.CancelFunc
+	wg             sync.WaitGroup
 
 	// Rate Limiting
 	limiter           *GCRALimiter

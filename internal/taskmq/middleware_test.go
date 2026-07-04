@@ -12,7 +12,7 @@ import (
 
 func TestMiddleware_Recovery(t *testing.T) {
 	logger := zap.NewNop()
-	
+
 	t.Run("Recovery catches panic", func(t *testing.T) {
 		handlers := []CoreHandlerFunc{
 			RecoveryMiddleware(logger),

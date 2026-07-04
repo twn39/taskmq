@@ -9,6 +9,7 @@ require (
 	github.com/robfig/cron/v3 v3.0.1
 	github.com/spf13/viper v1.21.0
 	github.com/stretchr/testify v1.11.1
+	github.com/urfave/cli/v3 v3.10.1
 	go.uber.org/fx v1.24.0
 	go.uber.org/zap v1.28.0
 	google.golang.org/grpc v1.82.0

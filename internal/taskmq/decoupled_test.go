@@ -112,7 +112,7 @@ func TestWorkerPool_DecoupledAbtractionAndFailureHandling(t *testing.T) {
 		pool.Register("test-task", func(ctx context.Context, task *Task) error {
 			return errors.New("fatal billing error")
 		})
-		
+
 		taskBytesWithWrongName := []byte(`{"id":"t-1","queue":"test-q","name":"test-task","retry":2,"max_retry":3}`)
 		msg.Values["payload"] = taskBytesWithWrongName
 
@@ -134,7 +134,7 @@ func TestWorkerPool_DecoupledAbtractionAndFailureHandling(t *testing.T) {
 
 	t.Run("Task filtered out by ErrorFilterRetryPolicy", func(t *testing.T) {
 		mb := &mockBroker{}
-		
+
 		// Base says yes, but filter says no because error matches non-retryable list
 		nonRetryableErr := errors.New("invalid signature")
 		basePolicy := &mockRetryPolicy{should: true}

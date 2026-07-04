@@ -227,14 +227,17 @@ func TestInspectJSONField(t *testing.T) {
 }
 
 type dummyCronManager struct{}
-func (d *dummyCronManager) Run(ctx context.Context) error { return nil }
+
+func (d *dummyCronManager) Run(ctx context.Context) error                    { return nil }
 func (d *dummyCronManager) Reschedule(ctx context.Context, task *Task) error { return nil }
 
 type dummyScheduler struct{}
+
 func (d *dummyScheduler) Run(ctx context.Context) error { return nil }
 
 type dummyJanitor struct{}
-func (d *dummyJanitor) Run(ctx context.Context) error { return nil }
+
+func (d *dummyJanitor) Run(ctx context.Context) error                                      { return nil }
 func (d *dummyJanitor) RegisterProcessor(fn func(ctx context.Context, msg redis.XMessage)) {}
 
 func TestCustomFactories(t *testing.T) {

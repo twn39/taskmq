@@ -2,7 +2,6 @@ package main
 
 import (
 	"context"
-	"flag"
 	"fmt"
 	"os"
 	"strconv"
@@ -12,7 +11,35 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/twn39/taskmq/internal/taskmq"
+	"github.com/urfave/cli/v3"
 )
+
+var (
+	rdb    *redis.Client
+	client taskmq.Client
+)
+
+func initRedis(cmd *cli.Command) error {
+	addr := cmd.String("redis-addr")
+	db := int(cmd.Int("redis-db"))
+	password := cmd.String("redis-password")
+
+	rdb = redis.NewClient(&redis.Options{
+		Addr:     addr,
+		DB:       db,
+		Password: password,
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	if err := rdb.Ping(ctx).Err(); err != nil {
+		return fmt.Errorf("Failed to connect to Redis at %s: %w", addr, err)
+	}
+
+	client = taskmq.NewClient(rdb)
+	return nil
+}
 
 func printUsage() {
 	fmt.Println("Usage: taskmq-cli [global options] <command> [command options] [args]")
@@ -32,144 +59,183 @@ func printUsage() {
 }
 
 func main() {
-	// 1. Setup global flags
-	globalFlags := flag.NewFlagSet("global", flag.ExitOnError)
-	redisAddr := globalFlags.String("redis-addr", getEnv("REDIS_ADDR", "localhost:6379"), "Redis server address")
-	redisDB := globalFlags.Int("redis-db", getEnvInt("REDIS_DB", 0), "Redis database number")
-	redisPassword := globalFlags.String("redis-password", getEnv("REDIS_PASSWORD", ""), "Redis password")
+	cmd := &cli.Command{
+		Name:  "taskmq-cli",
+		Usage: "Distributed task queue CLI",
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "redis-addr",
+				Value:   "localhost:6379",
+				Usage:   "Redis server address",
+				Sources: cli.EnvVars("REDIS_ADDR"),
+			},
+			&cli.IntFlag{
+				Name:    "redis-db",
+				Value:   0,
+				Usage:   "Redis database number",
+				Sources: cli.EnvVars("REDIS_DB"),
+			},
+			&cli.StringFlag{
+				Name:    "redis-password",
+				Value:   "",
+				Usage:   "Redis password",
+				Sources: cli.EnvVars("REDIS_PASSWORD"),
+			},
+		},
+		Action: func(ctx context.Context, cmd *cli.Command) error {
+			if cmd.NArg() > 0 {
+				fmt.Printf("Error: Unknown command '%s'\n", cmd.Args().Get(0))
+				printUsage()
+				return cli.Exit("", 1)
+			}
+			printUsage()
+			return cli.Exit("", 1)
+		},
+		Commands: []*cli.Command{
+			{
+				Name:  "stats",
+				Usage: "Display real-time statistics of all active queues",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if err := initRedis(cmd); err != nil {
+						return cli.Exit(fmt.Sprintf("Error: %v", err), 1)
+					}
+					handleStats(ctx, rdb)
+					return nil
+				},
+			},
+			{
+				Name:      "pause",
+				Usage:     "Pause message consumption of specified queue",
+				ArgsUsage: "<queue>",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.NArg() < 1 {
+						return cli.Exit("Error: Missing queue name. Usage: taskmq-cli pause <queue>", 1)
+					}
+					queue := cmd.Args().Get(0)
+					if err := initRedis(cmd); err != nil {
+						return cli.Exit(fmt.Sprintf("Error: %v", err), 1)
+					}
+					if err := client.Pause(ctx, queue); err != nil {
+						return cli.Exit(fmt.Sprintf("Error: Failed to pause queue %s: %v", queue, err), 1)
+					}
+					fmt.Printf("Success: Queue '%s' paused successfully.\n", queue)
+					return nil
+				},
+			},
+			{
+				Name:      "resume",
+				Usage:     "Resume message consumption of specified queue",
+				ArgsUsage: "<queue>",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.NArg() < 1 {
+						return cli.Exit("Error: Missing queue name. Usage: taskmq-cli resume <queue>", 1)
+					}
+					queue := cmd.Args().Get(0)
+					if err := initRedis(cmd); err != nil {
+						return cli.Exit(fmt.Sprintf("Error: %v", err), 1)
+					}
+					if err := client.Resume(ctx, queue); err != nil {
+						return cli.Exit(fmt.Sprintf("Error: Failed to resume queue %s: %v", queue, err), 1)
+					}
+					fmt.Printf("Success: Queue '%s' resumed successfully.\n", queue)
+					return nil
+				},
+			},
+			{
+				Name:  "dlq",
+				Usage: "Dead-letter queue operations",
+				Action: func(ctx context.Context, cmd *cli.Command) error {
+					if cmd.NArg() > 0 {
+						sub := cmd.Args().Get(0)
+						return cli.Exit(fmt.Sprintf("Error: Unknown dlq sub-command '%s'. Supported: list, retry, delete", sub), 1)
+					}
+					return cli.Exit("Error: Missing sub-command. Usage: taskmq-cli dlq [list|retry|delete]", 1)
+				},
+				Commands: []*cli.Command{
+					{
+						Name:      "list",
+						Usage:     "List dead-lettered tasks in specified queue",
+						ArgsUsage: "<queue> [limit]",
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							if cmd.NArg() < 1 {
+								return cli.Exit("Error: Missing queue name. Usage: taskmq-cli dlq list <queue> [limit]", 1)
+							}
+							queue := cmd.Args().Get(0)
+							limit := 20
+							if cmd.NArg() >= 2 {
+								if lim, err := strconv.Atoi(cmd.Args().Get(1)); err == nil && lim > 0 {
+									limit = lim
+								}
+							}
+							if err := initRedis(cmd); err != nil {
+								return cli.Exit(fmt.Sprintf("Error: %v", err), 1)
+							}
+							tasks, err := client.ListDeadLetters(ctx, queue, limit)
+							if err != nil {
+								return cli.Exit(fmt.Sprintf("Error: Failed to list DLQ for queue %s: %v", queue, err), 1)
+							}
 
-	// Parse global flags - flag package naturally stops at the first positional argument
-	_ = globalFlags.Parse(os.Args[1:])
+							if len(tasks) == 0 {
+								fmt.Printf("Queue '%s' dead-letter queue is empty.\n", queue)
+								return nil
+							}
 
-	args := globalFlags.Args()
-	if len(args) < 1 {
-		printUsage()
-		os.Exit(1)
+							w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
+							fmt.Fprintln(w, "TASK ID\tTASK NAME\tRETRIES\tLAST ERROR")
+							for _, t := range tasks {
+								fmt.Fprintf(w, "%s\t%s\t%d\t%s\n", t.ID, t.Name, t.Retry, t.LastError)
+							}
+							_ = w.Flush()
+							return nil
+						},
+					},
+					{
+						Name:      "retry",
+						Usage:     "Retry a specified dead-lettered task",
+						ArgsUsage: "<queue> <id>",
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							if cmd.NArg() < 2 {
+								return cli.Exit("Error: Missing arguments. Usage: taskmq-cli dlq retry <queue> <id>", 1)
+							}
+							queue := cmd.Args().Get(0)
+							taskID := cmd.Args().Get(1)
+							if err := initRedis(cmd); err != nil {
+								return cli.Exit(fmt.Sprintf("Error: %v", err), 1)
+							}
+							if err := client.RetryDeadLetter(ctx, queue, taskID); err != nil {
+								return cli.Exit(fmt.Sprintf("Error: Failed to retry dead letter %s in queue %s: %v", taskID, queue, err), 1)
+							}
+							fmt.Printf("Success: Task '%s' in queue '%s' successfully re-enqueued for retry.\n", taskID, queue)
+							return nil
+						},
+					},
+					{
+						Name:      "delete",
+						Usage:     "Delete a specified dead-lettered task",
+						ArgsUsage: "<queue> <id>",
+						Action: func(ctx context.Context, cmd *cli.Command) error {
+							if cmd.NArg() < 2 {
+								return cli.Exit("Error: Missing arguments. Usage: taskmq-cli dlq delete <queue> <id>", 1)
+							}
+							queue := cmd.Args().Get(0)
+							taskID := cmd.Args().Get(1)
+							if err := initRedis(cmd); err != nil {
+								return cli.Exit(fmt.Sprintf("Error: %v", err), 1)
+							}
+							if err := client.DeleteDeadLetter(ctx, queue, taskID); err != nil {
+								return cli.Exit(fmt.Sprintf("Error: Failed to delete dead letter %s in queue %s: %v", taskID, queue, err), 1)
+							}
+							fmt.Printf("Success: Task '%s' deleted from DLQ in queue '%s'.\n", taskID, queue)
+							return nil
+						},
+					},
+				},
+			},
+		},
 	}
 
-	command := args[0]
-	cmdArgs := args[1:]
-
-	// 2. Connect to Redis
-	rdb := redis.NewClient(&redis.Options{
-		Addr:     *redisAddr,
-		DB:       *redisDB,
-		Password: *redisPassword,
-	})
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-
-	if err := rdb.Ping(ctx).Err(); err != nil {
-		fmt.Printf("Error: Failed to connect to Redis at %s: %v\n", *redisAddr, err)
-		os.Exit(1)
-	}
-
-	client := taskmq.NewClient(rdb)
-
-	// 3. Dispatch commands
-	switch command {
-	case "stats":
-		handleStats(ctx, rdb)
-	case "pause":
-		if len(cmdArgs) < 1 {
-			fmt.Println("Error: Missing queue name. Usage: taskmq-cli pause <queue>")
-			os.Exit(1)
-		}
-		queue := cmdArgs[0]
-		if err := client.Pause(ctx, queue); err != nil {
-			fmt.Printf("Error: Failed to pause queue %s: %v\n", queue, err)
-			os.Exit(1)
-		}
-		fmt.Printf("Success: Queue '%s' paused successfully.\n", queue)
-
-	case "resume":
-		if len(cmdArgs) < 1 {
-			fmt.Println("Error: Missing queue name. Usage: taskmq-cli resume <queue>")
-			os.Exit(1)
-		}
-		queue := cmdArgs[0]
-		if err := client.Resume(ctx, queue); err != nil {
-			fmt.Printf("Error: Failed to resume queue %s: %v\n", queue, err)
-			os.Exit(1)
-		}
-		fmt.Printf("Success: Queue '%s' resumed successfully.\n", queue)
-
-	case "dlq":
-		if len(cmdArgs) < 1 {
-			fmt.Println("Error: Missing sub-command. Usage: taskmq-cli dlq [list|retry|delete]")
-			os.Exit(1)
-		}
-		dlqSubCmd := cmdArgs[0]
-		dlqArgs := cmdArgs[1:]
-
-		switch dlqSubCmd {
-		case "list":
-			if len(dlqArgs) < 1 {
-				fmt.Println("Error: Missing queue name. Usage: taskmq-cli dlq list <queue> [limit]")
-				os.Exit(1)
-			}
-			queue := dlqArgs[0]
-			limit := 20
-			if len(dlqArgs) >= 2 {
-				if lim, err := strconv.Atoi(dlqArgs[1]); err == nil && lim > 0 {
-					limit = lim
-				}
-			}
-
-			tasks, err := client.ListDeadLetters(ctx, queue, limit)
-			if err != nil {
-				fmt.Printf("Error: Failed to list DLQ for queue %s: %v\n", queue, err)
-				os.Exit(1)
-			}
-
-			if len(tasks) == 0 {
-				fmt.Printf("Queue '%s' dead-letter queue is empty.\n", queue)
-				return
-			}
-
-			w := tabwriter.NewWriter(os.Stdout, 0, 0, 3, ' ', 0)
-			fmt.Fprintln(w, "TASK ID\tTASK NAME\tRETRIES\tLAST ERROR")
-			for _, t := range tasks {
-				fmt.Fprintf(w, "%s\t%s\t%d\t%s\n", t.ID, t.Name, t.Retry, t.LastError)
-			}
-			_ = w.Flush()
-
-		case "retry":
-			if len(dlqArgs) < 2 {
-				fmt.Println("Error: Missing arguments. Usage: taskmq-cli dlq retry <queue> <id>")
-				os.Exit(1)
-			}
-			queue := dlqArgs[0]
-			taskID := dlqArgs[1]
-
-			if err := client.RetryDeadLetter(ctx, queue, taskID); err != nil {
-				fmt.Printf("Error: Failed to retry dead letter %s in queue %s: %v\n", taskID, queue, err)
-				os.Exit(1)
-			}
-			fmt.Printf("Success: Task '%s' in queue '%s' successfully re-enqueued for retry.\n", taskID, queue)
-
-		case "delete":
-			if len(dlqArgs) < 2 {
-				fmt.Println("Error: Missing arguments. Usage: taskmq-cli dlq delete <queue> <id>")
-				os.Exit(1)
-			}
-			queue := dlqArgs[0]
-			taskID := dlqArgs[1]
-
-			if err := client.DeleteDeadLetter(ctx, queue, taskID); err != nil {
-				fmt.Printf("Error: Failed to delete dead letter %s in queue %s: %v\n", taskID, queue, err)
-				os.Exit(1)
-			}
-			fmt.Printf("Success: Task '%s' deleted from DLQ in queue '%s'.\n", taskID, queue)
-
-		default:
-			fmt.Printf("Error: Unknown dlq sub-command '%s'. Supported: list, retry, delete\n", dlqSubCmd)
-			os.Exit(1)
-		}
-
-	default:
-		fmt.Printf("Error: Unknown command '%s'\n", command)
-		printUsage()
+	if err := cmd.Run(context.Background(), os.Args); err != nil {
+		fmt.Fprintf(os.Stdout, "%v\n", err)
 		os.Exit(1)
 	}
 }
@@ -227,20 +293,4 @@ func handleStats(ctx context.Context, rdb *redis.Client) {
 		fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%d\n", q, status, activeCount, scheduledCount, dlqCount)
 	}
 	_ = w.Flush()
-}
-
-func getEnv(key, fallback string) string {
-	if val, ok := os.LookupEnv(key); ok {
-		return val
-	}
-	return fallback
-}
-
-func getEnvInt(key string, fallback int) int {
-	if val, ok := os.LookupEnv(key); ok {
-		if idx, err := strconv.Atoi(val); err == nil {
-			return idx
-		}
-	}
-	return fallback
 }

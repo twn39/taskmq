@@ -154,8 +154,6 @@ func NewPriorityWorker(rdb *redis.Client, logger *zap.Logger, opts ...PriorityWo
 	return pw
 }
 
-
-
 func (pw *priorityWorker) Start(ctx context.Context) error {
 	for _, q := range pw.queues {
 		streamKey := StreamKey(q.Name)
@@ -211,8 +209,6 @@ func (pw *priorityWorker) runBackgroundLoop(runner Runner, name string) {
 		pw.logger.Error("Background priority runner stopped with error", zap.String("runner", name), zap.Error(err))
 	}
 }
-
-
 
 func (pw *priorityWorker) worker(workerIndex int) {
 	defer pw.wg.Done()
@@ -309,7 +305,3 @@ func (pw *priorityWorker) worker(workerIndex int) {
 		}
 	}
 }
-
-
-
-

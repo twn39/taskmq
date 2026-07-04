@@ -351,7 +351,7 @@ func TestTaskMQ_RateLimitDeferralAtomicity(t *testing.T) {
 						Concurrency:       1,
 						RateLimitMax:      1,
 						RateLimitDuration: 10 * time.Second, // Long rate limit duration
-						RateLimitKeyField: "tenantId",        // Forces Phase 2 deferral!
+						RateLimitKeyField: "tenantId",       // Forces Phase 2 deferral!
 					},
 				}
 				return cfg
@@ -428,7 +428,7 @@ func TestTaskMQ_RateLimitDeferralAtomicity(t *testing.T) {
 	assert.Eventually(t, func() bool {
 		streamLen, _ := rdb.XLen(ctx, taskmq.StreamKey(qName)).Result()
 		zsetSize, _ := rdb.ZCard(ctx, taskmq.DelayedKey(qName)).Result()
-		
+
 		// Check PEL size
 		pendingInfo, _ := rdb.XPending(ctx, taskmq.StreamKey(qName), "taskmq-group-"+qName).Result()
 		pelSize := 0
@@ -441,4 +441,3 @@ func TestTaskMQ_RateLimitDeferralAtomicity(t *testing.T) {
 		return streamLen == 0 && pelSize == 0 && zsetSize == 1
 	}, 3*time.Second, 100*time.Millisecond, "Task was not deferred atomically into delayed ZSET or cleaned from Stream/PEL")
 }
-

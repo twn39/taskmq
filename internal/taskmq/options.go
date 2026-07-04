@@ -177,7 +177,6 @@ func buildSharedPriorityDefaults(rdb *redis.Client, opts *PriorityWorkerOptions)
 
 // Option functions
 
-
 func WithGroup(group string) sharedOption {
 	return sharedOption{
 		poolFunc: func(o *WorkerPoolOptions) error {
