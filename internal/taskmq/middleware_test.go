@@ -55,7 +55,7 @@ func TestMiddleware_RateLimiter(t *testing.T) {
 		handlers := []CoreHandlerFunc{
 			RateLimitMiddleware(limiter, mb, func(queue string) (int64, time.Duration, string) {
 				return 5, time.Minute, ""
-			}, nil, logger),
+			}, nil, JSONCodec{}, logger),
 			func(c *ConsumeContext) error {
 				return nil
 			},
@@ -85,7 +85,7 @@ func TestMiddleware_RateLimiter(t *testing.T) {
 		handlers := []CoreHandlerFunc{
 			RateLimitMiddleware(limiter, mb, func(queue string) (int64, time.Duration, string) {
 				return 1, time.Minute, ""
-			}, nil, logger),
+			}, nil, JSONCodec{}, logger),
 			func(c *ConsumeContext) error {
 				return nil
 			},
@@ -166,7 +166,7 @@ func TestMiddleware_RateLimiter_GroupKeyLayers(t *testing.T) {
 				return 10, time.Minute, "field-dynamic"
 			}, func(p []byte) string {
 				return "layer-2"
-			}, logger),
+			}, JSONCodec{}, logger),
 			func(c *ConsumeContext) error {
 				extractedGroup = c.RateLimitGroup
 				return nil
@@ -197,7 +197,7 @@ func TestMiddleware_RateLimiter_GroupKeyLayers(t *testing.T) {
 				return 10, time.Minute, "field-dynamic"
 			}, func(p []byte) string {
 				return "layer-2"
-			}, logger),
+			}, JSONCodec{}, logger),
 			func(c *ConsumeContext) error {
 				extractedGroup = c.RateLimitGroup
 				return nil
@@ -226,7 +226,7 @@ func TestMiddleware_RateLimiter_GroupKeyLayers(t *testing.T) {
 		handlers := []CoreHandlerFunc{
 			RateLimitMiddleware(limiter, mb, func(queue string) (int64, time.Duration, string) {
 				return 10, time.Minute, "field-dynamic"
-			}, nil, logger),
+			}, nil, JSONCodec{}, logger),
 			func(c *ConsumeContext) error {
 				extractedGroup = c.RateLimitGroup
 				return nil

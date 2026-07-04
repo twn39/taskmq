@@ -64,6 +64,20 @@ var registerCronCmd = redis.NewScript(`
 	return 1
 `)
 
+var deleteDeadLetterCmd = redis.NewScript(`
+	local dlqKey = KEYS[1]
+	local dlqIndexKey = KEYS[2]
+	local taskID = ARGV[1]
+
+	local serialized = redis.call("HGET", dlqIndexKey, taskID)
+	if serialized then
+		redis.call("ZREM", dlqKey, serialized)
+		redis.call("HDEL", dlqIndexKey, taskID)
+		return 1
+	end
+	return 0
+`)
+
 type Client interface {
 	Enqueue(ctx context.Context, task *Task) error
 	EnqueueIn(ctx context.Context, task *Task, delay time.Duration) error
@@ -247,57 +261,44 @@ func (c *client) ListDeadLetters(ctx context.Context, queue string, limit int) (
 // DeleteDeadLetter removes a specific task from the dead-letter queue by task ID
 func (c *client) DeleteDeadLetter(ctx context.Context, queue string, taskID string) error {
 	dlqKey := DLQKey(queue)
-	members, err := c.rdb.ZRange(ctx, dlqKey, 0, -1).Result()
-	if err != nil {
-		return err
+	dlqIndexKey := DLQIndexKey(queue)
+	_, err := deleteDeadLetterCmd.Run(ctx, c.rdb, []string{dlqKey, dlqIndexKey}, taskID).Result()
+	if err == redis.Nil {
+		return nil
 	}
-
-	for _, m := range members {
-		task := &Task{}
-		err := c.codec.Unmarshal(unsafeStringToBytes(m), task)
-		if err == nil && task.ID == taskID {
-			return c.rdb.ZRem(ctx, dlqKey, m).Err()
-		}
-	}
-	return nil // Not found is a no-op
+	return err
 }
 
 // RetryDeadLetter retries a dead-letter task by resetting retry counts and re-enqueuing it
 func (c *client) RetryDeadLetter(ctx context.Context, queue string, taskID string) error {
-	dlqKey := DLQKey(queue)
-	members, err := c.rdb.ZRange(ctx, dlqKey, 0, -1).Result()
-	if err != nil {
+	dlqIndexKey := DLQIndexKey(queue)
+
+	// Fetch serialized task in O(1) from the Hash index
+	serialized, err := c.rdb.HGet(ctx, dlqIndexKey, taskID).Result()
+	if err == redis.Nil {
+		return fmt.Errorf("task ID %s not found in DLQ", taskID)
+	} else if err != nil {
 		return err
 	}
 
-	var targetMember string
-	var targetTask *Task
-	for _, m := range members {
-		task := &Task{}
-		err := c.codec.Unmarshal(unsafeStringToBytes(m), task)
-		if err == nil && task.ID == taskID {
-			targetMember = m
-			targetTask = task
-			break
-		}
-	}
-
-	if targetTask == nil {
-		return fmt.Errorf("task ID %s not found in DLQ", taskID)
+	task := &Task{}
+	err = c.codec.Unmarshal(unsafeStringToBytes(serialized), task)
+	if err != nil {
+		return fmt.Errorf("failed to unmarshal dead letter task: %w", err)
 	}
 
 	// Reset execution metrics
-	targetTask.Retry = 0
-	targetTask.LastError = ""
+	task.Retry = 0
+	task.LastError = ""
 
 	// Re-enqueue the task
-	err = c.Enqueue(ctx, targetTask)
+	err = c.Enqueue(ctx, task)
 	if err != nil {
 		return err
 	}
 
-	// Remove from DLQ on successful re-enqueue
-	return c.rdb.ZRem(ctx, dlqKey, targetMember).Err()
+	// Remove from DLQ structures atomically in O(1)
+	return c.DeleteDeadLetter(ctx, queue, taskID)
 }
 
 func (c *client) RegisterCron(ctx context.Context, jobName string, spec string, task *Task) error {

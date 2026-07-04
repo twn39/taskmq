@@ -141,7 +141,7 @@ func TestWithOptionFunctions(t *testing.T) {
 	}
 }
 
-func TestExtractGroupKey(t *testing.T) {
+func TestInspectJSONField(t *testing.T) {
 	tests := []struct {
 		name     string
 		payload  []byte
@@ -182,7 +182,7 @@ func TestExtractGroupKey(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			result := extractGroupKey(tt.payload, tt.field)
+			result, _ := inspectJSONField(tt.payload, tt.field)
 			if result != tt.expected {
 				t.Errorf("expected %q, got %q", tt.expected, result)
 			}

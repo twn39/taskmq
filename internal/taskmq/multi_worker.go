@@ -1,7 +1,6 @@
 package taskmq
 
 import (
-	"math/rand"
 	"context"
 	"fmt"
 	"sync"
@@ -85,15 +84,7 @@ func NewPriorityWorker(rdb *redis.Client, logger *zap.Logger, opts ...WorkerOpti
 		}
 	}
 
-	if opt.broker == nil {
-		opt.broker = NewRedisBroker(rdb, opt.codec)
-	}
-	if opt.retryPolicy == nil {
-		opt.retryPolicy = NewExponentialBackoff(100*time.Millisecond, 1*time.Hour, true)
-	}
-	if opt.deadLetterPolicy == nil {
-		opt.deadLetterPolicy = NewStandardDeadLetterPolicy("", nil)
-	}
+	buildSharedDefaults(rdb, &opt)
 
 	base := &baseWorker{}
 	base.initBase(rdb, logger, &opt)
@@ -195,7 +186,7 @@ func (pw *priorityWorker) Start(ctx context.Context) error {
 
 	for i := 0; i < pw.concurrency; i++ {
 		pw.wg.Add(1)
-		go pw.worker()
+		go pw.worker(i)
 	}
 
 	for qName, sched := range pw.schedulers {
@@ -223,9 +214,9 @@ func (pw *priorityWorker) runBackgroundLoop(runner Runner, name string) {
 
 
 
-func (pw *priorityWorker) worker() {
+func (pw *priorityWorker) worker(workerIndex int) {
 	defer pw.wg.Done()
-	consumerName := fmt.Sprintf("%s-%d", pw.consumer, rand.Intn(10000))
+	consumerName := fmt.Sprintf("%s-%d", pw.consumer, workerIndex)
 
 	for {
 		select {

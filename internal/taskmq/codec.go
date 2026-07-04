@@ -1,9 +1,11 @@
 package taskmq
 
 import (
+	"bytes"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 	"unsafe"
 )
@@ -219,4 +221,64 @@ func unsafeStringToBytes(s string) []byte {
 		return nil
 	}
 	return unsafe.Slice(unsafe.StringData(s), len(s))
+}
+
+// PayloadInspector is an optional interface that Codecs can implement to provide
+// high-performance, schema-specific extraction of a field from task payloads.
+type PayloadInspector interface {
+	InspectField(payload []byte, field string) (string, error)
+}
+
+// inspectJSONField is the default streaming JSON field inspector.
+func inspectJSONField(payload []byte, field string) (string, error) {
+	if len(payload) == 0 || field == "" {
+		return "", nil
+	}
+
+	dec := json.NewDecoder(bytes.NewReader(payload))
+	t, err := dec.Token()
+	if err != nil || t != json.Delim('{') {
+		return "", errors.New("json codec: payload is not a JSON object")
+	}
+
+	for dec.More() {
+		t, err := dec.Token()
+		if err != nil {
+			break
+		}
+		key, ok := t.(string)
+		if !ok {
+			continue
+		}
+
+		if key == field {
+			var val interface{}
+			if err := dec.Decode(&val); err == nil {
+				return fmt.Sprintf("%v", val), nil
+			}
+			break
+		}
+
+		var skip interface{}
+		if err := dec.Decode(&skip); err != nil {
+			break
+		}
+	}
+	return "", fmt.Errorf("json codec: field %q not found in payload", field)
+}
+
+// InspectField implements PayloadInspector for JSONCodec.
+func (JSONCodec) InspectField(payload []byte, field string) (string, error) {
+	return inspectJSONField(payload, field)
+}
+
+// InspectField implements PayloadInspector for BinaryCodec.
+func (BinaryCodec) InspectField(payload []byte, field string) (string, error) {
+	if len(payload) == 0 || field == "" {
+		return "", nil
+	}
+	if payload[0] == '{' {
+		return inspectJSONField(payload, field)
+	}
+	return "", errors.New("binary codec: cannot inspect non-JSON payload without a schema")
 }

@@ -88,6 +88,18 @@ func defaultWorkerOptions(codec Codec) workerOptions {
 	}
 }
 
+func buildSharedDefaults(rdb *redis.Client, opts *workerOptions) {
+	if opts.broker == nil {
+		opts.broker = NewRedisBroker(rdb, opts.codec)
+	}
+	if opts.retryPolicy == nil {
+		opts.retryPolicy = NewExponentialBackoff(100*time.Millisecond, 1*time.Hour, true)
+	}
+	if opts.deadLetterPolicy == nil {
+		opts.deadLetterPolicy = NewStandardDeadLetterPolicy("", nil)
+	}
+}
+
 func buildDefaultComponents(rdb *redis.Client, logger *zap.Logger, queue string, opts *workerOptions) {
 	if opts.cronManager == nil && opts.cronManagerFactory != nil {
 		opts.cronManager = opts.cronManagerFactory(rdb, logger, queue, opts.codec, opts.cronHealingInterval, opts.cronHealingLockTTL, opts.cronHealingScanBatchSize, opts.cronHealingScanMaxCount)
@@ -98,15 +110,7 @@ func buildDefaultComponents(rdb *redis.Client, logger *zap.Logger, queue string,
 	if opts.janitor == nil && opts.janitorFactory != nil {
 		opts.janitor = opts.janitorFactory(rdb, logger, queue, opts.group, opts.consumer, opts.concurrency, opts.janitorInterval, opts.janitorMinIdleTime)
 	}
-	if opts.broker == nil {
-		opts.broker = NewRedisBroker(rdb, opts.codec)
-	}
-	if opts.retryPolicy == nil {
-		opts.retryPolicy = NewExponentialBackoff(100*time.Millisecond, 1*time.Hour, true)
-	}
-	if opts.deadLetterPolicy == nil {
-		opts.deadLetterPolicy = NewStandardDeadLetterPolicy("", nil)
-	}
+	buildSharedDefaults(rdb, opts)
 }
 
 // Option functions

@@ -163,6 +163,7 @@ func TestTaskMQ_ExecutionPoolPanicRecovery(t *testing.T) {
 	queueName := "pool_panic_test_queue"
 	streamKey := taskmq.StreamKey(queueName)
 	dlqKey := taskmq.DLQKey(queueName)
+	dlqIndexKey := taskmq.DLQIndexKey(queueName)
 
 	var rdb *goredis.Client
 	var client taskmq.Client
@@ -190,9 +191,9 @@ func TestTaskMQ_ExecutionPoolPanicRecovery(t *testing.T) {
 		fx.Populate(&rdb, &client, &worker),
 	)
 
-	// Clean up Redis
 	_ = rdb.Del(ctx, streamKey).Err()
 	_ = rdb.Del(ctx, dlqKey).Err()
+	_ = rdb.Del(ctx, dlqIndexKey).Err()
 
 	app.RequireStart()
 	defer app.RequireStop()

@@ -28,6 +28,7 @@ func TestTaskMQ_CLI_Operations(t *testing.T) {
 	pausedKey := taskmq.PausedKey(queueName)
 	delayedKey := taskmq.DelayedKey(queueName)
 	dlqKey := taskmq.DLQKey(queueName)
+	dlqIndexKey := taskmq.DLQIndexKey(queueName)
 
 	var rdb *goredis.Client
 	var client taskmq.Client
@@ -43,8 +44,8 @@ func TestTaskMQ_CLI_Operations(t *testing.T) {
 	)
 
 	// Clean up keys before test
-	rdb.Del(ctx, streamKey, pausedKey, delayedKey, dlqKey)
-	defer rdb.Del(ctx, streamKey, pausedKey, delayedKey, dlqKey)
+	rdb.Del(ctx, streamKey, pausedKey, delayedKey, dlqKey, dlqIndexKey)
+	defer rdb.Del(ctx, streamKey, pausedKey, delayedKey, dlqKey, dlqIndexKey)
 
 	app.RequireStart()
 	defer app.RequireStop()
@@ -114,6 +115,8 @@ func TestTaskMQ_CLI_Operations(t *testing.T) {
 	serializedDead, _ := taskmq.JSONCodec{}.Marshal(deadTask)
 	err = rdb.ZAdd(ctx, dlqKey, goredis.Z{Score: float64(time.Now().UnixMilli()), Member: serializedDead}).Err()
 	assert.NoError(t, err)
+	err = rdb.HSet(ctx, dlqIndexKey, deadTask.ID, serializedDead).Err()
+	assert.NoError(t, err)
 
 	// 5. Test stats command
 	output, err = runCLI("stats")
@@ -142,6 +145,8 @@ func TestTaskMQ_CLI_Operations(t *testing.T) {
 
 	// Put it back to test DLQ deletion
 	err = rdb.ZAdd(ctx, dlqKey, goredis.Z{Score: float64(time.Now().UnixMilli()), Member: serializedDead}).Err()
+	assert.NoError(t, err)
+	err = rdb.HSet(ctx, dlqIndexKey, deadTask.ID, serializedDead).Err()
 	assert.NoError(t, err)
 
 	// 8. Test dlq delete command

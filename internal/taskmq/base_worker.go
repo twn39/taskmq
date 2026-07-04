@@ -92,7 +92,7 @@ func (b *baseWorker) buildMiddlewareChain() {
 				return b.getQueueRateLimit(qName)
 			}
 			return 0, 0, ""
-		}, b.groupKeyExtractor, b.logger),
+		}, b.groupKeyExtractor, b.codec, b.logger),
 		RecoveryMiddleware(b.logger),
 		func(c *ConsumeContext) error {
 			handler, exists := b.handlers[c.Task.Name]

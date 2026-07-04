@@ -33,12 +33,14 @@ const luaHandleFailure = `
 	local targetKey = KEYS[1]
 	local streamKey = KEYS[2]
 	local lockKey = KEYS[3]
+	local dlqIndexKey = KEYS[4]
 	local action = ARGV[1]
 	local msgId = ARGV[2]
 	local groupName = ARGV[3]
 	local score = tonumber(ARGV[4])
 	local serializedTask = ARGV[5]
 	local expectedLockVal = ARGV[6]
+	local taskId = ARGV[7]
 
 	-- Ack and delete the processed message from stream
 	redis.call("XACK", streamKey, groupName, msgId)
@@ -49,7 +51,35 @@ const luaHandleFailure = `
 
 	-- Clean up uniqueness lock if moving to DLQ and lock matches
 	if action == "dlq" then
-		-- Apply capacity protection: keep only latest 1000 DLQ items
+		-- Set the secondary index in DLQ Hash
+		if dlqIndexKey ~= nil and dlqIndexKey ~= "" and taskId ~= nil and taskId ~= "" then
+			redis.call("HSET", dlqIndexKey, taskId, serializedTask)
+		end
+
+		-- Apply capacity protection: keep only latest 1000 DLQ items.
+		-- Before removing from Sorted Set, clean them up from the Hash index.
+		if dlqIndexKey ~= nil and dlqIndexKey ~= "" then
+			local toRemove = redis.call("ZRANGE", targetKey, 0, -1001)
+			for _, member in ipairs(toRemove) do
+				local id = nil
+				if string.sub(member, 1, 1) == "{" then
+					id = string.match(member, '"id"%s*:%s*"([^"]+)"')
+				else
+					if #member >= 2 then
+						local b1 = string.byte(member, 1)
+						local b2 = string.byte(member, 2)
+						local len = b1 * 256 + b2
+						if #member >= 2 + len then
+							id = string.sub(member, 3, 2 + len)
+						end
+					end
+				end
+				if id then
+					redis.call("HDEL", dlqIndexKey, id)
+				end
+			end
+		end
+
 		redis.call("ZREMRANGEBYRANK", targetKey, 0, -1001)
 
 		if lockKey ~= "" and expectedLockVal ~= "" then
@@ -123,6 +153,7 @@ func (b *redisBroker) MoveToDLQ(ctx context.Context, task *Task, streamKey, msgI
 		return err
 	}
 	dlqKey := DLQKey(dlqQueueName)
+	dlqIndexKey := DLQIndexKey(dlqQueueName)
 	nowMs := time.Now().UnixMilli()
 
 	var uniqueLockKey string
@@ -132,7 +163,7 @@ func (b *redisBroker) MoveToDLQ(ctx context.Context, task *Task, streamKey, msgI
 		uniqueLockVal = task.ID
 	}
 
-	_, err = handleFailureCmd.Run(ctx, b.rdb, []string{dlqKey, streamKey, uniqueLockKey}, "dlq", msgID, group, nowMs, serialized, uniqueLockVal).Result()
+	_, err = handleFailureCmd.Run(ctx, b.rdb, []string{dlqKey, streamKey, uniqueLockKey, dlqIndexKey}, "dlq", msgID, group, nowMs, serialized, uniqueLockVal, task.ID).Result()
 	return err
 }
 
@@ -142,7 +173,7 @@ func (b *redisBroker) ScheduleRetry(ctx context.Context, task *Task, streamKey, 
 		return err
 	}
 	delayedKey := DelayedKey(task.Queue)
-	_, err = handleFailureCmd.Run(ctx, b.rdb, []string{delayedKey, streamKey, ""}, "retry", msgID, group, runAt.UnixMilli(), serialized, "").Result()
+	_, err = handleFailureCmd.Run(ctx, b.rdb, []string{delayedKey, streamKey, "", ""}, "retry", msgID, group, runAt.UnixMilli(), serialized, "", "").Result()
 	return err
 }
 

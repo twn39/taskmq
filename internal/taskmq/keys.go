@@ -16,6 +16,10 @@ func DLQKey(queue string) string {
 	return fmt.Sprintf("taskmq:{%s}:dlq", queue)
 }
 
+func DLQIndexKey(queue string) string {
+	return fmt.Sprintf("taskmq:{%s}:dlq_index", queue)
+}
+
 func UniqueKey(queue, uniqueKey string) string {
 	return fmt.Sprintf("taskmq:{%s}:unique:%s", queue, uniqueKey)
 }
