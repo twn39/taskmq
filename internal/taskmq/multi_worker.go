@@ -69,111 +69,43 @@ func (m *multiWorker) Stop(ctxs ...context.Context) {
 }
 
 type priorityWorker struct {
-	rdb              *redis.Client
-	logger           *zap.Logger
+	*baseWorker
 	queues           []QueuePriority
 	priorityStrategy string
-	group            string
-	consumer         string
-	concurrency      int
-	handlers         map[string]HandlerFunc
 	schedulers       map[string]Runner
 	janitors         map[string]Runner
 	cronManagers     map[string]CronManager
-	codec            Codec
-	syncExecution    bool
-	execPoolSize     int
-	sem              chan struct{}
-	parentCtx        context.Context
-	ctx              context.Context
-	cancel           context.CancelFunc
-	consumerCtx      context.Context
-	consumerCancel   context.CancelFunc
-	wg               sync.WaitGroup
-
-	// Rate Limiting
-	limiter           *GCRALimiter
-	rateLimitMax      int64
-	rateLimitDuration time.Duration
-	rateLimitKeyField string
-
-	// Decoupled abstractions
-	broker           TaskBroker
-	retryPolicy      RetryPolicy
-	deadLetterPolicy DeadLetterPolicy
-	middlewareChain  []CoreHandlerFunc
 }
 
 func NewPriorityWorker(rdb *redis.Client, logger *zap.Logger, opts WorkerOptions) Worker {
 	opts.ApplyDefaults(rdb, logger, "", opts.Codec)
+
+	base := &baseWorker{}
+	base.initBase(rdb, logger, &opts, opts.Codec)
+
 	pw := &priorityWorker{
-		rdb:              rdb,
-		logger:           logger,
+		baseWorker:       base,
 		queues:           opts.PriorityQueues,
 		priorityStrategy: opts.PriorityStrategy,
-		group:            opts.Group,
-		consumer:         opts.Consumer,
-		concurrency:      opts.Concurrency,
-		codec:            opts.Codec,
-		syncExecution:    opts.SyncExecution,
-		execPoolSize:     opts.Concurrency,
-		handlers:         make(map[string]HandlerFunc),
-		parentCtx:        context.Background(),
 		schedulers:       make(map[string]Runner),
 		janitors:         make(map[string]Runner),
 		cronManagers:     make(map[string]CronManager),
-		limiter:          NewGCRALimiter(rdb),
 	}
 
-	if opts.ExecutionPoolSize > 0 {
-		pw.execPoolSize = opts.ExecutionPoolSize
-	}
-	if opts.Context != nil {
-		pw.parentCtx = opts.Context
-	}
 	if pw.priorityStrategy == "" {
 		pw.priorityStrategy = "weighted"
 	}
 
-	if opts.Broker != nil {
-		pw.broker = opts.Broker
-	} else {
-		pw.broker = NewRedisBroker(rdb, pw.codec)
-	}
-
-	if opts.RetryPolicy != nil {
-		pw.retryPolicy = opts.RetryPolicy
-	} else {
-		pw.retryPolicy = NewExponentialBackoff(100*time.Millisecond, 1*time.Hour, true)
-	}
-
-	if opts.DeadLetterPolicy != nil {
-		pw.deadLetterPolicy = opts.DeadLetterPolicy
-	} else {
-		pw.deadLetterPolicy = NewStandardDeadLetterPolicy("", nil)
-	}
-
-	pw.middlewareChain = []CoreHandlerFunc{
-		RetryAndDLQMiddleware(pw.broker, pw.retryPolicy, pw.deadLetterPolicy, pw.logger),
-		RateLimitMiddleware(pw.limiter, pw.broker, pw.getQueueRateLimit, pw.logger),
-		RecoveryMiddleware(pw.logger),
-		func(c *ConsumeContext) error {
-			handler, exists := pw.handlers[c.Task.Name]
-			if !exists {
-				return fmt.Errorf("no handler registered: %s", c.Task.Name)
+	pw.getQueueRateLimit = func(qName string) (int64, time.Duration, string) {
+		for _, q := range pw.queues {
+			if q.Name == qName {
+				return q.RateLimitMax, q.RateLimitDuration, q.RateLimitKeyField
 			}
-			if c.Task.TimeoutMs > 0 {
-				timeoutCtx, cancel := context.WithTimeout(c.Context, time.Duration(c.Task.TimeoutMs)*time.Millisecond)
-				defer cancel()
-				oldCtx := c.Context
-				c.Context = timeoutCtx
-				defer func() { c.Context = oldCtx }()
-			}
-			return handler(c.Context, c.Task)
-		},
+		}
+		return 0, 0, ""
 	}
 
-	pw.sem = make(chan struct{}, pw.execPoolSize)
+	pw.buildMiddlewareChain()
 
 	// Multi-queue priority mode components initialization
 	for _, q := range pw.queues {
@@ -199,9 +131,7 @@ func NewPriorityWorker(rdb *redis.Client, logger *zap.Logger, opts WorkerOptions
 	return pw
 }
 
-func (pw *priorityWorker) Register(taskName string, handler HandlerFunc) {
-	pw.handlers[taskName] = handler
-}
+
 
 func (pw *priorityWorker) Start(ctx context.Context) error {
 	for _, q := range pw.queues {
@@ -249,38 +179,7 @@ func (pw *priorityWorker) runBackgroundLoop(runner Runner, name string) {
 	}
 }
 
-func (pw *priorityWorker) Stop(ctxs ...context.Context) {
-	pw.logger.Info("Stopping TaskMQ priority worker background loops...")
 
-	if pw.consumerCancel != nil {
-		pw.consumerCancel()
-	}
-	if pw.cancel != nil {
-		pw.cancel()
-	}
-
-	done := make(chan struct{})
-	go func() {
-		pw.wg.Wait()
-		close(done)
-	}()
-
-	var waitCtx context.Context
-	if len(ctxs) > 0 {
-		waitCtx = ctxs[0]
-	} else {
-		var cancel context.CancelFunc
-		waitCtx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-	}
-
-	select {
-	case <-done:
-		pw.logger.Info("Priority worker gracefully stopped.")
-	case <-waitCtx.Done():
-		pw.logger.Warn("Priority worker shutdown timeout exceeded, forcing stop.")
-	}
-}
 
 func (pw *priorityWorker) worker() {
 	defer pw.wg.Done()
@@ -362,66 +261,6 @@ func (pw *priorityWorker) worker() {
 	}
 }
 
-func (pw *priorityWorker) processMessage(ctx context.Context, streamKey string, msg redis.XMessage) {
-	payload, ok := msg.Values["task"].([]byte)
-	if !ok {
-		if payloadStr, ok := msg.Values["task"].(string); ok {
-			payload = unsafeStringToBytes(payloadStr)
-		} else {
-			// Fallback to legacy "payload" key
-			payload, ok = msg.Values["payload"].([]byte)
-			if !ok {
-				if payloadStr, ok := msg.Values["payload"].(string); ok {
-					payload = unsafeStringToBytes(payloadStr)
-				} else {
-					pw.logger.Error("Message payload or task must be bytes or string")
-					return
-				}
-			}
-		}
-	}
 
-	var task Task
-	err := pw.codec.Unmarshal(payload, &task)
-	if err != nil {
-		pw.logger.Error("Failed to deserialize task", zap.Error(err))
-		return
-	}
 
-	_, exists := pw.handlers[task.Name]
-	if !exists {
-		pw.logger.Error("No handler registered", zap.String("task_name", task.Name))
-		return
-	}
 
-	c := AcquireConsumeContext(ctx, &task, msg.ID, task.Queue, pw.group, pw.middlewareChain)
-	defer ReleaseConsumeContext(c)
-
-	execErr := c.Next()
-
-	// If no error occurred during processing chain and it completed fully (not aborted)
-	if execErr == nil && !c.IsAborted() {
-		err = pw.rdb.XAck(ctx, streamKey, pw.group, msg.ID).Err()
-		if err != nil {
-			pw.logger.Error("Failed to ACK task stream message",
-				zap.String("task_id", task.ID),
-				zap.String("stream_id", msg.ID),
-				zap.Error(err),
-			)
-			return
-		}
-
-		if task.UniqueKey != "" {
-			_ = pw.broker.ReleaseUniqueLock(ctx, &task)
-		}
-	}
-}
-
-func (pw *priorityWorker) getQueueRateLimit(qName string) (int64, time.Duration, string) {
-	for _, q := range pw.queues {
-		if q.Name == qName {
-			return q.RateLimitMax, q.RateLimitDuration, q.RateLimitKeyField
-		}
-	}
-	return 0, 0, ""
-}

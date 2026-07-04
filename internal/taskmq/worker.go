@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"math/rand"
 	"sort"
-	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -32,39 +31,11 @@ type QueuePriority struct {
 }
 
 type workerPool struct {
-	rdb              *redis.Client
-	logger           *zap.Logger
-	queue            string
-	group            string
-	consumer         string
-	concurrency      int
-	handlers         map[string]HandlerFunc
-	scheduler        Runner
-	janitor          Runner
-	cronManager      CronManager
-	codec            Codec
-	syncExecution    bool
-	execPoolSize     int
-	sem              chan struct{}
-	parentCtx        context.Context
-	ctx              context.Context
-	cancel           context.CancelFunc
-	consumerCtx      context.Context
-	consumerCancel   context.CancelFunc
-	wg               sync.WaitGroup
-
-	// Rate Limiting
-	limiter           *GCRALimiter
-	rateLimitMax      int64
-	rateLimitDuration time.Duration
-	rateLimitKeyField string
-
-	// Decoupled abstractions
-	broker           TaskBroker
-	retryPolicy      RetryPolicy
-	deadLetterPolicy DeadLetterPolicy
-
-	middlewareChain []CoreHandlerFunc
+	*baseWorker
+	queue       string
+	scheduler   Runner
+	janitor     Runner
+	cronManager CronManager
 }
 
 type WorkerOptions struct {
@@ -106,91 +77,34 @@ type WorkerOptions struct {
 }
 
 func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...WorkerOptions) Worker {
-	pool := &workerPool{
-		rdb:           rdb,
-		logger:        logger,
-		queue:         queue,
-		group:         "taskmq-group",
-		consumer:      "taskmq-consumer-1",
-		concurrency:   5,
-		codec:         JSONCodec{},
-		syncExecution: false,
-		execPoolSize:  5,
-		handlers:      make(map[string]HandlerFunc),
-		parentCtx:     context.Background(),
-		limiter:       NewGCRALimiter(rdb),
-	}
-
 	var opt WorkerOptions
 	if len(opts) > 0 {
 		opt = opts[0]
 	} else {
 		panic("NewWorkerPool: WorkerOptions must be provided")
 	}
-	opt.ApplyDefaults(rdb, logger, queue, pool.codec)
 
-	pool.group = opt.Group
-	pool.consumer = opt.Consumer
-	pool.concurrency = opt.Concurrency
-	pool.execPoolSize = opt.Concurrency
-	pool.codec = opt.Codec
-	pool.syncExecution = opt.SyncExecution
-	if opt.ExecutionPoolSize > 0 {
-		pool.execPoolSize = opt.ExecutionPoolSize
-	}
-	if opt.Context != nil {
-		pool.parentCtx = opt.Context
-	}
+	opt.ApplyDefaults(rdb, logger, queue, JSONCodec{})
 
-	pool.cronManager = opt.CronManager
-	pool.scheduler = opt.Scheduler
-	pool.janitor = opt.Janitor
+	base := &baseWorker{}
+	base.initBase(rdb, logger, &opt, JSONCodec{})
 
-	pool.rateLimitMax = opt.RateLimitMax
-	pool.rateLimitDuration = opt.RateLimitDuration
-	pool.rateLimitKeyField = opt.RateLimitKeyField
-
-	// Decoupled components
-	if opt.Broker != nil {
-		pool.broker = opt.Broker
-	} else {
-		pool.broker = NewRedisBroker(rdb, pool.codec)
+	pool := &workerPool{
+		baseWorker:  base,
+		queue:       queue,
+		cronManager: opt.CronManager,
+		scheduler:   opt.Scheduler,
+		janitor:     opt.Janitor,
 	}
 
-	if opt.RetryPolicy != nil {
-		pool.retryPolicy = opt.RetryPolicy
-	} else {
-		pool.retryPolicy = NewExponentialBackoff(100*time.Millisecond, 1*time.Hour, true)
+	pool.getQueueRateLimit = func(qName string) (int64, time.Duration, string) {
+		if qName == pool.queue {
+			return pool.rateLimitMax, pool.rateLimitDuration, pool.rateLimitKeyField
+		}
+		return 0, 0, ""
 	}
 
-	if opt.DeadLetterPolicy != nil {
-		pool.deadLetterPolicy = opt.DeadLetterPolicy
-	} else {
-		pool.deadLetterPolicy = NewStandardDeadLetterPolicy("", nil)
-	}
-
-	pool.sem = make(chan struct{}, pool.execPoolSize)
-
-	// Pre-build static middleware chain
-	pool.middlewareChain = []CoreHandlerFunc{
-		RetryAndDLQMiddleware(pool.broker, pool.retryPolicy, pool.deadLetterPolicy, pool.logger),
-		RateLimitMiddleware(pool.limiter, pool.broker, pool.getQueueRateLimit, pool.logger),
-		RecoveryMiddleware(pool.logger),
-		func(c *ConsumeContext) error {
-			handler, exists := pool.handlers[c.Task.Name]
-			if !exists {
-				return fmt.Errorf("no handler registered: %s", c.Task.Name)
-			}
-			if c.Task.TimeoutMs > 0 {
-				timeoutCtx, cancel := context.WithTimeout(c.Context, time.Duration(c.Task.TimeoutMs)*time.Millisecond)
-				defer cancel()
-				oldCtx := c.Context
-				c.Context = timeoutCtx
-				defer func() { c.Context = oldCtx }()
-			}
-			return handler(c.Context, c.Task)
-		},
-	}
+	pool.buildMiddlewareChain()
 
 	// Register processors for janitor
 	if j, ok := pool.janitor.(PELRecoveryJanitor); ok {
@@ -202,10 +116,7 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 	return pool
 }
 
-// Register registers a handler function for a specific task name
-func (w *workerPool) Register(taskName string, handler HandlerFunc) {
-	w.handlers[taskName] = handler
-}
+
 
 // Start starts the worker pool consumers, scheduler, and janitor loops
 func (w *workerPool) Start(ctx context.Context) error {
@@ -260,50 +171,7 @@ func (w *workerPool) Start(ctx context.Context) error {
 	return nil
 }
 
-// Stop gracefully stops the consumer background loops, then waits for in-flight tasks
-func (w *workerPool) Stop(ctxs ...context.Context) {
-	fmt.Printf("DEBUG: Stop started\n")
-	w.logger.Info("Stopping worker pool background loops...")
 
-	// 1. Stop queue stream readers immediately
-	if w.consumerCancel != nil {
-		fmt.Printf("DEBUG: Stop calling consumerCancel\n")
-		w.consumerCancel()
-	}
-
-	// 2. Shut down scheduler, janitor and cron healing loops
-	if w.cancel != nil {
-		fmt.Printf("DEBUG: Stop calling cancel (scheduler/janitor)\n")
-		w.cancel()
-	}
-
-	// 3. Optional timeout block wait
-	done := make(chan struct{})
-	go func() {
-		fmt.Printf("DEBUG: Stop goroutine waiting on w.wg.Wait()\n")
-		w.wg.Wait()
-		fmt.Printf("DEBUG: Stop goroutine w.wg.Wait() returned\n")
-		close(done)
-	}()
-
-	var waitCtx context.Context
-	if len(ctxs) > 0 {
-		waitCtx = ctxs[0]
-	} else {
-		var cancel context.CancelFunc
-		waitCtx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-	}
-
-	select {
-	case <-done:
-		fmt.Printf("DEBUG: Stop case <-done selected\n")
-		w.logger.Info("Worker pool gracefully stopped.")
-	case <-waitCtx.Done():
-		fmt.Printf("DEBUG: Stop case <-waitCtx.Done() selected\n")
-		w.logger.Warn("Worker pool shutdown timeout exceeded, forcing stop.")
-	}
-}
 
 func (w *workerPool) runBackgroundLoop(workerID int) {
 	defer w.wg.Done()
@@ -370,60 +238,7 @@ func (w *workerPool) runBackgroundLoop(workerID int) {
 }
 
 func (w *workerPool) ProcessMessage(ctx context.Context, msg redis.XMessage) {
-	// Dynamically unpack task
-	payload, ok := msg.Values["task"].([]byte)
-	if !ok {
-		if payloadStr, ok := msg.Values["task"].(string); ok {
-			payload = unsafeStringToBytes(payloadStr)
-		} else {
-			// Fallback to legacy "payload" key
-			payload, ok = msg.Values["payload"].([]byte)
-			if !ok {
-				if payloadStr, ok := msg.Values["payload"].(string); ok {
-					payload = unsafeStringToBytes(payloadStr)
-				} else {
-					w.logger.Error("Message payload or task must be bytes or string")
-					return
-				}
-			}
-		}
-	}
-
-	var task Task
-	err := w.codec.Unmarshal(payload, &task)
-	if err != nil {
-		w.logger.Error("Failed to deserialize task", zap.Error(err))
-		return
-	}
-
-	_, exists := w.handlers[task.Name]
-	if !exists {
-		w.logger.Error("No handler registered", zap.String("task_name", task.Name))
-		return
-	}
-
-	c := AcquireConsumeContext(ctx, &task, msg.ID, w.queue, w.group, w.middlewareChain)
-	defer ReleaseConsumeContext(c)
-
-	execErr := c.Next()
-
-	// If no error occurred during processing chain and it completed fully (not aborted)
-	if execErr == nil && !c.IsAborted() {
-		streamKey := StreamKey(w.queue)
-		err = w.rdb.XAck(ctx, streamKey, w.group, msg.ID).Err()
-		if err != nil {
-			w.logger.Error("Failed to ACK task stream message",
-				zap.String("task_id", task.ID),
-				zap.String("stream_id", msg.ID),
-				zap.Error(err),
-			)
-			return
-		}
-
-		if task.UniqueKey != "" {
-			_ = w.broker.ReleaseUniqueLock(ctx, &task)
-		}
-	}
+	w.processMessage(ctx, StreamKey(w.queue), msg)
 }
 
 func RateLimitKey(queue string, groupKey string) string {
@@ -433,12 +248,7 @@ func RateLimitKey(queue string, groupKey string) string {
 	return fmt.Sprintf("taskmq:{%s}:rate_limit", queue)
 }
 
-func (w *workerPool) getQueueRateLimit(qName string) (int64, time.Duration, string) {
-	if qName == w.queue {
-		return w.rateLimitMax, w.rateLimitDuration, w.rateLimitKeyField
-	}
-	return 0, 0, ""
-}
+
 
 func shuffleQueues(queues []QueuePriority) []string {
 	temp := make([]QueuePriority, len(queues))
