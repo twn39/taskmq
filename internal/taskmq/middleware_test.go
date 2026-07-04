@@ -122,10 +122,27 @@ func TestMiddleware_RateLimiter(t *testing.T) {
 }
 
 func TestConsumeContext_Keys(t *testing.T) {
-	c := &ConsumeContext{}
-	c.Set("trace-id", "abcdef123456")
-	val, ok := c.Get("trace-id")
-	if !ok || val != "abcdef123456" {
-		t.Errorf("expected key to be set and retrieved, got %v", val)
+	// Test standard context propagation
+	c := &ConsumeContext{
+		Context: context.Background(),
+	}
+	type ctxKey string
+	const key ctxKey = "custom-key"
+	c.Context = context.WithValue(c.Context, key, "custom-value")
+
+	val := c.Value(key)
+	if val != "custom-value" {
+		t.Errorf("expected context value to be retrieved, got %v", val)
+	}
+
+	// Test strongly-typed fields
+	c.TraceID = "abcdef123456"
+	c.RateLimitGroup = "group-1"
+
+	if c.TraceID != "abcdef123456" {
+		t.Errorf("expected TraceID to be 'abcdef123456', got %s", c.TraceID)
+	}
+	if c.RateLimitGroup != "group-1" {
+		t.Errorf("expected RateLimitGroup to be 'group-1', got %s", c.RateLimitGroup)
 	}
 }

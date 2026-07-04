@@ -39,6 +39,7 @@ func RateLimitMiddleware(limiter *GCRALimiter, broker TaskBroker, provider func(
 		if keyField != "" {
 			groupKeyVal = extractGroupKey(c.Task.Payload, keyField)
 		}
+		c.RateLimitGroup = groupKeyVal
 		limitKey := RateLimitKey(c.Queue, groupKeyVal)
 
 		// Use TryConsume to atomically consume a token and get wait time if limited

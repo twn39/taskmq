@@ -2,7 +2,6 @@ package taskmq
 
 import (
 	"context"
-	"sync"
 )
 
 // ConsumeContext encapsulates all states during a single task consumption lifecycle.
@@ -14,33 +13,13 @@ type ConsumeContext struct {
 	Queue     string
 	Group     string
 
-	keysMu sync.RWMutex
-	Keys   map[string]any
+	// Strongly-typed fields for common middleware data flow
+	TraceID        string
+	RateLimitGroup string
 
 	index    int
 	handlers []CoreHandlerFunc
 	aborted  bool
-}
-
-// Set stores metadata within the context.
-func (c *ConsumeContext) Set(key string, value any) {
-	c.keysMu.Lock()
-	defer c.keysMu.Unlock()
-	if c.Keys == nil {
-		c.Keys = make(map[string]any)
-	}
-	c.Keys[key] = value
-}
-
-// Get retrieves metadata from the context.
-func (c *ConsumeContext) Get(key string) (any, bool) {
-	c.keysMu.RLock()
-	defer c.keysMu.RUnlock()
-	if c.Keys == nil {
-		return nil, false
-	}
-	val, ok := c.Keys[key]
-	return val, ok
 }
 
 // Next triggers the next handler or middleware in the execution chain.
@@ -66,41 +45,15 @@ func (c *ConsumeContext) IsAborted() bool {
 	return c.aborted
 }
 
-var consumeContextPool = sync.Pool{
-	New: func() any {
-		return &ConsumeContext{
-			index: -1,
-		}
-	},
-}
-
-// AcquireConsumeContext retrieves a clean ConsumeContext from the pool.
-func AcquireConsumeContext(ctx context.Context, task *Task, msgID, queue, group string, handlers []CoreHandlerFunc) *ConsumeContext {
-	c := consumeContextPool.Get().(*ConsumeContext)
-	c.Context = ctx
-	c.Task = task
-	c.MessageID = msgID
-	c.Queue = queue
-	c.Group = group
-	c.handlers = handlers
-	c.index = -1
-	c.aborted = false
-	return c
-}
-
-// ReleaseConsumeContext returns a ConsumeContext back to the pool after clearing its state.
-func ReleaseConsumeContext(c *ConsumeContext) {
+// Reset clears all references and states to prevent memory leaks and dirty reuses in sync.Pool.
+func (c *ConsumeContext) Reset() {
 	c.Context = nil
 	c.Task = nil
 	c.MessageID = ""
 	c.Queue = ""
 	c.Group = ""
+	c.TraceID = ""
+	c.RateLimitGroup = ""
 	c.handlers = nil
 	c.aborted = false
-	c.keysMu.Lock()
-	for k := range c.Keys {
-		delete(c.Keys, k)
-	}
-	c.keysMu.Unlock()
-	consumeContextPool.Put(c)
 }
