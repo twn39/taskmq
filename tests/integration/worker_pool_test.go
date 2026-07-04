@@ -2,6 +2,7 @@ package integration
 
 import (
 	"context"
+	"fmt"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -97,10 +98,13 @@ func TestTaskMQ_WorkerPool_GracefulShutdownDeadline(t *testing.T) {
 				})
 				pool := taskmq.NewWorkerPool(rdb, logger, queueName, opts)
 				pool.Register("task:long", func(ctx context.Context, task *taskmq.Task) error {
+					fmt.Printf("DEBUG: task:long handler started\n")
 					select {
 					case <-time.After(5 * time.Second):
+						fmt.Printf("DEBUG: task:long completed successfully after 5s\n")
 						return nil
 					case <-ctx.Done():
+						fmt.Printf("DEBUG: task:long ctx.Done() fired: %v\n", ctx.Err())
 						atomic.StoreInt32(&taskCancelled, 1)
 						return ctx.Err()
 					}

@@ -11,7 +11,7 @@ import (
 type TaskBroker interface {
 	MoveToDLQ(ctx context.Context, task *Task, streamKey, msgID, group string, dlqQueueName string) error
 	ScheduleRetry(ctx context.Context, task *Task, streamKey, msgID, group string, runAt time.Time) error
-	DeferRateLimitedTask(ctx context.Context, msgID string, task *Task, runAt time.Time) error
+	DeferRateLimitedTask(ctx context.Context, msgID string, task *Task, group string, runAt time.Time) error
 	ReleaseUniqueLock(ctx context.Context, task *Task) error
 }
 
@@ -67,6 +67,7 @@ const luaDeferRateLimitedTask = `
 	local serializedTask = ARGV[4]
 
 	redis.call("XACK", streamKey, groupName, msgId)
+	redis.call("XDEL", streamKey, msgId)
 	redis.call("ZADD", delayedKey, score, serializedTask)
 	return 1
 `
@@ -94,7 +95,7 @@ func (b *redisBroker) MoveToDLQ(ctx context.Context, task *Task, streamKey, msgI
 		uniqueLockVal = task.ID
 	}
 
-	_, err = b.rdb.Eval(ctx, luaHandleFailure, []string{dlqKey, streamKey, uniqueLockKey}, "dlq", msgID, group, nowMs, string(serialized), uniqueLockVal).Result()
+	_, err = b.rdb.Eval(ctx, luaHandleFailure, []string{dlqKey, streamKey, uniqueLockKey}, "dlq", msgID, group, nowMs, serialized, uniqueLockVal).Result()
 	return err
 }
 
@@ -104,18 +105,18 @@ func (b *redisBroker) ScheduleRetry(ctx context.Context, task *Task, streamKey, 
 		return err
 	}
 	delayedKey := DelayedKey(task.Queue)
-	_, err = b.rdb.Eval(ctx, luaHandleFailure, []string{delayedKey, streamKey, ""}, "retry", msgID, group, runAt.UnixMilli(), string(serialized), "").Result()
+	_, err = b.rdb.Eval(ctx, luaHandleFailure, []string{delayedKey, streamKey, ""}, "retry", msgID, group, runAt.UnixMilli(), serialized, "").Result()
 	return err
 }
 
-func (b *redisBroker) DeferRateLimitedTask(ctx context.Context, msgID string, task *Task, runAt time.Time) error {
+func (b *redisBroker) DeferRateLimitedTask(ctx context.Context, msgID string, task *Task, group string, runAt time.Time) error {
 	serialized, err := b.codec.Marshal(task)
 	if err != nil {
 		return err
 	}
 	delayedKey := DelayedKey(task.Queue)
 	streamKey := StreamKey(task.Queue)
-	_, err = b.rdb.Eval(ctx, luaDeferRateLimitedTask, []string{delayedKey, streamKey}, StreamKey(task.Queue), msgID, runAt.UnixMilli(), string(serialized)).Result()
+	_, err = b.rdb.Eval(ctx, luaDeferRateLimitedTask, []string{delayedKey, streamKey}, group, msgID, runAt.UnixMilli(), serialized).Result()
 	return err
 }
 

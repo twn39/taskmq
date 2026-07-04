@@ -99,6 +99,7 @@ type priorityWorker struct {
 }
 
 func NewPriorityWorker(rdb *redis.Client, logger *zap.Logger, opts WorkerOptions) Worker {
+	opts.ApplyDefaults(rdb, logger, "", opts.Codec)
 	pw := &priorityWorker{
 		rdb:              rdb,
 		logger:           logger,
@@ -264,7 +265,7 @@ func (pw *priorityWorker) worker() {
 					Consumer: consumerName,
 					Streams:  []string{streamKey, ">"},
 					Count:    1,
-					Block:    100 * time.Millisecond,
+					Block:    -1,
 				}).Result()
 
 				if err != nil {
@@ -318,13 +319,21 @@ func (pw *priorityWorker) worker() {
 }
 
 func (pw *priorityWorker) processMessage(ctx context.Context, streamKey string, msg redis.XMessage) {
-	payload, ok := msg.Values["payload"].([]byte)
+	payload, ok := msg.Values["task"].([]byte)
 	if !ok {
-		if payloadStr, ok := msg.Values["payload"].(string); ok {
-			payload = []byte(payloadStr)
+		if payloadStr, ok := msg.Values["task"].(string); ok {
+			payload = unsafeStringToBytes(payloadStr)
 		} else {
-			pw.logger.Error("Message payload must be bytes or string")
-			return
+			// Fallback to legacy "payload" key
+			payload, ok = msg.Values["payload"].([]byte)
+			if !ok {
+				if payloadStr, ok := msg.Values["payload"].(string); ok {
+					payload = unsafeStringToBytes(payloadStr)
+				} else {
+					pw.logger.Error("Message payload or task must be bytes or string")
+					return
+				}
+			}
 		}
 	}
 
@@ -350,7 +359,7 @@ func (pw *priorityWorker) processMessage(ctx context.Context, streamKey string, 
 		}
 		limitKey := RateLimitKey(task.Queue, groupKeyVal)
 
-		wait, rlErr := pw.limiter.Check(ctx, limitKey, rlMax, rlDuration)
+		wait, rlErr := pw.limiter.TryConsume(ctx, limitKey, rlMax, rlDuration)
 		if rlErr != nil {
 			pw.logger.Error("Failed to apply rate limiting", zap.Error(rlErr))
 		} else if wait > 0 {
@@ -403,7 +412,7 @@ func (pw *priorityWorker) processMessage(ctx context.Context, streamKey string, 
 func (pw *priorityWorker) runHandlerWithRecovery(ctx context.Context, task *Task, handler HandlerFunc) (err error) {
 	defer func() {
 		if r := recover(); r != nil {
-			err = fmt.Errorf("task handler panicked: %v", r)
+			err = fmt.Errorf("task panicked: %v", r)
 			pw.logger.Error("Panic recovered in priority task handler execution",
 				zap.String("task_id", task.ID),
 				zap.String("task_name", task.Name),
@@ -411,6 +420,13 @@ func (pw *priorityWorker) runHandlerWithRecovery(ctx context.Context, task *Task
 			)
 		}
 	}()
+
+	if task.TimeoutMs > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, time.Duration(task.TimeoutMs)*time.Millisecond)
+		defer cancel()
+	}
+
 	return handler(ctx, task)
 }
 

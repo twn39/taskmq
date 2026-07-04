@@ -76,7 +76,7 @@ func (s *delayedScheduler) Run(ctx context.Context) error {
 						continue
 					}
 					task := &Task{}
-					err := s.codec.Unmarshal([]byte(memberStr), task)
+					err := s.codec.Unmarshal(unsafeStringToBytes(memberStr), task)
 					if err == nil && task.CronSpec != "" {
 						_ = s.cronManager.Reschedule(ctx, task)
 					}

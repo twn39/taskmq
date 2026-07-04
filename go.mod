@@ -3,6 +3,7 @@ module github.com/twn39/taskmq
 go 1.25.6
 
 require (
+	github.com/alicebob/miniredis/v2 v2.38.0
 	github.com/labstack/echo/v5 v5.2.1
 	github.com/redis/go-redis/v9 v9.21.0
 	github.com/robfig/cron/v3 v3.0.1
@@ -15,7 +16,6 @@ require (
 )
 
 require (
-	github.com/alicebob/miniredis/v2 v2.38.0 // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/davecgh/go-spew v1.1.2-0.20180830191138-d8f796af33cc // indirect
 	github.com/fsnotify/fsnotify v1.10.1 // indirect

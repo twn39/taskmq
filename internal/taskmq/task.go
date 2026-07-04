@@ -78,7 +78,7 @@ func (t *Task) Serialize() (string, error) {
 // DeserializeTask parses a task from a JSON string
 func DeserializeTask(data string) (*Task, error) {
 	var task Task
-	if err := json.Unmarshal([]byte(data), &task); err != nil {
+	if err := json.Unmarshal(unsafeStringToBytes(data), &task); err != nil {
 		return nil, err
 	}
 	return &task, nil

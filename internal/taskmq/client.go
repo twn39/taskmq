@@ -108,7 +108,7 @@ func (c *client) Enqueue(ctx context.Context, task *Task) error {
 	return c.rdb.XAdd(ctx, &redis.XAddArgs{
 		Stream: streamKey,
 		Values: map[string]interface{}{
-			"task": string(serialized),
+			"task": serialized,
 		},
 	}).Err()
 }
@@ -141,7 +141,7 @@ func (c *client) EnqueueAt(ctx context.Context, task *Task, at time.Time) error 
 	delayedKey := DelayedKey(task.Queue)
 	return c.rdb.ZAdd(ctx, delayedKey, redis.Z{
 		Score:  float64(at.UnixMilli()),
-		Member: string(serialized),
+		Member: serialized,
 	}).Err()
 }
 
@@ -156,7 +156,7 @@ func (c *client) ListDeadLetters(ctx context.Context, queue string, limit int) (
 	tasks := make([]*Task, 0, len(members))
 	for _, m := range members {
 		task := &Task{}
-		err := c.codec.Unmarshal([]byte(m), task)
+		err := c.codec.Unmarshal(unsafeStringToBytes(m), task)
 		if err != nil {
 			continue // skip corrupted data
 		}
@@ -175,7 +175,7 @@ func (c *client) DeleteDeadLetter(ctx context.Context, queue string, taskID stri
 
 	for _, m := range members {
 		task := &Task{}
-		err := c.codec.Unmarshal([]byte(m), task)
+		err := c.codec.Unmarshal(unsafeStringToBytes(m), task)
 		if err == nil && task.ID == taskID {
 			return c.rdb.ZRem(ctx, dlqKey, m).Err()
 		}
@@ -195,7 +195,7 @@ func (c *client) RetryDeadLetter(ctx context.Context, queue string, taskID strin
 	var targetTask *Task
 	for _, m := range members {
 		task := &Task{}
-		err := c.codec.Unmarshal([]byte(m), task)
+		err := c.codec.Unmarshal(unsafeStringToBytes(m), task)
 		if err == nil && task.ID == taskID {
 			targetMember = m
 			targetTask = task
@@ -263,6 +263,6 @@ func (c *client) RegisterCron(ctx context.Context, jobName string, spec string, 
 	delayedKey := DelayedKey(task.Queue)
 	firstRun := sched.Next(time.Now())
 
-	_, err = c.rdb.Eval(ctx, luaRegisterCron, []string{configsKey, delayedKey}, jobName, spec, string(serialized), firstRun.UnixMilli()).Result()
+	_, err = c.rdb.Eval(ctx, luaRegisterCron, []string{configsKey, delayedKey}, jobName, spec, serialized, firstRun.UnixMilli()).Result()
 	return err
 }

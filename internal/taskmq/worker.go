@@ -193,7 +193,7 @@ func (w *workerPool) Start(ctx context.Context) error {
 	}
 
 	w.ctx, w.cancel = context.WithCancel(w.parentCtx)
-	w.consumerCtx, w.consumerCancel = context.WithCancel(ctx)
+	w.consumerCtx, w.consumerCancel = context.WithCancel(w.ctx)
 
 	// Start Scheduler & Janitor loop
 	if w.scheduler != nil {
@@ -239,22 +239,27 @@ func (w *workerPool) Start(ctx context.Context) error {
 
 // Stop gracefully stops the consumer background loops, then waits for in-flight tasks
 func (w *workerPool) Stop(ctxs ...context.Context) {
+	fmt.Printf("DEBUG: Stop started\n")
 	w.logger.Info("Stopping worker pool background loops...")
 
 	// 1. Stop queue stream readers immediately
 	if w.consumerCancel != nil {
+		fmt.Printf("DEBUG: Stop calling consumerCancel\n")
 		w.consumerCancel()
 	}
 
 	// 2. Shut down scheduler, janitor and cron healing loops
 	if w.cancel != nil {
+		fmt.Printf("DEBUG: Stop calling cancel (scheduler/janitor)\n")
 		w.cancel()
 	}
 
 	// 3. Optional timeout block wait
 	done := make(chan struct{})
 	go func() {
+		fmt.Printf("DEBUG: Stop goroutine waiting on w.wg.Wait()\n")
 		w.wg.Wait()
+		fmt.Printf("DEBUG: Stop goroutine w.wg.Wait() returned\n")
 		close(done)
 	}()
 
@@ -269,8 +274,10 @@ func (w *workerPool) Stop(ctxs ...context.Context) {
 
 	select {
 	case <-done:
+		fmt.Printf("DEBUG: Stop case <-done selected\n")
 		w.logger.Info("Worker pool gracefully stopped.")
 	case <-waitCtx.Done():
+		fmt.Printf("DEBUG: Stop case <-waitCtx.Done() selected\n")
 		w.logger.Warn("Worker pool shutdown timeout exceeded, forcing stop.")
 	}
 }
@@ -294,11 +301,12 @@ func (w *workerPool) runBackgroundLoop(workerID int) {
 				Consumer: consumerName,
 				Streams:  []string{streamKey, ">"},
 				Count:    1,
-				Block:    1 * time.Second,
+				Block:    -1,
 			}).Result()
 
 			if err != nil {
 				if err == redis.Nil {
+					time.Sleep(100 * time.Millisecond)
 					continue
 				}
 				select {
@@ -340,14 +348,21 @@ func (w *workerPool) runBackgroundLoop(workerID int) {
 
 func (w *workerPool) ProcessMessage(ctx context.Context, msg redis.XMessage) {
 	// Dynamically unpack task
-	payload, ok := msg.Values["payload"].([]byte)
+	payload, ok := msg.Values["task"].([]byte)
 	if !ok {
-		// Compatible fallback if not []byte
-		if payloadStr, ok := msg.Values["payload"].(string); ok {
-			payload = []byte(payloadStr)
+		if payloadStr, ok := msg.Values["task"].(string); ok {
+			payload = unsafeStringToBytes(payloadStr)
 		} else {
-			w.logger.Error("Message payload must be bytes or string")
-			return
+			// Fallback to legacy "payload" key
+			payload, ok = msg.Values["payload"].([]byte)
+			if !ok {
+				if payloadStr, ok := msg.Values["payload"].(string); ok {
+					payload = unsafeStringToBytes(payloadStr)
+				} else {
+					w.logger.Error("Message payload or task must be bytes or string")
+					return
+				}
+			}
 		}
 	}
 
@@ -369,10 +384,17 @@ func (w *workerPool) ProcessMessage(ctx context.Context, msg redis.XMessage) {
 
 	// Built-in handlers/middleware chain assembly
 	handlers := []CoreHandlerFunc{
-		RecoveryMiddleware(w.logger),
-		RateLimitMiddleware(w.limiter, w.broker, rlMax, rlDuration, rlKeyField, w.logger),
 		RetryAndDLQMiddleware(w.broker, w.retryPolicy, w.deadLetterPolicy, w.logger),
+		RateLimitMiddleware(w.limiter, w.broker, rlMax, rlDuration, rlKeyField, w.logger),
+		RecoveryMiddleware(w.logger),
 		func(c *ConsumeContext) error {
+			if c.Task.TimeoutMs > 0 {
+				timeoutCtx, cancel := context.WithTimeout(c.Context, time.Duration(c.Task.TimeoutMs)*time.Millisecond)
+				defer cancel()
+				oldCtx := c.Context
+				c.Context = timeoutCtx
+				defer func() { c.Context = oldCtx }()
+			}
 			return handler(c.Context, c.Task)
 		},
 	}
@@ -390,7 +412,7 @@ func (w *workerPool) ProcessMessage(ctx context.Context, msg redis.XMessage) {
 	execErr := c.Next()
 
 	// If no error occurred during processing chain and it completed fully (not aborted)
-	if execErr == nil && c.index == len(handlers) {
+	if execErr == nil && !c.IsAborted() {
 		streamKey := StreamKey(w.queue)
 		err = w.rdb.XAck(ctx, streamKey, w.group, msg.ID).Err()
 		if err != nil {

@@ -19,6 +19,7 @@ type ConsumeContext struct {
 
 	index    int
 	handlers []CoreHandlerFunc
+	aborted  bool
 }
 
 // Set stores metadata within the context.
@@ -44,6 +45,9 @@ func (c *ConsumeContext) Get(key string) (any, bool) {
 
 // Next triggers the next handler or middleware in the execution chain.
 func (c *ConsumeContext) Next() error {
+	if c.aborted {
+		return nil
+	}
 	c.index++
 	if c.index < len(c.handlers) {
 		return c.handlers[c.index](c)
@@ -53,5 +57,11 @@ func (c *ConsumeContext) Next() error {
 
 // Abort halts the execution chain.
 func (c *ConsumeContext) Abort() {
+	c.aborted = true
 	c.index = len(c.handlers)
+}
+
+// IsAborted returns true if the execution chain was aborted.
+func (c *ConsumeContext) IsAborted() bool {
+	return c.aborted
 }

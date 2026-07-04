@@ -215,5 +215,5 @@ func TestTaskMQ_ExecutionPoolPanicRecovery(t *testing.T) {
 	dlqTasks, err := client.ListDeadLetters(ctx, queueName, 10)
 	assert.NoError(t, err)
 	assert.Len(t, dlqTasks, 1)
-	assert.Contains(t, dlqTasks[0].LastError, "task handler panicked: something went terribly wrong")
+	assert.Contains(t, dlqTasks[0].LastError, "task panicked: something went terribly wrong")
 }

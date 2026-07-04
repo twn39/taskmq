@@ -54,7 +54,7 @@ func RateLimitMiddleware(limiter *GCRALimiter, broker TaskBroker, max int64, dur
 				zap.Duration("wait", wait),
 			)
 			runAt := time.Now().Add(wait)
-			if err := broker.DeferRateLimitedTask(c.Context, c.MessageID, c.Task, runAt); err != nil {
+			if err := broker.DeferRateLimitedTask(c.Context, c.MessageID, c.Task, c.Group, runAt); err != nil {
 				logger.Error("Failed to defer rate limited task", zap.Error(err))
 				return err
 			}

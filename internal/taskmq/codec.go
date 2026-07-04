@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"time"
+	"unsafe"
 )
 
 // Codec defines the contract for task serialization and deserialization
@@ -209,4 +210,13 @@ func (BinaryCodec) Unmarshal(data []byte, t *Task) error {
 	offset += 8
 
 	return nil
+}
+
+// unsafeStringToBytes converts a string to a byte slice without allocations.
+// The returned byte slice is read-only and must not be modified.
+func unsafeStringToBytes(s string) []byte {
+	if s == "" {
+		return nil
+	}
+	return unsafe.Slice(unsafe.StringData(s), len(s))
 }

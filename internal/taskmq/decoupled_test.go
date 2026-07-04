@@ -36,7 +36,7 @@ func (m *mockBroker) ScheduleRetry(ctx context.Context, task *Task, streamKey, m
 	return nil
 }
 
-func (m *mockBroker) DeferRateLimitedTask(ctx context.Context, msgID string, task *Task, runAt time.Time) error {
+func (m *mockBroker) DeferRateLimitedTask(ctx context.Context, msgID string, task *Task, group string, runAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.deferCnt++

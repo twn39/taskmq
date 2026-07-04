@@ -82,7 +82,7 @@ func (m *cronManager) Run(ctx context.Context) error {
 			parsedConfigs := make(map[string]*Task)
 			for jobName, configStr := range configs {
 				task := &Task{}
-				if err := m.codec.Unmarshal([]byte(configStr), task); err != nil {
+				if err := m.codec.Unmarshal(unsafeStringToBytes(configStr), task); err != nil {
 					continue
 				}
 				parsedConfigs[jobName] = task
@@ -129,7 +129,7 @@ func (m *cronManager) Run(ctx context.Context) error {
 
 				for _, member := range delayedMembers {
 					task := &Task{}
-					err := m.codec.Unmarshal([]byte(member), task)
+					err := m.codec.Unmarshal(unsafeStringToBytes(member), task)
 					if err == nil && task.CronSpec != "" {
 						activeCrons[task.Name] = true
 					}
