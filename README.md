@@ -73,7 +73,48 @@ Start the Echo HTTP and gRPC management server:
 ```bash
 go run cmd/server/main.go
 ```
-The server will start on port `8080` (HTTP) and load settings from `config.yaml`.
+The server will start on the port configured in `config.yaml` (default `:8080`).
+
+### 🖥️ Web Admin Dashboard
+
+TaskMQ features a built-in, fully responsive, slate-dark themed Web Admin Dashboard at `/admin`.
+
+* **Live Monitoring**: Inspect queue consumption status (Active vs. Paused) and trace live metrics (Active Streams, Scheduled ZSET tasks, and Dead-letter counts).
+* **Remediation**: Examine the details, payload, and stack trace of tasks in the Dead Letter Queue, with buttons to re-enqueue them for retry or purge them permanently.
+* **Testing Console**: Trigger dummy tasks with customizable payloads, execution delays, or mock failures directly from the web console.
+
+To access the panel, open your browser and navigate to `http://localhost:8080/admin`.
+
+### 💻 Command Line Interface (CLI)
+
+TaskMQ comes with a unified command-line management tool built using `urfave/cli/v3` to monitor and remediate queues directly from your terminal.
+
+#### Global Connection Options
+- `--redis-addr` (env override: `TASKMQ_REDIS_ADDR`): Redis address (default: `localhost:6379`).
+
+#### Command Usage
+* **View Queue Statistics**:
+  ```bash
+  go run cmd/taskmq-cli/main.go stats
+  ```
+* **Pause / Resume Queue**:
+  ```bash
+  go run cmd/taskmq-cli/main.go pause <queue_name>
+  go run cmd/taskmq-cli/main.go resume <queue_name>
+  ```
+* **Manage DLQ (Dead Letter Queue)**:
+  * List failed tasks (supports optional `--limit` count):
+    ```bash
+    go run cmd/taskmq-cli/main.go dlq list <queue_name> --limit 10
+    ```
+  * Re-enqueue a failed task for retry:
+    ```bash
+    go run cmd/taskmq-cli/main.go dlq retry <queue_name> <task_id>
+    ```
+  * Purge a failed task permanently:
+    ```bash
+    go run cmd/taskmq-cli/main.go dlq delete <queue_name> <task_id>
+    ```
 
 ---
 
