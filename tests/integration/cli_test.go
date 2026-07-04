@@ -153,4 +153,55 @@ func TestTaskMQ_CLI_Operations(t *testing.T) {
 	dlqCount, err = rdb.ZCard(ctx, dlqKey).Result()
 	assert.NoError(t, err)
 	assert.Equal(t, int64(0), dlqCount, "Task should be deleted from DLQ")
+
+	// 9. Edge-case / Validation Error boundary testing
+	t.Run("Boundary and Input Validation Errors", func(t *testing.T) {
+		// Test pause with no args
+		out, runErr := runCLI("pause")
+		assert.Error(t, runErr, "Should fail on missing queue argument")
+		assert.Contains(t, out, "Missing queue name")
+
+		// Test resume with no args
+		out, runErr = runCLI("resume")
+		assert.Error(t, runErr, "Should fail on missing queue argument")
+		assert.Contains(t, out, "Missing queue name")
+
+		// Test unknown command
+		out, runErr = runCLI("unknown-cmd")
+		assert.Error(t, runErr, "Should fail on unknown command")
+		assert.Contains(t, out, "Unknown command")
+		assert.Contains(t, out, "Usage:")
+
+		// Test dlq with no sub-command
+		out, runErr = runCLI("dlq")
+		assert.Error(t, runErr, "Should fail on missing sub-command")
+		assert.Contains(t, out, "Missing sub-command")
+
+		// Test dlq list with no queue
+		out, runErr = runCLI("dlq", "list")
+		assert.Error(t, runErr, "Should fail on missing queue")
+		assert.Contains(t, out, "Missing queue name")
+
+		// Test dlq retry with missing id
+		out, runErr = runCLI("dlq", "retry", queueName)
+		assert.Error(t, runErr, "Should fail on missing task ID")
+		assert.Contains(t, out, "Missing arguments")
+
+		// Test dlq delete with missing id
+		out, runErr = runCLI("dlq", "delete", queueName)
+		assert.Error(t, runErr, "Should fail on missing task ID")
+		assert.Contains(t, out, "Missing arguments")
+
+		// Test unknown dlq subcommand
+		out, runErr = runCLI("dlq", "unknown-sub", queueName)
+		assert.Error(t, runErr, "Should fail on unknown DLQ sub-command")
+		assert.Contains(t, out, "Unknown dlq sub-command")
+	})
+
+	t.Run("Flag and Connection Configuration", func(t *testing.T) {
+		// Test connection with override CLI flag (e.g. override invalid port should fail to connect)
+		out, runErr := runCLI("-redis-addr", "localhost:9999", "stats")
+		assert.Error(t, runErr, "Should fail with invalid port override")
+		assert.Contains(t, out, "Failed to connect to Redis")
+	})
 }

@@ -38,28 +38,17 @@ func main() {
 	redisDB := globalFlags.Int("redis-db", getEnvInt("REDIS_DB", 0), "Redis database number")
 	redisPassword := globalFlags.String("redis-password", getEnv("REDIS_PASSWORD", ""), "Redis password")
 
-	// Find where global options end and commands begin
-	cmdIdx := 1
-	for i := 1; i < len(os.Args); i++ {
-		if !strings.HasPrefix(os.Args[i], "-") {
-			cmdIdx = i
-			break
-		}
-	}
+	// Parse global flags - flag package naturally stops at the first positional argument
+	_ = globalFlags.Parse(os.Args[1:])
 
-	// Parse global flags if any were supplied before the command
-	if cmdIdx > 1 {
-		_ = globalFlags.Parse(os.Args[1:cmdIdx])
-	}
-
-	// Ensure there is at least one command supplied
-	if len(os.Args) <= cmdIdx {
+	args := globalFlags.Args()
+	if len(args) < 1 {
 		printUsage()
 		os.Exit(1)
 	}
 
-	command := os.Args[cmdIdx]
-	cmdArgs := os.Args[cmdIdx+1:]
+	command := args[0]
+	cmdArgs := args[1:]
 
 	// 2. Connect to Redis
 	rdb := redis.NewClient(&redis.Options{
