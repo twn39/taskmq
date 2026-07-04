@@ -80,18 +80,14 @@ type priorityOption func(*PriorityWorkerOptions) error
 func (o priorityOption) ApplyPriorityWorker(opts *PriorityWorkerOptions) error {
 	return o(opts)
 }
-
-type sharedOption struct {
-	poolFunc     func(*WorkerPoolOptions) error
-	priorityFunc func(*PriorityWorkerOptions) error
-}
+type sharedOption func(*BaseWorkerOptions) error
 
 func (o sharedOption) ApplyWorkerPool(opts *WorkerPoolOptions) error {
-	return o.poolFunc(opts)
+	return o(&opts.BaseWorkerOptions)
 }
 
 func (o sharedOption) ApplyPriorityWorker(opts *PriorityWorkerOptions) error {
-	return o.priorityFunc(opts)
+	return o(&opts.BaseWorkerOptions)
 }
 
 func DefaultCronManagerFactory(rdb *redis.Client, logger *zap.Logger, queue string, codec Codec, healingInterval time.Duration, healingLockTTL time.Duration, scanBatchSize int, scanMaxCount int) CronManager {
@@ -178,262 +174,139 @@ func buildSharedPriorityDefaults(rdb *redis.Client, opts *PriorityWorkerOptions)
 // Option functions
 
 func WithGroup(group string) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			if group == "" {
-				return errors.New("group name cannot be empty")
-			}
-			o.group = group
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			if group == "" {
-				return errors.New("group name cannot be empty")
-			}
-			o.group = group
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		if group == "" {
+			return errors.New("group name cannot be empty")
+		}
+		o.group = group
+		return nil
 	}
 }
 
 func WithConsumer(consumer string) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			if consumer == "" {
-				return errors.New("consumer name cannot be empty")
-			}
-			o.consumer = consumer
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			if consumer == "" {
-				return errors.New("consumer name cannot be empty")
-			}
-			o.consumer = consumer
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		if consumer == "" {
+			return errors.New("consumer name cannot be empty")
+		}
+		o.consumer = consumer
+		return nil
 	}
 }
 
 func WithConcurrency(concurrency int) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			if concurrency <= 0 {
-				return fmt.Errorf("concurrency must be greater than 0: got %d", concurrency)
-			}
-			o.concurrency = concurrency
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			if concurrency <= 0 {
-				return fmt.Errorf("concurrency must be greater than 0: got %d", concurrency)
-			}
-			o.concurrency = concurrency
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		if concurrency <= 0 {
+			return fmt.Errorf("concurrency must be greater than 0: got %d", concurrency)
+		}
+		o.concurrency = concurrency
+		return nil
 	}
 }
 
 func WithCodec(codec Codec) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			if codec == nil {
-				return errors.New("codec cannot be nil")
-			}
-			o.codec = codec
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			if codec == nil {
-				return errors.New("codec cannot be nil")
-			}
-			o.codec = codec
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		if codec == nil {
+			return errors.New("codec cannot be nil")
+		}
+		o.codec = codec
+		return nil
 	}
 }
 
 func WithSyncExecution(syncExecution bool) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			o.syncExecution = syncExecution
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			o.syncExecution = syncExecution
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		o.syncExecution = syncExecution
+		return nil
 	}
 }
 
 func WithExecutionPoolSize(size int) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			if size <= 0 {
-				return fmt.Errorf("execution pool size must be greater than 0: got %d", size)
-			}
-			o.executionPoolSize = size
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			if size <= 0 {
-				return fmt.Errorf("execution pool size must be greater than 0: got %d", size)
-			}
-			o.executionPoolSize = size
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		if size <= 0 {
+			return fmt.Errorf("execution pool size must be greater than 0: got %d", size)
+		}
+		o.executionPoolSize = size
+		return nil
 	}
 }
 
 func WithCronHealingInterval(interval time.Duration) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			if interval <= 0 {
-				return fmt.Errorf("cron healing interval must be positive: got %v", interval)
-			}
-			o.cronHealingInterval = interval
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			if interval <= 0 {
-				return fmt.Errorf("cron healing interval must be positive: got %v", interval)
-			}
-			o.cronHealingInterval = interval
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		if interval <= 0 {
+			return fmt.Errorf("cron healing interval must be positive: got %v", interval)
+		}
+		o.cronHealingInterval = interval
+		return nil
 	}
 }
 
 func WithCronHealingLockTTL(ttl time.Duration) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			if ttl <= 0 {
-				return fmt.Errorf("cron healing lock TTL must be positive: got %v", ttl)
-			}
-			o.cronHealingLockTTL = ttl
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			if ttl <= 0 {
-				return fmt.Errorf("cron healing lock TTL must be positive: got %v", ttl)
-			}
-			o.cronHealingLockTTL = ttl
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		if ttl <= 0 {
+			return fmt.Errorf("cron healing lock TTL must be positive: got %v", ttl)
+		}
+		o.cronHealingLockTTL = ttl
+		return nil
 	}
 }
 
 func WithCronHealingScanBatchSize(size int) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			if size <= 0 {
-				return fmt.Errorf("cron healing scan batch size must be positive: got %d", size)
-			}
-			o.cronHealingScanBatchSize = size
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			if size <= 0 {
-				return fmt.Errorf("cron healing scan batch size must be positive: got %d", size)
-			}
-			o.cronHealingScanBatchSize = size
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		if size <= 0 {
+			return fmt.Errorf("cron healing scan batch size must be positive: got %d", size)
+		}
+		o.cronHealingScanBatchSize = size
+		return nil
 	}
 }
 
 func WithCronHealingScanMaxCount(count int) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			if count <= 0 {
-				return fmt.Errorf("cron healing scan max count must be positive: got %d", count)
-			}
-			o.cronHealingScanMaxCount = count
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			if count <= 0 {
-				return fmt.Errorf("cron healing scan max count must be positive: got %d", count)
-			}
-			o.cronHealingScanMaxCount = count
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		if count <= 0 {
+			return fmt.Errorf("cron healing scan max count must be positive: got %d", count)
+		}
+		o.cronHealingScanMaxCount = count
+		return nil
 	}
 }
 
 func WithSchedulerPollInterval(interval time.Duration) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			if interval <= 0 {
-				return fmt.Errorf("scheduler poll interval must be positive: got %v", interval)
-			}
-			o.schedulerPollInterval = interval
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			if interval <= 0 {
-				return fmt.Errorf("scheduler poll interval must be positive: got %v", interval)
-			}
-			o.schedulerPollInterval = interval
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		if interval <= 0 {
+			return fmt.Errorf("scheduler poll interval must be positive: got %v", interval)
+		}
+		o.schedulerPollInterval = interval
+		return nil
 	}
 }
 
 func WithJanitorInterval(interval time.Duration) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			if interval <= 0 {
-				return fmt.Errorf("janitor interval must be positive: got %v", interval)
-			}
-			o.janitorInterval = interval
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			if interval <= 0 {
-				return fmt.Errorf("janitor interval must be positive: got %v", interval)
-			}
-			o.janitorInterval = interval
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		if interval <= 0 {
+			return fmt.Errorf("janitor interval must be positive: got %v", interval)
+		}
+		o.janitorInterval = interval
+		return nil
 	}
 }
 
 func WithJanitorMinIdleTime(idleTime time.Duration) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			if idleTime <= 0 {
-				return fmt.Errorf("janitor min idle time must be positive: got %v", idleTime)
-			}
-			o.janitorMinIdleTime = idleTime
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			if idleTime <= 0 {
-				return fmt.Errorf("janitor min idle time must be positive: got %v", idleTime)
-			}
-			o.janitorMinIdleTime = idleTime
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		if idleTime <= 0 {
+			return fmt.Errorf("janitor min idle time must be positive: got %v", idleTime)
+		}
+		o.janitorMinIdleTime = idleTime
+		return nil
 	}
 }
 
 func WithContext(ctx context.Context) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			if ctx == nil {
-				return errors.New("context cannot be nil")
-			}
-			o.context = ctx
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			if ctx == nil {
-				return errors.New("context cannot be nil")
-			}
-			o.context = ctx
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		if ctx == nil {
+			return errors.New("context cannot be nil")
+		}
+		o.context = ctx
+		return nil
 	}
 }
 
@@ -476,191 +349,101 @@ func WithRateLimitKeyField(field string) poolOption {
 }
 
 func WithCronManager(m CronManager) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			if m == nil {
-				return errors.New("cron manager cannot be nil")
-			}
-			o.cronManager = m
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			if m == nil {
-				return errors.New("cron manager cannot be nil")
-			}
-			o.cronManager = m
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		if m == nil {
+			return errors.New("cron manager cannot be nil")
+		}
+		o.cronManager = m
+		return nil
 	}
 }
 
 func WithScheduler(s Runner) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			if s == nil {
-				return errors.New("scheduler cannot be nil")
-			}
-			o.scheduler = s
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			if s == nil {
-				return errors.New("scheduler cannot be nil")
-			}
-			o.scheduler = s
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		if s == nil {
+			return errors.New("scheduler cannot be nil")
+		}
+		o.scheduler = s
+		return nil
 	}
 }
 
 func WithJanitor(j Runner) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			if j == nil {
-				return errors.New("janitor cannot be nil")
-			}
-			o.janitor = j
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			if j == nil {
-				return errors.New("janitor cannot be nil")
-			}
-			o.janitor = j
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		if j == nil {
+			return errors.New("janitor cannot be nil")
+		}
+		o.janitor = j
+		return nil
 	}
 }
 
 func WithBroker(b TaskBroker) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			if b == nil {
-				return errors.New("broker cannot be nil")
-			}
-			o.broker = b
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			if b == nil {
-				return errors.New("broker cannot be nil")
-			}
-			o.broker = b
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		if b == nil {
+			return errors.New("broker cannot be nil")
+		}
+		o.broker = b
+		return nil
 	}
 }
 
 func WithRetryPolicy(p RetryPolicy) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			if p == nil {
-				return errors.New("retry policy cannot be nil")
-			}
-			o.retryPolicy = p
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			if p == nil {
-				return errors.New("retry policy cannot be nil")
-			}
-			o.retryPolicy = p
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		if p == nil {
+			return errors.New("retry policy cannot be nil")
+		}
+		o.retryPolicy = p
+		return nil
 	}
 }
 
 func WithDeadLetterPolicy(p DeadLetterPolicy) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			if p == nil {
-				return errors.New("dead letter policy cannot be nil")
-			}
-			o.deadLetterPolicy = p
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			if p == nil {
-				return errors.New("dead letter policy cannot be nil")
-			}
-			o.deadLetterPolicy = p
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		if p == nil {
+			return errors.New("dead letter policy cannot be nil")
+		}
+		o.deadLetterPolicy = p
+		return nil
 	}
 }
 
 func WithCronManagerFactory(f CronManagerFactory) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			if f == nil {
-				return errors.New("cron manager factory cannot be nil")
-			}
-			o.cronManagerFactory = f
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			if f == nil {
-				return errors.New("cron manager factory cannot be nil")
-			}
-			o.cronManagerFactory = f
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		if f == nil {
+			return errors.New("cron manager factory cannot be nil")
+		}
+		o.cronManagerFactory = f
+		return nil
 	}
 }
 
 func WithSchedulerFactory(f SchedulerFactory) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			if f == nil {
-				return errors.New("scheduler factory cannot be nil")
-			}
-			o.schedulerFactory = f
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			if f == nil {
-				return errors.New("scheduler factory cannot be nil")
-			}
-			o.schedulerFactory = f
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		if f == nil {
+			return errors.New("scheduler factory cannot be nil")
+		}
+		o.schedulerFactory = f
+		return nil
 	}
 }
 
 func WithJanitorFactory(f JanitorFactory) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			if f == nil {
-				return errors.New("janitor factory cannot be nil")
-			}
-			o.janitorFactory = f
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			if f == nil {
-				return errors.New("janitor factory cannot be nil")
-			}
-			o.janitorFactory = f
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		if f == nil {
+			return errors.New("janitor factory cannot be nil")
+		}
+		o.janitorFactory = f
+		return nil
 	}
 }
 
 func WithGroupKeyExtractor(extractor func([]byte) string) sharedOption {
-	return sharedOption{
-		poolFunc: func(o *WorkerPoolOptions) error {
-			if extractor == nil {
-				return errors.New("group key extractor cannot be nil")
-			}
-			o.groupKeyExtractor = extractor
-			return nil
-		},
-		priorityFunc: func(o *PriorityWorkerOptions) error {
-			if extractor == nil {
-				return errors.New("group key extractor cannot be nil")
-			}
-			o.groupKeyExtractor = extractor
-			return nil
-		},
+	return func(o *BaseWorkerOptions) error {
+		if extractor == nil {
+			return errors.New("group key extractor cannot be nil")
+		}
+		o.groupKeyExtractor = extractor
+		return nil
 	}
 }

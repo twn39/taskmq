@@ -3,6 +3,7 @@ package taskmq
 import (
 	"context"
 	"crypto/rand"
+	_ "embed"
 	"errors"
 	"fmt"
 	"time"
@@ -13,70 +14,22 @@ import (
 // ErrDuplicateTask is returned when a unique task cannot be enqueued because a duplicate already exists.
 var ErrDuplicateTask = errors.New("taskmq: duplicate task in queue")
 
-var enqueueUniqueCmd = redis.NewScript(`
-	local lockKey = KEYS[1]
-	local streamKey = KEYS[2]
-	local lockVal = ARGV[1]
-	local ttlMs = tonumber(ARGV[2])
-	local serialized = ARGV[3]
+//go:embed scripts/enqueue_unique.lua
+var enqueueUniqueScript string
 
-	local currentLockVal = redis.call("GET", lockKey)
-	if currentLockVal and currentLockVal ~= lockVal then
-		return -1
-	end
-	redis.call("SET", lockKey, lockVal, "PX", ttlMs)
-	redis.call("XADD", streamKey, "*", "task", serialized)
-	return 1
-`)
+//go:embed scripts/enqueue_unique_delayed.lua
+var enqueueUniqueDelayedScript string
 
-var enqueueUniqueDelayedCmd = redis.NewScript(`
-	local lockKey = KEYS[1]
-	local delayedKey = KEYS[2]
-	local lockVal = ARGV[1]
-	local ttlMs = tonumber(ARGV[2])
-	local serialized = ARGV[3]
-	local score = tonumber(ARGV[4])
+//go:embed scripts/register_cron.lua
+var registerCronScript string
 
-	local currentLockVal = redis.call("GET", lockKey)
-	if currentLockVal and currentLockVal ~= lockVal then
-		return -1
-	end
-	redis.call("SET", lockKey, lockVal, "PX", ttlMs)
-	redis.call("ZADD", delayedKey, score, serialized)
-	return 1
-`)
+//go:embed scripts/delete_dead_letter.lua
+var deleteDeadLetterScript string
 
-var registerCronCmd = redis.NewScript(`
-	local configsKey = KEYS[1]
-	local delayedKey = KEYS[2]
-	local jobName = ARGV[1]
-	local spec = ARGV[2]
-	local serializedTask = ARGV[3]
-	local firstRunScore = tonumber(ARGV[4])
-
-	local existing = redis.call('HGET', configsKey, jobName)
-	if existing == serializedTask then
-		return 0
-	end
-
-	redis.call('HSET', configsKey, jobName, serializedTask)
-	redis.call('ZADD', delayedKey, firstRunScore, serializedTask)
-	return 1
-`)
-
-var deleteDeadLetterCmd = redis.NewScript(`
-	local dlqKey = KEYS[1]
-	local dlqIndexKey = KEYS[2]
-	local taskID = ARGV[1]
-
-	local serialized = redis.call("HGET", dlqIndexKey, taskID)
-	if serialized then
-		redis.call("ZREM", dlqKey, serialized)
-		redis.call("HDEL", dlqIndexKey, taskID)
-		return 1
-	end
-	return 0
-`)
+var enqueueUniqueCmd = redis.NewScript(enqueueUniqueScript)
+var enqueueUniqueDelayedCmd = redis.NewScript(enqueueUniqueDelayedScript)
+var registerCronCmd = redis.NewScript(registerCronScript)
+var deleteDeadLetterCmd = redis.NewScript(deleteDeadLetterScript)
 
 type ScheduledTask struct {
 	*Task

@@ -51,9 +51,14 @@ var Module = fx.Module("taskmq",
 
 // ProvideWorkers constructs and provides a Worker (implemented by multiWorker or priorityWorker) for all configured queues.
 func ProvideWorkers(p ProvideWorkersParams) (Worker, error) {
+	return BuildWorkerTopology(p.Rdb, p.Logger, p.Cfg, p.Codec, p.RootCtx)
+}
+
+// BuildWorkerTopology constructs and returns a Worker based on the configuration.
+func BuildWorkerTopology(rdb *redis.Client, logger *zap.Logger, cfg *config.Config, codec Codec, rootCtx context.Context) (Worker, error) {
 	workers := make(map[string]Worker)
 
-	queues := p.Cfg.TaskMQ.Queues
+	queues := cfg.TaskMQ.Queues
 	if len(queues) == 0 {
 		queues = []config.QueueConfig{
 			{
@@ -63,8 +68,8 @@ func ProvideWorkers(p ProvideWorkersParams) (Worker, error) {
 		}
 	}
 
-	priorityQueuesEnabled := p.Cfg.TaskMQ.PriorityQueuesEnabled
-	priorityStrategy := p.Cfg.TaskMQ.PriorityStrategy
+	priorityQueuesEnabled := cfg.TaskMQ.PriorityQueuesEnabled
+	priorityStrategy := cfg.TaskMQ.PriorityStrategy
 
 	var priorityQueues []QueuePriority
 	var priorityConcurrency int
@@ -91,7 +96,7 @@ func ProvideWorkers(p ProvideWorkersParams) (Worker, error) {
 			priorityConcurrency = 5
 		}
 
-		commonOpts := buildCommonOptions(p.Cfg, p.Codec, p.RootCtx)
+		commonOpts := buildCommonOptions(cfg, codec, rootCtx)
 		opts := toPriorityOptions(commonOpts)
 		opts = append(opts, WithGroup("taskmq-priority-group"))
 		opts = append(opts, WithConsumer("taskmq-priority-consumer-1"))
@@ -99,7 +104,7 @@ func ProvideWorkers(p ProvideWorkersParams) (Worker, error) {
 		opts = append(opts, WithPriorityQueues(priorityQueues))
 		opts = append(opts, WithPriorityStrategy(priorityStrategy))
 
-		pw := NewPriorityWorker(p.Rdb, p.Logger, opts...)
+		pw := NewPriorityWorker(rdb, logger, opts...)
 
 		// Register the pool under all priority queue names
 		for _, pq := range priorityQueues {
@@ -122,7 +127,7 @@ func ProvideWorkers(p ProvideWorkersParams) (Worker, error) {
 			consumer = qCfg.Consumer
 		}
 
-		commonOpts := buildCommonOptions(p.Cfg, p.Codec, p.RootCtx)
+		commonOpts := buildCommonOptions(cfg, codec, rootCtx)
 		opts := toPoolOptions(commonOpts)
 		opts = append(opts, WithGroup(group))
 		opts = append(opts, WithConsumer(consumer))
@@ -134,7 +139,7 @@ func ProvideWorkers(p ProvideWorkersParams) (Worker, error) {
 			opts = append(opts, WithRateLimitKeyField(qCfg.RateLimitKeyField))
 		}
 
-		pool := NewWorkerPool(p.Rdb, p.Logger, qCfg.Name, opts...)
+		pool := NewWorkerPool(rdb, logger, qCfg.Name, opts...)
 		workers[qCfg.Name] = pool
 	}
 
