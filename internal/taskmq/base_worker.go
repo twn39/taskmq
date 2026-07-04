@@ -43,47 +43,30 @@ type baseWorker struct {
 	middlewareChain []CoreHandlerFunc
 }
 
-func (b *baseWorker) initBase(rdb *redis.Client, logger *zap.Logger, opt *WorkerOptions, defaultCodec Codec) {
+func (b *baseWorker) initBase(rdb *redis.Client, logger *zap.Logger, opt *workerOptions) {
 	b.rdb = rdb
 	b.logger = logger
 	b.handlers = make(map[string]HandlerFunc)
-	b.parentCtx = context.Background()
+	b.parentCtx = opt.context
 	b.limiter = NewGCRALimiter(rdb)
 
-	b.group = opt.Group
-	b.consumer = opt.Consumer
-	b.concurrency = opt.Concurrency
-	b.execPoolSize = opt.Concurrency
-	b.codec = opt.Codec
-	b.syncExecution = opt.SyncExecution
-	if opt.ExecutionPoolSize > 0 {
-		b.execPoolSize = opt.ExecutionPoolSize
-	}
-	if opt.Context != nil {
-		b.parentCtx = opt.Context
+	b.group = opt.group
+	b.consumer = opt.consumer
+	b.concurrency = opt.concurrency
+	b.execPoolSize = opt.concurrency
+	b.codec = opt.codec
+	b.syncExecution = opt.syncExecution
+	if opt.executionPoolSize > 0 {
+		b.execPoolSize = opt.executionPoolSize
 	}
 
-	b.rateLimitMax = opt.RateLimitMax
-	b.rateLimitDuration = opt.RateLimitDuration
-	b.rateLimitKeyField = opt.RateLimitKeyField
+	b.rateLimitMax = opt.rateLimitMax
+	b.rateLimitDuration = opt.rateLimitDuration
+	b.rateLimitKeyField = opt.rateLimitKeyField
 
-	if opt.Broker != nil {
-		b.broker = opt.Broker
-	} else {
-		b.broker = NewRedisBroker(rdb, b.codec)
-	}
-
-	if opt.RetryPolicy != nil {
-		b.retryPolicy = opt.RetryPolicy
-	} else {
-		b.retryPolicy = NewExponentialBackoff(100*time.Millisecond, 1*time.Hour, true)
-	}
-
-	if opt.DeadLetterPolicy != nil {
-		b.deadLetterPolicy = opt.DeadLetterPolicy
-	} else {
-		b.deadLetterPolicy = NewStandardDeadLetterPolicy("", nil)
-	}
+	b.broker = opt.broker
+	b.retryPolicy = opt.retryPolicy
+	b.deadLetterPolicy = opt.deadLetterPolicy
 
 	b.sem = make(chan struct{}, b.execPoolSize)
 }

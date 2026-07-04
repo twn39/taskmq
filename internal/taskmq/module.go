@@ -91,26 +91,39 @@ func ProvideWorkers(p ProvideWorkersParams) (Worker, error) {
 			priorityConcurrency = 5
 		}
 
-		baseOpts := WorkerOptions{
-			Group:                    "taskmq-priority-group",
-			Consumer:                 "taskmq-priority-consumer-1",
-			Concurrency:              priorityConcurrency,
-			CronHealingInterval:      p.Cfg.TaskMQ.CronHealingInterval,
-			CronHealingLockTTL:       p.Cfg.TaskMQ.CronHealingLockTTL,
-			CronHealingScanBatchSize: p.Cfg.TaskMQ.CronHealingScanBatchSize,
-			CronHealingScanMaxCount:  p.Cfg.TaskMQ.CronHealingScanMaxCount,
-			SchedulerPollInterval:    p.Cfg.TaskMQ.SchedulerPollInterval,
-			JanitorInterval:          p.Cfg.TaskMQ.JanitorInterval,
-			JanitorMinIdleTime:       p.Cfg.TaskMQ.JanitorMinIdleTime,
-			PriorityQueues:           priorityQueues,
-			PriorityStrategy:         priorityStrategy,
-			Codec:                    p.Codec,
+		var opts []any
+		opts = append(opts, WithGroup("taskmq-priority-group"))
+		opts = append(opts, WithConsumer("taskmq-priority-consumer-1"))
+		opts = append(opts, WithConcurrency(priorityConcurrency))
+		if p.Cfg.TaskMQ.CronHealingInterval > 0 {
+			opts = append(opts, WithCronHealingInterval(p.Cfg.TaskMQ.CronHealingInterval))
 		}
+		if p.Cfg.TaskMQ.CronHealingLockTTL > 0 {
+			opts = append(opts, WithCronHealingLockTTL(p.Cfg.TaskMQ.CronHealingLockTTL))
+		}
+		if p.Cfg.TaskMQ.CronHealingScanBatchSize > 0 {
+			opts = append(opts, WithCronHealingScanBatchSize(p.Cfg.TaskMQ.CronHealingScanBatchSize))
+		}
+		if p.Cfg.TaskMQ.CronHealingScanMaxCount > 0 {
+			opts = append(opts, WithCronHealingScanMaxCount(p.Cfg.TaskMQ.CronHealingScanMaxCount))
+		}
+		if p.Cfg.TaskMQ.SchedulerPollInterval > 0 {
+			opts = append(opts, WithSchedulerPollInterval(p.Cfg.TaskMQ.SchedulerPollInterval))
+		}
+		if p.Cfg.TaskMQ.JanitorInterval > 0 {
+			opts = append(opts, WithJanitorInterval(p.Cfg.TaskMQ.JanitorInterval))
+		}
+		if p.Cfg.TaskMQ.JanitorMinIdleTime > 0 {
+			opts = append(opts, WithJanitorMinIdleTime(p.Cfg.TaskMQ.JanitorMinIdleTime))
+		}
+		opts = append(opts, WithPriorityQueues(priorityQueues))
+		opts = append(opts, WithPriorityStrategy(priorityStrategy))
+		opts = append(opts, WithCodec(p.Codec))
 		if p.RootCtx != nil {
-			baseOpts.Context = p.RootCtx
+			opts = append(opts, WithContext(p.RootCtx))
 		}
 
-		pw := NewPriorityWorker(p.Rdb, p.Logger, baseOpts)
+		pw := NewPriorityWorker(p.Rdb, p.Logger, opts...)
 
 		// Register the pool under all priority queue names
 		for _, pq := range priorityQueues {
@@ -133,27 +146,43 @@ func ProvideWorkers(p ProvideWorkersParams) (Worker, error) {
 			consumer = qCfg.Consumer
 		}
 
-		baseOpts := WorkerOptions{
-			Group:                    group,
-			Consumer:                 consumer,
-			Concurrency:              concurrency,
-			CronHealingInterval:      p.Cfg.TaskMQ.CronHealingInterval,
-			CronHealingLockTTL:       p.Cfg.TaskMQ.CronHealingLockTTL,
-			CronHealingScanBatchSize: p.Cfg.TaskMQ.CronHealingScanBatchSize,
-			CronHealingScanMaxCount:  p.Cfg.TaskMQ.CronHealingScanMaxCount,
-			SchedulerPollInterval:    p.Cfg.TaskMQ.SchedulerPollInterval,
-			JanitorInterval:          p.Cfg.TaskMQ.JanitorInterval,
-			JanitorMinIdleTime:       p.Cfg.TaskMQ.JanitorMinIdleTime,
-			RateLimitMax:             qCfg.RateLimitMax,
-			RateLimitDuration:        qCfg.RateLimitDuration,
-			RateLimitKeyField:        qCfg.RateLimitKeyField,
+		var opts []any
+		opts = append(opts, WithGroup(group))
+		opts = append(opts, WithConsumer(consumer))
+		opts = append(opts, WithConcurrency(concurrency))
+		if p.Cfg.TaskMQ.CronHealingInterval > 0 {
+			opts = append(opts, WithCronHealingInterval(p.Cfg.TaskMQ.CronHealingInterval))
 		}
+		if p.Cfg.TaskMQ.CronHealingLockTTL > 0 {
+			opts = append(opts, WithCronHealingLockTTL(p.Cfg.TaskMQ.CronHealingLockTTL))
+		}
+		if p.Cfg.TaskMQ.CronHealingScanBatchSize > 0 {
+			opts = append(opts, WithCronHealingScanBatchSize(p.Cfg.TaskMQ.CronHealingScanBatchSize))
+		}
+		if p.Cfg.TaskMQ.CronHealingScanMaxCount > 0 {
+			opts = append(opts, WithCronHealingScanMaxCount(p.Cfg.TaskMQ.CronHealingScanMaxCount))
+		}
+		if p.Cfg.TaskMQ.SchedulerPollInterval > 0 {
+			opts = append(opts, WithSchedulerPollInterval(p.Cfg.TaskMQ.SchedulerPollInterval))
+		}
+		if p.Cfg.TaskMQ.JanitorInterval > 0 {
+			opts = append(opts, WithJanitorInterval(p.Cfg.TaskMQ.JanitorInterval))
+		}
+		if p.Cfg.TaskMQ.JanitorMinIdleTime > 0 {
+			opts = append(opts, WithJanitorMinIdleTime(p.Cfg.TaskMQ.JanitorMinIdleTime))
+		}
+		if qCfg.RateLimitMax > 0 && qCfg.RateLimitDuration > 0 {
+			opts = append(opts, WithRateLimit(qCfg.RateLimitMax, qCfg.RateLimitDuration))
+		}
+		if qCfg.RateLimitKeyField != "" {
+			opts = append(opts, WithRateLimitKeyField(qCfg.RateLimitKeyField))
+		}
+		opts = append(opts, WithCodec(p.Codec))
 		if p.RootCtx != nil {
-			baseOpts.Context = p.RootCtx
+			opts = append(opts, WithContext(p.RootCtx))
 		}
 
-		opts := NewDefaultWorkerOptions(p.Rdb, p.Logger, qCfg.Name, p.Codec, baseOpts)
-		pool := NewWorkerPool(p.Rdb, p.Logger, qCfg.Name, opts)
+		pool := NewWorkerPool(p.Rdb, p.Logger, qCfg.Name, opts...)
 		workers[qCfg.Name] = pool
 	}
 

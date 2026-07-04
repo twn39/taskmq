@@ -38,63 +38,37 @@ type workerPool struct {
 	cronManager CronManager
 }
 
-type WorkerOptions struct {
-	Group                    string
-	Consumer                 string
-	Concurrency              int
-	Codec                    Codec
-	SyncExecution            bool
-	ExecutionPoolSize        int
-	CronHealingInterval      time.Duration
-	CronHealingLockTTL       time.Duration
-	CronHealingScanBatchSize int
-	CronHealingScanMaxCount  int
-
-	// Dependency Injections
-	CronManager      CronManager
-	Scheduler        Runner
-	Janitor          Runner
-	Broker           TaskBroker       // Decoupled Task Broker
-	RetryPolicy      RetryPolicy      // Decoupled Retry Policy
-	DeadLetterPolicy DeadLetterPolicy // Decoupled Dead Letter Policy
-
-	// Scheduler & Janitor Tick Intervals (DIP / Configurable tickers)
-	SchedulerPollInterval time.Duration
-	JanitorInterval       time.Duration
-	JanitorMinIdleTime    time.Duration
-
-	// Parent context for the worker pool execution lifecycle
-	Context context.Context
-
-	// Priority Queues Settings
-	PriorityQueues   []QueuePriority
-	PriorityStrategy string // "strict" or "weighted"
-
-	// Rate Limiting Settings
-	RateLimitMax      int64
-	RateLimitDuration time.Duration
-	RateLimitKeyField string
-}
-
-func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...WorkerOptions) Worker {
-	var opt WorkerOptions
-	if len(opts) > 0 {
-		opt = opts[0]
-	} else {
-		panic("NewWorkerPool: WorkerOptions must be provided")
+func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...any) Worker {
+	var options []WorkerOption
+	for _, opt := range opts {
+		switch o := opt.(type) {
+		case WorkerOption:
+			options = append(options, o)
+		case []WorkerOption:
+			options = append(options, o...)
+		case WorkerOptions:
+			options = append(options, NewDefaultWorkerOptions(rdb, logger, queue, o.Codec, o)...)
+		}
 	}
 
-	opt.ApplyDefaults(rdb, logger, queue, JSONCodec{})
+	opt := defaultWorkerOptions(JSONCodec{})
+	for _, o := range options {
+		if err := o(&opt); err != nil {
+			panic(fmt.Errorf("invalid option: %w", err))
+		}
+	}
+
+	buildDefaultComponents(rdb, logger, queue, &opt)
 
 	base := &baseWorker{}
-	base.initBase(rdb, logger, &opt, JSONCodec{})
+	base.initBase(rdb, logger, &opt)
 
 	pool := &workerPool{
 		baseWorker:  base,
 		queue:       queue,
-		cronManager: opt.CronManager,
-		scheduler:   opt.Scheduler,
-		janitor:     opt.Janitor,
+		cronManager: opt.cronManager,
+		scheduler:   opt.scheduler,
+		janitor:     opt.janitor,
 	}
 
 	pool.getQueueRateLimit = func(qName string) (int64, time.Duration, string) {

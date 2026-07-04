@@ -77,16 +77,43 @@ type priorityWorker struct {
 	cronManagers     map[string]CronManager
 }
 
-func NewPriorityWorker(rdb *redis.Client, logger *zap.Logger, opts WorkerOptions) Worker {
-	opts.ApplyDefaults(rdb, logger, "", opts.Codec)
+func NewPriorityWorker(rdb *redis.Client, logger *zap.Logger, opts ...any) Worker {
+	var options []WorkerOption
+	for _, opt := range opts {
+		switch o := opt.(type) {
+		case WorkerOption:
+			options = append(options, o)
+		case []WorkerOption:
+			options = append(options, o...)
+		case WorkerOptions:
+			options = append(options, NewDefaultWorkerOptions(rdb, logger, "", o.Codec, o)...)
+		}
+	}
+
+	opt := defaultWorkerOptions(JSONCodec{})
+	for _, o := range options {
+		if err := o(&opt); err != nil {
+			panic(fmt.Errorf("invalid option: %w", err))
+		}
+	}
+
+	if opt.broker == nil {
+		opt.broker = NewRedisBroker(rdb, opt.codec)
+	}
+	if opt.retryPolicy == nil {
+		opt.retryPolicy = NewExponentialBackoff(100*time.Millisecond, 1*time.Hour, true)
+	}
+	if opt.deadLetterPolicy == nil {
+		opt.deadLetterPolicy = NewStandardDeadLetterPolicy("", nil)
+	}
 
 	base := &baseWorker{}
-	base.initBase(rdb, logger, &opts, opts.Codec)
+	base.initBase(rdb, logger, &opt)
 
 	pw := &priorityWorker{
 		baseWorker:       base,
-		queues:           opts.PriorityQueues,
-		priorityStrategy: opts.PriorityStrategy,
+		queues:           opt.priorityQueues,
+		priorityStrategy: opt.priorityStrategy,
 		schedulers:       make(map[string]Runner),
 		janitors:         make(map[string]Runner),
 		cronManagers:     make(map[string]CronManager),
@@ -109,9 +136,9 @@ func NewPriorityWorker(rdb *redis.Client, logger *zap.Logger, opts WorkerOptions
 
 	// Multi-queue priority mode components initialization
 	for _, q := range pw.queues {
-		qCron := newCronManager(rdb, logger, q.Name, pw.codec, opts.CronHealingInterval, opts.CronHealingLockTTL, opts.CronHealingScanBatchSize, opts.CronHealingScanMaxCount)
-		qSched := newDelayedScheduler(rdb, logger, q.Name, qCron, pw.codec, opts.SchedulerPollInterval)
-		qJan := newPELRecoveryJanitor(rdb, logger, q.Name, pw.group, pw.consumer, pw.concurrency, opts.JanitorInterval, opts.JanitorMinIdleTime, nil)
+		qCron := newCronManager(rdb, logger, q.Name, pw.codec, opt.cronHealingInterval, opt.cronHealingLockTTL, opt.cronHealingScanBatchSize, opt.cronHealingScanMaxCount)
+		qSched := newDelayedScheduler(rdb, logger, q.Name, qCron, pw.codec, opt.schedulerPollInterval)
+		qJan := newPELRecoveryJanitor(rdb, logger, q.Name, pw.group, pw.consumer, pw.concurrency, opt.janitorInterval, opt.janitorMinIdleTime, nil)
 
 		pw.cronManagers[q.Name] = qCron
 		pw.schedulers[q.Name] = qSched
