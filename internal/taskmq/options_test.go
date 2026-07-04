@@ -121,4 +121,68 @@ func TestWithOptionFunctions(t *testing.T) {
 	if err == nil {
 		t.Error("expected error for nil context, got nil")
 	}
+
+	// Test WithGroupKeyExtractor
+	extractor := func(payload []byte) string { return "custom" }
+	err = WithGroupKeyExtractor(extractor)(&opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if opts.groupKeyExtractor == nil || opts.groupKeyExtractor(nil) != "custom" {
+		t.Error("expected groupKeyExtractor to be set correctly")
+	}
+
+	err = WithGroupKeyExtractor(nil)(&opts)
+	if err == nil {
+		t.Error("expected error for nil extractor, got nil")
+	}
+}
+
+func TestExtractGroupKey(t *testing.T) {
+	tests := []struct {
+		name     string
+		payload  []byte
+		field    string
+		expected string
+	}{
+		{
+			name:     "Flat string key",
+			payload:  []byte(`{"user_id":"123","group":"tenant-1"}`),
+			field:    "group",
+			expected: "tenant-1",
+		},
+		{
+			name:     "Flat integer key",
+			payload:  []byte(`{"user_id":456,"group":"tenant-2"}`),
+			field:    "user_id",
+			expected: "456",
+		},
+		{
+			name:     "Key not found",
+			payload:  []byte(`{"user_id":456,"group":"tenant-2"}`),
+			field:    "missing",
+			expected: "",
+		},
+		{
+			name:     "Invalid JSON",
+			payload:  []byte(`{invalid,"user_id":456}`),
+			field:    "user_id",
+			expected: "",
+		},
+		{
+			name:     "Empty payload",
+			payload:  []byte(``),
+			field:    "user_id",
+			expected: "",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := extractGroupKey(tt.payload, tt.field)
+			if result != tt.expected {
+				t.Errorf("expected %q, got %q", tt.expected, result)
+			}
+		})
+	}
 }

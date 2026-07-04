@@ -1,6 +1,7 @@
 package taskmq
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -291,12 +292,35 @@ func extractGroupKey(payload []byte, field string) string {
 	if len(payload) == 0 || field == "" {
 		return ""
 	}
-	var data map[string]interface{}
-	if err := json.Unmarshal(payload, &data); err != nil {
+
+	dec := json.NewDecoder(bytes.NewReader(payload))
+	t, err := dec.Token()
+	if err != nil || t != json.Delim('{') {
 		return ""
 	}
-	if val, ok := data[field]; ok {
-		return fmt.Sprintf("%v", val)
+
+	for dec.More() {
+		t, err := dec.Token()
+		if err != nil {
+			break
+		}
+		key, ok := t.(string)
+		if !ok {
+			continue
+		}
+
+		if key == field {
+			var val interface{}
+			if err := dec.Decode(&val); err == nil {
+				return fmt.Sprintf("%v", val)
+			}
+			break
+		}
+
+		var skip interface{}
+		if err := dec.Decode(&skip); err != nil {
+			break
+		}
 	}
 	return ""
 }

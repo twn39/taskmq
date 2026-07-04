@@ -18,6 +18,7 @@ type Task struct {
 	UniqueTTLMs int       `json:"unique_ttl_ms"`
 	LastError   string    `json:"last_error"`
 	CronSpec    string    `json:"cron_spec,omitempty"`
+	GroupKey    string    `json:"group_key,omitempty"`
 	CreatedAt   time.Time `json:"created_at"`
 }
 
@@ -29,6 +30,7 @@ type TaskOptions struct {
 	Timeout   time.Duration
 	UniqueKey string
 	UniqueTTL time.Duration
+	GroupKey  string
 }
 
 // NewTask creates a new Task instance with default settings
@@ -60,6 +62,9 @@ func NewTask(name string, payload []byte, opts ...TaskOptions) *Task {
 		if opt.UniqueKey != "" {
 			task.UniqueKey = opt.UniqueKey
 			task.UniqueTTLMs = int(opt.UniqueTTL.Milliseconds())
+		}
+		if opt.GroupKey != "" {
+			task.GroupKey = opt.GroupKey
 		}
 	}
 

@@ -34,6 +34,7 @@ type baseWorker struct {
 	rateLimitDuration time.Duration
 	rateLimitKeyField string
 	getQueueRateLimit func(qName string) (int64, time.Duration, string)
+	groupKeyExtractor func([]byte) string
 
 	// Decoupled abstractions
 	broker           TaskBroker
@@ -63,6 +64,7 @@ func (b *baseWorker) initBase(rdb *redis.Client, logger *zap.Logger, opt *worker
 	b.rateLimitMax = opt.rateLimitMax
 	b.rateLimitDuration = opt.rateLimitDuration
 	b.rateLimitKeyField = opt.rateLimitKeyField
+	b.groupKeyExtractor = opt.groupKeyExtractor
 
 	b.broker = opt.broker
 	b.retryPolicy = opt.retryPolicy
@@ -79,7 +81,7 @@ func (b *baseWorker) buildMiddlewareChain() {
 				return b.getQueueRateLimit(qName)
 			}
 			return 0, 0, ""
-		}, b.logger),
+		}, b.groupKeyExtractor, b.logger),
 		RecoveryMiddleware(b.logger),
 		func(c *ConsumeContext) error {
 			handler, exists := b.handlers[c.Task.Name]

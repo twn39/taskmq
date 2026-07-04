@@ -55,7 +55,7 @@ func TestMiddleware_RateLimiter(t *testing.T) {
 		handlers := []CoreHandlerFunc{
 			RateLimitMiddleware(limiter, mb, func(queue string) (int64, time.Duration, string) {
 				return 5, time.Minute, ""
-			}, logger),
+			}, nil, logger),
 			func(c *ConsumeContext) error {
 				return nil
 			},
@@ -85,7 +85,7 @@ func TestMiddleware_RateLimiter(t *testing.T) {
 		handlers := []CoreHandlerFunc{
 			RateLimitMiddleware(limiter, mb, func(queue string) (int64, time.Duration, string) {
 				return 1, time.Minute, ""
-			}, logger),
+			}, nil, logger),
 			func(c *ConsumeContext) error {
 				return nil
 			},
@@ -145,4 +145,108 @@ func TestConsumeContext_Keys(t *testing.T) {
 	if c.RateLimitGroup != "group-1" {
 		t.Errorf("expected RateLimitGroup to be 'group-1', got %s", c.RateLimitGroup)
 	}
+}
+
+func TestMiddleware_RateLimiter_GroupKeyLayers(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("failed to start miniredis: %v", err)
+	}
+	defer mr.Close()
+
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	limiter := NewGCRALimiter(rdb)
+	logger := zap.NewNop()
+	mb := &mockBroker{}
+
+	t.Run("Layer 1 - Task.GroupKey is used", func(t *testing.T) {
+		var extractedGroup string
+		handlers := []CoreHandlerFunc{
+			RateLimitMiddleware(limiter, mb, func(queue string) (int64, time.Duration, string) {
+				return 10, time.Minute, "field-dynamic"
+			}, func(p []byte) string {
+				return "layer-2"
+			}, logger),
+			func(c *ConsumeContext) error {
+				extractedGroup = c.RateLimitGroup
+				return nil
+			},
+		}
+
+		c := &ConsumeContext{
+			Context:   context.Background(),
+			Task:      &Task{ID: "t-1", Queue: "q-1", GroupKey: "layer-1", Payload: []byte(`{"field-dynamic":"layer-3"}`)},
+			MessageID: "1-0",
+			Queue:     "q-1",
+			handlers:  handlers,
+			index:     -1,
+		}
+
+		if err := c.Next(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if extractedGroup != "layer-1" {
+			t.Errorf("expected extracted group to be 'layer-1', got %s", extractedGroup)
+		}
+	})
+
+	t.Run("Layer 2 - extractor function is used when GroupKey is empty", func(t *testing.T) {
+		var extractedGroup string
+		handlers := []CoreHandlerFunc{
+			RateLimitMiddleware(limiter, mb, func(queue string) (int64, time.Duration, string) {
+				return 10, time.Minute, "field-dynamic"
+			}, func(p []byte) string {
+				return "layer-2"
+			}, logger),
+			func(c *ConsumeContext) error {
+				extractedGroup = c.RateLimitGroup
+				return nil
+			},
+		}
+
+		c := &ConsumeContext{
+			Context:   context.Background(),
+			Task:      &Task{ID: "t-1", Queue: "q-1", GroupKey: "", Payload: []byte(`{"field-dynamic":"layer-3"}`)},
+			MessageID: "1-0",
+			Queue:     "q-1",
+			handlers:  handlers,
+			index:     -1,
+		}
+
+		if err := c.Next(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if extractedGroup != "layer-2" {
+			t.Errorf("expected extracted group to be 'layer-2', got %s", extractedGroup)
+		}
+	})
+
+	t.Run("Layer 3 - JSON field extraction fallback", func(t *testing.T) {
+		var extractedGroup string
+		handlers := []CoreHandlerFunc{
+			RateLimitMiddleware(limiter, mb, func(queue string) (int64, time.Duration, string) {
+				return 10, time.Minute, "field-dynamic"
+			}, nil, logger),
+			func(c *ConsumeContext) error {
+				extractedGroup = c.RateLimitGroup
+				return nil
+			},
+		}
+
+		c := &ConsumeContext{
+			Context:   context.Background(),
+			Task:      &Task{ID: "t-1", Queue: "q-1", GroupKey: "", Payload: []byte(`{"field-dynamic":"layer-3"}`)},
+			MessageID: "1-0",
+			Queue:     "q-1",
+			handlers:  handlers,
+			index:     -1,
+		}
+
+		if err := c.Next(); err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if extractedGroup != "layer-3" {
+			t.Errorf("expected extracted group to be 'layer-3', got %s", extractedGroup)
+		}
+	})
 }

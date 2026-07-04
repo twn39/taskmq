@@ -28,7 +28,7 @@ func RecoveryMiddleware(logger *zap.Logger) CoreHandlerFunc {
 }
 
 // RateLimitMiddleware applies dynamic GCRA rate limiting before task execution.
-func RateLimitMiddleware(limiter *GCRALimiter, broker TaskBroker, provider func(queue string) (int64, time.Duration, string), logger *zap.Logger) CoreHandlerFunc {
+func RateLimitMiddleware(limiter *GCRALimiter, broker TaskBroker, provider func(queue string) (int64, time.Duration, string), extractor func([]byte) string, logger *zap.Logger) CoreHandlerFunc {
 	return func(c *ConsumeContext) error {
 		max, duration, keyField := provider(c.Queue)
 		if max <= 0 || duration <= 0 {
@@ -36,7 +36,11 @@ func RateLimitMiddleware(limiter *GCRALimiter, broker TaskBroker, provider func(
 		}
 
 		var groupKeyVal string
-		if keyField != "" {
+		if c.Task.GroupKey != "" {
+			groupKeyVal = c.Task.GroupKey
+		} else if extractor != nil {
+			groupKeyVal = extractor(c.Task.Payload)
+		} else if keyField != "" {
 			groupKeyVal = extractGroupKey(c.Task.Payload, keyField)
 		}
 		c.RateLimitGroup = groupKeyVal

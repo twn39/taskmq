@@ -42,6 +42,7 @@ type workerOptions struct {
 	rateLimitMax      int64
 	rateLimitDuration time.Duration
 	rateLimitKeyField string
+	groupKeyExtractor func([]byte) string
 }
 
 // WorkerOption defines the functional option signature.
@@ -318,6 +319,16 @@ func WithDeadLetterPolicy(p DeadLetterPolicy) WorkerOption {
 			return errors.New("dead letter policy cannot be nil")
 		}
 		o.deadLetterPolicy = p
+		return nil
+	}
+}
+
+func WithGroupKeyExtractor(extractor func([]byte) string) WorkerOption {
+	return func(o *workerOptions) error {
+		if extractor == nil {
+			return errors.New("group key extractor cannot be nil")
+		}
+		o.groupKeyExtractor = extractor
 		return nil
 	}
 }
