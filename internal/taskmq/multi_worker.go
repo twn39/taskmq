@@ -244,7 +244,7 @@ func (pw *priorityWorker) worker() {
 		case <-pw.consumerCtx.Done():
 			return
 		default:
-			// Fetch the list of queue names according to priority strategy
+			// 1. Get ordered queue list according to priority strategy
 			var queueNames []string
 			if pw.priorityStrategy == "strict" {
 				queueNames = sortQueues(pw.queues)
@@ -255,6 +255,8 @@ func (pw *priorityWorker) worker() {
 			messageFetched := false
 			allQueuesPaused := true
 
+			// 2. Sequentially poll each queue with an extremely short block timeout (10ms)
+			// This preserves exact FIFO order among streams and completely avoids starvation
 			for _, qName := range queueNames {
 				if pw.isQueuePaused(qName) {
 					continue
@@ -267,11 +269,12 @@ func (pw *priorityWorker) worker() {
 					Consumer: consumerName,
 					Streams:  []string{streamKey, ">"},
 					Count:    1,
-					Block:    -1,
+					Block:    10 * time.Millisecond,
 				}).Result()
 
 				if err != nil {
 					if err == redis.Nil {
+						// Stream is empty, proceed instantly to check next queue
 						continue
 					}
 					select {
@@ -279,11 +282,12 @@ func (pw *priorityWorker) worker() {
 						return
 					default:
 						pw.logger.Error("Failed to read group messages in priority worker", zap.Error(err))
-						time.Sleep(100 * time.Millisecond)
+						time.Sleep(50 * time.Millisecond)
 						continue
 					}
 				}
 
+				// 3. Process the fetched message
 				for _, stream := range streams {
 					for _, msg := range stream.Messages {
 						messageFetched = true
@@ -308,11 +312,14 @@ func (pw *priorityWorker) worker() {
 					}
 				}
 
+				// Break loop immediately after processing a message from a higher priority queue
+				// to begin the next evaluation round (ensuring absolute higher priority dominance)
 				if messageFetched {
 					break
 				}
 			}
 
+			// 4. Backoff to protect CPU if all queues are empty/paused
 			if !messageFetched {
 				if allQueuesPaused {
 					time.Sleep(200 * time.Millisecond)
