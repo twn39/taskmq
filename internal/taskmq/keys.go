@@ -86,3 +86,11 @@ func PausedKey(queue string) string {
 func ControlChannel(queue string) string {
 	return KeysFor(queue).Control()
 }
+
+func CancelledKey(queue, taskID string) string {
+	return KeysFor(queue).Cancelled(taskID)
+}
+
+func CancelChannel(queue string) string {
+	return KeysFor(queue).CancelChannel()
+}
