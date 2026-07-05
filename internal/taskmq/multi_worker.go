@@ -269,16 +269,14 @@ func (pw *priorityWorker) worker(workerIndex int) {
 						if pw.syncExecution {
 							pw.processMessage(pw.consumerCtx, streamKey, msg)
 						} else {
-							select {
-							case pw.sem <- struct{}{}:
-							case <-pw.consumerCtx.Done():
+							if err := pw.execPool.Acquire(pw.consumerCtx); err != nil {
 								return
 							}
 
 							pw.wg.Add(1)
 							go func(sk string, m redis.XMessage) {
 								defer func() {
-									<-pw.sem
+									pw.execPool.Release()
 									pw.wg.Done()
 								}()
 								pw.processMessage(pw.consumerCtx, sk, m)

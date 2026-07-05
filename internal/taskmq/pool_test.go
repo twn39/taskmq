@@ -3,6 +3,7 @@ package taskmq
 import (
 	"context"
 	"testing"
+	"time"
 )
 
 func TestAcquireReleaseConsumeContext(t *testing.T) {
@@ -119,3 +120,117 @@ func TestConsumeContext_Reset(t *testing.T) {
 		t.Error("expected aborted to be false")
 	}
 }
+
+func TestSemaphoreExecutionPool(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("basic acquire and release", func(t *testing.T) {
+		pool := NewSemaphoreExecutionPool(3)
+		if pool.Size() != 3 {
+			t.Errorf("expected size 3, got %d", pool.Size())
+		}
+		if pool.InUse() != 0 {
+			t.Errorf("expected in use 0, got %d", pool.InUse())
+		}
+
+		err := pool.Acquire(ctx)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if pool.InUse() != 1 {
+			t.Errorf("expected in use 1, got %d", pool.InUse())
+		}
+
+		pool.Release()
+		if pool.InUse() != 0 {
+			t.Errorf("expected in use 0, got %d", pool.InUse())
+		}
+	})
+
+	t.Run("concurrency limit and context cancellation", func(t *testing.T) {
+		pool := NewSemaphoreExecutionPool(2)
+
+		err := pool.Acquire(ctx)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		err = pool.Acquire(ctx)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if pool.InUse() != 2 {
+			t.Errorf("expected in use 2, got %d", pool.InUse())
+		}
+
+		// Try acquiring when full, should timeout
+		timeoutCtx, cancel := context.WithTimeout(ctx, 10*time.Millisecond)
+		defer cancel()
+
+		err = pool.Acquire(timeoutCtx)
+		if err == nil {
+			t.Error("expected timeout error, got nil")
+		}
+
+		// Release one, try acquiring again
+		pool.Release()
+		if pool.InUse() != 1 {
+			t.Errorf("expected in use 1, got %d", pool.InUse())
+		}
+
+		err = pool.Acquire(ctx)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+	})
+}
+
+type mockExecutionPool struct {
+	acquireCount int
+	releaseCount int
+}
+
+func (m *mockExecutionPool) Acquire(ctx context.Context) error {
+	m.acquireCount++
+	return nil
+}
+
+func (m *mockExecutionPool) Release() {
+	m.releaseCount++
+}
+
+func (m *mockExecutionPool) Size() int {
+	return 10
+}
+
+func (m *mockExecutionPool) InUse() int {
+	return 0
+}
+
+func TestBaseWorker_CustomExecutionPool(t *testing.T) {
+	mockPool := &mockExecutionPool{}
+	opts := defaultBaseWorkerOptions(JSONCodec{})
+	
+	err := WithExecutionPool(mockPool)(&opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	worker := &baseWorker{}
+	worker.initBase(nil, nil, &opts)
+
+	if worker.execPool != mockPool {
+		t.Error("expected custom execution pool to be injected")
+	}
+
+	_ = worker.execPool.Acquire(context.Background())
+	worker.execPool.Release()
+
+	if mockPool.acquireCount != 1 {
+		t.Errorf("expected acquire count 1, got %d", mockPool.acquireCount)
+	}
+	if mockPool.releaseCount != 1 {
+		t.Errorf("expected release count 1, got %d", mockPool.releaseCount)
+	}
+}
+

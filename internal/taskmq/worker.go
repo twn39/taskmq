@@ -197,16 +197,14 @@ func (w *workerPool) runBackgroundLoop(workerID int) {
 						w.ProcessMessage(w.consumerCtx, msg)
 					} else {
 						// Wait for pool execution token
-						select {
-						case w.sem <- struct{}{}:
-						case <-w.consumerCtx.Done():
+						if err := w.execPool.Acquire(w.consumerCtx); err != nil {
 							return
 						}
 
 						w.wg.Add(1)
 						go func(m redis.XMessage) {
 							defer func() {
-								<-w.sem
+								w.execPool.Release()
 								w.wg.Done()
 							}()
 							w.ProcessMessage(w.consumerCtx, m)

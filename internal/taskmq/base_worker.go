@@ -20,7 +20,7 @@ type baseWorker struct {
 	codec          Codec
 	syncExecution  bool
 	execPoolSize   int
-	sem            chan struct{}
+	execPool       ExecutionPool
 	parentCtx      context.Context
 	ctx            context.Context
 	cancel         context.CancelFunc
@@ -77,7 +77,51 @@ func (b *baseWorker) initBase(rdb *redis.Client, logger *zap.Logger, opt *BaseWo
 	b.retryPolicy = opt.policies.retryPolicy
 	b.deadLetterPolicy = opt.policies.deadLetterPolicy
 
-	b.sem = make(chan struct{}, b.execPoolSize)
+	if opt.executionPool != nil {
+		b.execPool = opt.executionPool
+	} else {
+		b.execPool = NewSemaphoreExecutionPool(b.execPoolSize)
+	}
+}
+
+type semaphoreExecutionPool struct {
+	sem  chan struct{}
+	size int
+}
+
+// NewSemaphoreExecutionPool creates a default ExecutionPool based on a buffered channel.
+func NewSemaphoreExecutionPool(size int) ExecutionPool {
+	if size <= 0 {
+		size = 1
+	}
+	return &semaphoreExecutionPool{
+		sem:  make(chan struct{}, size),
+		size: size,
+	}
+}
+
+func (p *semaphoreExecutionPool) Acquire(ctx context.Context) error {
+	select {
+	case p.sem <- struct{}{}:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func (p *semaphoreExecutionPool) Release() {
+	select {
+	case <-p.sem:
+	default:
+	}
+}
+
+func (p *semaphoreExecutionPool) Size() int {
+	return p.size
+}
+
+func (p *semaphoreExecutionPool) InUse() int {
+	return len(p.sem)
 }
 
 func (b *baseWorker) buildMiddlewareChain() {

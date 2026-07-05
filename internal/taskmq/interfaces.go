@@ -28,3 +28,13 @@ type MultiQueueWorker interface {
 	Worker
 	Queue(name string) Worker
 }
+
+// ExecutionPool defines the concurrency execution limit control and monitoring contract.
+type ExecutionPool interface {
+	Acquire(ctx context.Context) error
+	Release()
+
+	// Metric monitoring and observability support:
+	Size() int  // Returns the maximum concurrency limit
+	InUse() int // Returns the number of currently executing concurrent tasks
+}

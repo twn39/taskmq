@@ -21,6 +21,7 @@ type BaseWorkerOptions struct {
 	codec             Codec
 	syncExecution     bool
 	executionPoolSize int
+	executionPool     ExecutionPool
 	context           context.Context
 	groupKeyExtractor func([]byte) string
 
@@ -146,6 +147,16 @@ func WithDeadLetterPolicy(p DeadLetterPolicy) sharedOption {
 			return errors.New("dead letter policy cannot be nil")
 		}
 		o.policies.deadLetterPolicy = p
+		return nil
+	}
+}
+
+func WithExecutionPool(pool ExecutionPool) sharedOption {
+	return func(o *BaseWorkerOptions) error {
+		if pool == nil {
+			return errors.New("execution pool cannot be nil")
+		}
+		o.executionPool = pool
 		return nil
 	}
 }
