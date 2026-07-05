@@ -80,8 +80,8 @@ func TestTaskMQ_PauseResume_SingleQueue(t *testing.T) {
 	assert.NoError(t, err)
 	assert.True(t, isPaused)
 
-	// Allow some time for subscriber to receive state change
-	time.Sleep(200 * time.Millisecond)
+	// Allow some time for subscriber to receive state change and worker to unblock from XReadGroup and detect the pause state
+	time.Sleep(1500 * time.Millisecond)
 
 	task2 := taskmq.NewTask("task:pause_resume", []byte("task2"), taskmq.TaskOptions{Queue: queueName})
 	err = client.Enqueue(ctx, task2)
@@ -204,5 +204,85 @@ func TestTaskMQ_PauseResume_MultiQueuePriority(t *testing.T) {
 		assert.Equal(t, "paused_task", p)
 	case <-time.After(3 * time.Second):
 		t.Fatal("Timeout waiting for paused_task to execute after resume")
+	}
+}
+
+func TestTaskMQ_PauseBlockedWorker(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	queueName := "pause_blocked_test_queue"
+	streamKey := taskmq.StreamKey(queueName)
+	pausedKey := taskmq.PausedKey(queueName)
+
+	runChan := make(chan string, 1)
+
+	var rdb *goredis.Client
+	var client taskmq.Client
+
+	app := fxtest.New(t,
+		fx.Provide(
+			NewTestConfig,
+			logger.NewLogger,
+			internalredis.NewRedisClient,
+			taskmq.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithGroup("pause-blocked-group"),
+					taskmq.WithConsumer("pause-blocked-consumer"),
+					taskmq.WithConcurrency(1),
+				)
+				pool.Register("task:pause_blocked_test", func(ctx context.Context, task *taskmq.Task) error {
+					runChan <- string(task.Payload)
+					return nil
+				})
+				return pool
+			},
+		),
+		fx.Invoke(taskmq.RegisterWorkerPoolLifecycle),
+		fx.Populate(&rdb, &client),
+	)
+
+	rdb.Del(ctx, streamKey, pausedKey)
+	defer rdb.Del(ctx, streamKey, pausedKey)
+
+	// Start worker pool. Since no tasks exist, it blocks in XReadGroup.
+	app.RequireStart()
+	defer app.RequireStop()
+
+	// Wait 500ms to ensure worker is fully started and blocked in XReadGroup.
+	time.Sleep(500 * time.Millisecond)
+
+	// Pause the queue.
+	err := client.Pause(ctx, queueName)
+	assert.NoError(t, err)
+
+	// Wait 1500ms. Since we set Block: 1s, the worker will unblock from XReadGroup within 1s,
+	// detect the pause state, and block on pauseCh.
+	time.Sleep(1500 * time.Millisecond)
+
+	// Now enqueue a task.
+	task := taskmq.NewTask("task:pause_blocked_test", []byte("delayed_payload"), taskmq.TaskOptions{Queue: queueName})
+	err = client.Enqueue(ctx, task)
+	assert.NoError(t, err)
+
+	// Verify task is NOT processed by the worker (since worker should be paused).
+	select {
+	case p := <-runChan:
+		t.Fatalf("Task %s should NOT have executed while queue was paused", p)
+	case <-time.After(1500 * time.Millisecond):
+		// Success: task not processed.
+	}
+
+	// Resume the queue.
+	err = client.Resume(ctx, queueName)
+	assert.NoError(t, err)
+
+	// Verify the task executes immediately now.
+	select {
+	case p := <-runChan:
+		assert.Equal(t, "delayed_payload", p)
+	case <-time.After(3 * time.Second):
+		t.Fatal("Timeout waiting for task to execute after resume")
 	}
 }

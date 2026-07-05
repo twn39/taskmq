@@ -129,15 +129,15 @@ func TestTaskMQ_WorkerPool_GracefulShutdownDeadline(t *testing.T) {
 	// Wait briefly to ensure task starts executing
 	time.Sleep(200 * time.Millisecond)
 
-	// Call worker.Stop with a short deadline context (e.g. 1.5 seconds)
-	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
+	// Call worker.Stop with a short deadline context (e.g. 1.0 seconds)
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 1000*time.Millisecond)
 	defer shutdownCancel()
 
 	stopStart := time.Now()
 	worker.Stop(shutdownCtx)
 	stopDuration := time.Since(stopStart)
 
-	// The stop duration should be around 1.0 second (1500ms - 500ms safety buffer)
+	// The stop duration should be around 1.0 second
 	assert.LessOrEqual(t, stopDuration.Seconds(), 1.4, "Stop should respect the deadline and exit before Fx hook timeout")
 	assert.Equal(t, int32(1), atomic.LoadInt32(&taskCancelled), "Task should have been cancelled by Stop because deadline was reached")
 

@@ -119,6 +119,45 @@ func TestMiddleware_RateLimiter(t *testing.T) {
 			t.Errorf("expected task to be deferred exactly 1 time, got %d", mb.deferCnt)
 		}
 	})
+
+	t.Run("Rate limit Redis error fail-open behavior", func(t *testing.T) {
+		mb.deferCnt = 0
+		// Pass a redis client pointing to an offline address
+		badRdb := redis.NewClient(&redis.Options{Addr: "localhost:12345"}) // Offline port
+		defer badRdb.Close()
+		badLimiter := NewGCRALimiter(badRdb)
+
+		handlerCalled := false
+		handlers := []CoreHandlerFunc{
+			RateLimitMiddleware(badLimiter, mb, func(queue string) (int64, time.Duration, string) {
+				return 5, time.Minute, ""
+			}, nil, JSONCodec{}, logger),
+			func(c *ConsumeContext) error {
+				handlerCalled = true
+				return nil
+			},
+		}
+
+		c := &ConsumeContext{
+			Context:   context.Background(),
+			Task:      &Task{ID: "t-failopen", Queue: "q-failopen"},
+			MessageID: "99-0",
+			Queue:     "q-failopen",
+			handlers:  handlers,
+			index:     -1,
+		}
+
+		err := c.Next()
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !handlerCalled {
+			t.Error("expected next handler to run (fail-open), but it was bypassed")
+		}
+		if mb.deferCnt != 0 {
+			t.Errorf("expected no task defers, got %d", mb.deferCnt)
+		}
+	})
 }
 
 func TestConsumeContext_Keys(t *testing.T) {

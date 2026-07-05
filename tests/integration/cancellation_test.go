@@ -22,6 +22,7 @@ func TestTaskMQ_TaskCancellationFlow(t *testing.T) {
 
 	queueName := "cancel_test_queue"
 	streamKey := taskmq.StreamKey(queueName)
+	taskID := "test-running-cancel-id"
 
 	startedChan := make(chan string, 1)
 	resultChan := make(chan error, 1)
@@ -60,14 +61,14 @@ func TestTaskMQ_TaskCancellationFlow(t *testing.T) {
 		fx.Populate(&rdb, &client),
 	)
 
-	rdb.Del(ctx, streamKey)
-	defer rdb.Del(ctx, streamKey)
+	cancelKey := "taskmq:{" + queueName + "}:cancelled:" + taskID
+	rdb.Del(ctx, streamKey, cancelKey)
+	defer rdb.Del(ctx, streamKey, cancelKey)
 
 	app.RequireStart()
 	defer app.RequireStop()
 
 	// 1. Enqueue task
-	taskID := "test-running-cancel-id"
 	task := taskmq.NewTask("task:cancel_running", []byte("data"), taskmq.TaskOptions{
 		Queue: queueName,
 	})
@@ -103,6 +104,7 @@ func TestTaskMQ_TaskCancellationBeforeRun(t *testing.T) {
 
 	queueName := "cancel_before_run_queue"
 	streamKey := taskmq.StreamKey(queueName)
+	taskID := "test-before-cancel-id"
 
 	var mu sync.Mutex
 	handlerInvoked := false
@@ -135,14 +137,14 @@ func TestTaskMQ_TaskCancellationBeforeRun(t *testing.T) {
 		fx.Populate(&rdb, &client),
 	)
 
-	rdb.Del(ctx, streamKey)
-	defer rdb.Del(ctx, streamKey)
+	cancelKey := "taskmq:{" + queueName + "}:cancelled:" + taskID
+	rdb.Del(ctx, streamKey, cancelKey)
+	defer rdb.Del(ctx, streamKey, cancelKey)
 
 	// Pre-create stream and consumer group with "0" so that the worker can consume backlog messages on a fresh Redis database
 	_ = rdb.XGroupCreateMkStream(ctx, streamKey, "cancel-before-run-group", "0").Err()
 
 	// 1. Enqueue task before starting worker
-	taskID := "test-before-cancel-id"
 	task := taskmq.NewTask("task:cancel_before", []byte("data"), taskmq.TaskOptions{
 		Queue: queueName,
 	})

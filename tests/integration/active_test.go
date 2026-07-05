@@ -36,8 +36,8 @@ func TestTaskMQ_ActiveInspector_ListTasks(t *testing.T) {
 		fx.Populate(&rdb, &client),
 	)
 
-	rdb.Del(ctx, streamKey)
-	defer rdb.Del(ctx, streamKey)
+	rdb.Del(ctx, streamKey, taskmq.PausedKey(queueName))
+	defer rdb.Del(ctx, streamKey, taskmq.PausedKey(queueName))
 
 	app.RequireStart()
 	defer app.RequireStop()
@@ -88,8 +88,9 @@ func TestTaskMQ_ActiveInspector_DeletePending(t *testing.T) {
 		fx.Populate(&rdb, &client),
 	)
 
-	rdb.Del(ctx, streamKey)
-	defer rdb.Del(ctx, streamKey)
+	uniqueKey := taskmq.UniqueKey(queueName, "unique_lock_active_inspector")
+	rdb.Del(ctx, streamKey, uniqueKey, taskmq.PausedKey(queueName))
+	defer rdb.Del(ctx, streamKey, uniqueKey, taskmq.PausedKey(queueName))
 
 	app.RequireStart()
 	defer app.RequireStop()
@@ -171,8 +172,9 @@ func TestTaskMQ_ActiveInspector_DeleteProcessingAndCancel(t *testing.T) {
 		fx.Populate(&rdb, &client),
 	)
 
-	rdb.Del(ctx, streamKey)
-	defer rdb.Del(ctx, streamKey)
+	cancelKey := "taskmq:{" + queueName + "}:cancelled:test-active-cancel-id"
+	rdb.Del(ctx, streamKey, taskmq.PausedKey(queueName), cancelKey)
+	defer rdb.Del(ctx, streamKey, taskmq.PausedKey(queueName), cancelKey)
 
 	app.RequireStart()
 

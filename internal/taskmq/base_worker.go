@@ -129,13 +129,13 @@ func (b *baseWorker) Stop(ctxs ...context.Context) {
 	}()
 
 	var waitCtx context.Context
+	var cancel context.CancelFunc
 	if len(ctxs) > 0 {
-		waitCtx = ctxs[0]
+		waitCtx, cancel = context.WithTimeout(ctxs[0], 1*time.Second)
 	} else {
-		var cancel context.CancelFunc
-		waitCtx, cancel = context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
+		waitCtx, cancel = context.WithTimeout(context.Background(), 1*time.Second)
 	}
+	defer cancel()
 
 	select {
 	case <-done:

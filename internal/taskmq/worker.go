@@ -173,7 +173,7 @@ func (w *workerPool) runBackgroundLoop(workerID int) {
 				Consumer: consumerName,
 				Streams:  []string{streamKey, ">"},
 				Count:    1,
-				Block:    -1,
+				Block:    1 * time.Second,
 			}).Result()
 
 			if err != nil {
