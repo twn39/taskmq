@@ -152,14 +152,15 @@ func (b *redisBroker) MoveToDLQ(ctx context.Context, task *Task, streamKey, msgI
 	if err != nil {
 		return err
 	}
-	dlqKey := DLQKey(dlqQueueName)
-	dlqIndexKey := DLQIndexKey(dlqQueueName)
+	keys := KeysFor(dlqQueueName)
+	dlqKey := keys.DLQ()
+	dlqIndexKey := keys.DLQIndex()
 	nowMs := time.Now().UnixMilli()
 
 	var uniqueLockKey string
 	var uniqueLockVal string
 	if task.UniqueKey != "" {
-		uniqueLockKey = UniqueKey(task.Queue, task.UniqueKey)
+		uniqueLockKey = KeysFor(task.Queue).Unique(task.UniqueKey)
 		uniqueLockVal = task.ID
 	}
 
@@ -172,7 +173,7 @@ func (b *redisBroker) ScheduleRetry(ctx context.Context, task *Task, streamKey, 
 	if err != nil {
 		return err
 	}
-	delayedKey := DelayedKey(task.Queue)
+	delayedKey := KeysFor(task.Queue).Delayed()
 	_, err = handleFailureCmd.Run(ctx, b.rdb, []string{delayedKey, streamKey, "", ""}, "retry", msgID, group, runAt.UnixMilli(), serialized, "", "").Result()
 	return err
 }
@@ -182,8 +183,9 @@ func (b *redisBroker) DeferRateLimitedTask(ctx context.Context, msgID string, ta
 	if err != nil {
 		return err
 	}
-	delayedKey := DelayedKey(task.Queue)
-	streamKey := StreamKey(task.Queue)
+	keys := KeysFor(task.Queue)
+	delayedKey := keys.Delayed()
+	streamKey := keys.Stream()
 	_, err = deferRateLimitedTaskCmd.Run(ctx, b.rdb, []string{delayedKey, streamKey}, group, msgID, runAt.UnixMilli(), serialized).Result()
 	return err
 }
@@ -192,7 +194,7 @@ func (b *redisBroker) ReleaseUniqueLock(ctx context.Context, task *Task) error {
 	if task.UniqueKey == "" {
 		return nil
 	}
-	uniqueKey := UniqueKey(task.Queue, task.UniqueKey)
+	uniqueKey := KeysFor(task.Queue).Unique(task.UniqueKey)
 	return unlockCmd.Run(ctx, b.rdb, []string{uniqueKey}, task.ID).Err()
 }
 
@@ -200,7 +202,7 @@ func (b *redisBroker) RenewUniqueLock(ctx context.Context, task *Task, ttl time.
 	if task.UniqueKey == "" {
 		return nil
 	}
-	uniqueKey := UniqueKey(task.Queue, task.UniqueKey)
+	uniqueKey := KeysFor(task.Queue).Unique(task.UniqueKey)
 	_, err := renewUniqueLockCmd.Run(ctx, b.rdb, []string{uniqueKey}, task.ID, int(ttl.Milliseconds())).Result()
 	return err
 }
@@ -209,7 +211,7 @@ func (b *redisBroker) CompleteTask(ctx context.Context, task *Task, streamKey, m
 	var uniqueLockKey string
 	var uniqueLockVal string
 	if task.UniqueKey != "" {
-		uniqueLockKey = UniqueKey(task.Queue, task.UniqueKey)
+		uniqueLockKey = KeysFor(task.Queue).Unique(task.UniqueKey)
 		uniqueLockVal = task.ID
 	}
 	_, err := completeTaskCmd.Run(ctx, b.rdb, []string{streamKey, uniqueLockKey}, msgID, group, uniqueLockVal).Result()

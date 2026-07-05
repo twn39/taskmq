@@ -163,7 +163,7 @@ func (c *client) acquireUniqueLock(ctx context.Context, task *Task) (bool, error
 		task.ID = generateUUID()
 	}
 
-	uniqueKey := UniqueKey(task.Queue, task.UniqueKey)
+	uniqueKey := KeysFor(task.Queue).Unique(task.UniqueKey)
 	ttl := time.Duration(task.UniqueTTLMs) * time.Millisecond
 	if ttl <= 0 {
 		if c.defaultUniqueTTL > 0 {
@@ -193,7 +193,8 @@ func (c *client) Enqueue(ctx context.Context, task *Task, opts ...TaskOption) er
 		return err
 	}
 
-	streamKey := StreamKey(task.Queue)
+	keys := KeysFor(task.Queue)
+	streamKey := keys.Stream()
 
 	if task.UniqueKey != "" {
 		ttl := time.Duration(task.UniqueTTLMs) * time.Millisecond
@@ -204,7 +205,7 @@ func (c *client) Enqueue(ctx context.Context, task *Task, opts ...TaskOption) er
 				ttl = 1 * time.Hour // Default to 1 hour
 			}
 		}
-		uniqueKey := UniqueKey(task.Queue, task.UniqueKey)
+		uniqueKey := keys.Unique(task.UniqueKey)
 		res, err := enqueueUniqueCmd.Run(ctx, c.rdb, []string{uniqueKey, streamKey}, task.ID, int(ttl.Milliseconds()), serialized).Result()
 		if err != nil {
 			return err
@@ -245,7 +246,8 @@ func (c *client) EnqueueAt(ctx context.Context, task *Task, at time.Time, opts .
 		return err
 	}
 
-	delayedKey := DelayedKey(task.Queue)
+	keys := KeysFor(task.Queue)
+	delayedKey := keys.Delayed()
 
 	if task.UniqueKey != "" {
 		ttl := time.Duration(task.UniqueTTLMs) * time.Millisecond
@@ -256,7 +258,7 @@ func (c *client) EnqueueAt(ctx context.Context, task *Task, at time.Time, opts .
 				ttl = 1 * time.Hour // Default to 1 hour
 			}
 		}
-		uniqueKey := UniqueKey(task.Queue, task.UniqueKey)
+		uniqueKey := keys.Unique(task.UniqueKey)
 		res, err := enqueueUniqueDelayedCmd.Run(ctx, c.rdb, []string{uniqueKey, delayedKey}, task.ID, int(ttl.Milliseconds()), serialized, at.UnixMilli()).Result()
 		if err != nil {
 			return err
@@ -275,7 +277,7 @@ func (c *client) EnqueueAt(ctx context.Context, task *Task, at time.Time, opts .
 
 // ListDeadLetters returns the list of dead-letter tasks in the queue, sorted by descending death time
 func (c *client) ListDeadLetters(ctx context.Context, queue string, limit int) ([]*Task, error) {
-	dlqKey := DLQKey(queue)
+	dlqKey := KeysFor(queue).DLQ()
 	members, err := c.rdb.ZRevRange(ctx, dlqKey, 0, int64(limit-1)).Result()
 	if err != nil {
 		return nil, err
@@ -295,8 +297,9 @@ func (c *client) ListDeadLetters(ctx context.Context, queue string, limit int) (
 
 // DeleteDeadLetter removes a specific task from the dead-letter queue by task ID
 func (c *client) DeleteDeadLetter(ctx context.Context, queue string, taskID string) error {
-	dlqKey := DLQKey(queue)
-	dlqIndexKey := DLQIndexKey(queue)
+	keys := KeysFor(queue)
+	dlqKey := keys.DLQ()
+	dlqIndexKey := keys.DLQIndex()
 	_, err := deleteDeadLetterCmd.Run(ctx, c.rdb, []string{dlqKey, dlqIndexKey}, taskID).Result()
 	if err == redis.Nil {
 		return nil
@@ -306,7 +309,7 @@ func (c *client) DeleteDeadLetter(ctx context.Context, queue string, taskID stri
 
 // RetryDeadLetter retries a dead-letter task by resetting retry counts and re-enqueuing it
 func (c *client) RetryDeadLetter(ctx context.Context, queue string, taskID string) error {
-	dlqIndexKey := DLQIndexKey(queue)
+	dlqIndexKey := KeysFor(queue).DLQIndex()
 
 	// Fetch serialized task in O(1) from the Hash index
 	serialized, err := c.rdb.HGet(ctx, dlqIndexKey, taskID).Result()
@@ -362,8 +365,9 @@ func (c *client) RegisterCron(ctx context.Context, jobName string, spec string, 
 		return err
 	}
 
-	configsKey := CronConfigsKey(task.Queue)
-	delayedKey := DelayedKey(task.Queue)
+	keys := KeysFor(task.Queue)
+	configsKey := keys.CronConfigs()
+	delayedKey := keys.Delayed()
 	firstRun := sched.Next(time.Now())
 
 	_, err = registerCronCmd.Run(ctx, c.rdb, []string{configsKey, delayedKey}, jobName, spec, serialized, firstRun.UnixMilli()).Result()
@@ -371,37 +375,40 @@ func (c *client) RegisterCron(ctx context.Context, jobName string, spec string, 
 }
 
 func (c *client) CancelTask(ctx context.Context, queue, taskID string) error {
-	cancelledKey := fmt.Sprintf("taskmq:{%s}:cancelled:%s", queue, taskID)
+	keys := KeysFor(queue)
+	cancelledKey := keys.Cancelled(taskID)
 	if err := c.rdb.Set(ctx, cancelledKey, "1", 24*time.Hour).Err(); err != nil {
 		return fmt.Errorf("taskmq: failed to set cancel marker: %w", err)
 	}
 
-	cancelChannel := fmt.Sprintf("taskmq:{%s}:cancel", queue)
+	cancelChannel := keys.CancelChannel()
 	return c.rdb.Publish(ctx, cancelChannel, taskID).Err()
 }
 
 func (c *client) Pause(ctx context.Context, queue string) error {
-	pausedKey := PausedKey(queue)
+	keys := KeysFor(queue)
+	pausedKey := keys.Paused()
 	if err := c.rdb.Set(ctx, pausedKey, "1", 0).Err(); err != nil {
 		return fmt.Errorf("taskmq: failed to set pause marker: %w", err)
 	}
 
-	controlChannel := ControlChannel(queue)
+	controlChannel := keys.Control()
 	return c.rdb.Publish(ctx, controlChannel, "pause").Err()
 }
 
 func (c *client) Resume(ctx context.Context, queue string) error {
-	pausedKey := PausedKey(queue)
+	keys := KeysFor(queue)
+	pausedKey := keys.Paused()
 	if err := c.rdb.Del(ctx, pausedKey).Err(); err != nil {
 		return fmt.Errorf("taskmq: failed to delete pause marker: %w", err)
 	}
 
-	controlChannel := ControlChannel(queue)
+	controlChannel := keys.Control()
 	return c.rdb.Publish(ctx, controlChannel, "resume").Err()
 }
 
 func (c *client) IsPaused(ctx context.Context, queue string) (bool, error) {
-	pausedKey := PausedKey(queue)
+	pausedKey := KeysFor(queue).Paused()
 	val, err := c.rdb.Exists(ctx, pausedKey).Result()
 	if err != nil {
 		return false, err
@@ -410,7 +417,7 @@ func (c *client) IsPaused(ctx context.Context, queue string) (bool, error) {
 }
 
 func (c *client) ListScheduledTasks(ctx context.Context, queue string, limit int) ([]*ScheduledTask, error) {
-	delayedKey := DelayedKey(queue)
+	delayedKey := KeysFor(queue).Delayed()
 	zs, err := c.rdb.ZRangeWithScores(ctx, delayedKey, 0, int64(limit-1)).Result()
 	if err != nil {
 		return nil, err
@@ -437,7 +444,8 @@ func (c *client) ListScheduledTasks(ctx context.Context, queue string, limit int
 }
 
 func (c *client) RunScheduledTask(ctx context.Context, queue string, taskID string) error {
-	delayedKey := DelayedKey(queue)
+	keys := KeysFor(queue)
+	delayedKey := keys.Delayed()
 	members, err := c.rdb.ZRange(ctx, delayedKey, 0, -1).Result()
 	if err != nil {
 		return err
@@ -466,7 +474,7 @@ func (c *client) RunScheduledTask(ctx context.Context, queue string, taskID stri
 		return fmt.Errorf("taskmq: task already processed or deleted: %s", taskID)
 	}
 
-	streamKey := StreamKey(queue)
+	streamKey := keys.Stream()
 	return c.rdb.XAdd(ctx, &redis.XAddArgs{
 		Stream: streamKey,
 		ID:     "*",
@@ -477,7 +485,8 @@ func (c *client) RunScheduledTask(ctx context.Context, queue string, taskID stri
 }
 
 func (c *client) DeleteScheduledTask(ctx context.Context, queue string, taskID string) error {
-	delayedKey := DelayedKey(queue)
+	keys := KeysFor(queue)
+	delayedKey := keys.Delayed()
 	members, err := c.rdb.ZRange(ctx, delayedKey, 0, -1).Result()
 	if err != nil {
 		return err
@@ -509,14 +518,14 @@ func (c *client) DeleteScheduledTask(ctx context.Context, queue string, taskID s
 	}
 
 	if targetTask.UniqueKey != "" {
-		lockKey := UniqueKey(targetTask.Queue, targetTask.UniqueKey)
+		lockKey := keys.Unique(targetTask.UniqueKey)
 		_ = c.rdb.Del(ctx, lockKey).Err()
 	}
 	return nil
 }
 
 func (c *client) ListCronJobs(ctx context.Context, queue string) ([]*CronJob, error) {
-	configsKey := CronConfigsKey(queue)
+	configsKey := KeysFor(queue).CronConfigs()
 	configs, err := c.rdb.HGetAll(ctx, configsKey).Result()
 	if err != nil {
 		return nil, err
@@ -547,7 +556,8 @@ func (c *client) ListCronJobs(ctx context.Context, queue string) ([]*CronJob, er
 }
 
 func (c *client) RunCronJob(ctx context.Context, queue string, jobName string) error {
-	configsKey := CronConfigsKey(queue)
+	keys := KeysFor(queue)
+	configsKey := keys.CronConfigs()
 	configStr, err := c.rdb.HGet(ctx, configsKey, jobName).Result()
 	if err == redis.Nil {
 		return fmt.Errorf("taskmq: cron job not found: %s", jobName)
@@ -555,7 +565,7 @@ func (c *client) RunCronJob(ctx context.Context, queue string, jobName string) e
 		return err
 	}
 
-	streamKey := StreamKey(queue)
+	streamKey := keys.Stream()
 	return c.rdb.XAdd(ctx, &redis.XAddArgs{
 		Stream: streamKey,
 		ID:     "*",
@@ -566,8 +576,9 @@ func (c *client) RunCronJob(ctx context.Context, queue string, jobName string) e
 }
 
 func (c *client) DeleteCronJob(ctx context.Context, queue string, jobName string) error {
-	configsKey := CronConfigsKey(queue)
-	delayedKey := DelayedKey(queue)
+	keys := KeysFor(queue)
+	configsKey := keys.CronConfigs()
+	delayedKey := keys.Delayed()
 
 	serialized, err := c.rdb.HGet(ctx, configsKey, jobName).Result()
 	if err == redis.Nil {
@@ -582,7 +593,8 @@ func (c *client) DeleteCronJob(ctx context.Context, queue string, jobName string
 }
 
 func (c *client) RetryAllDeadLetters(ctx context.Context, queue string) (int64, error) {
-	dlqKey := DLQKey(queue)
+	keys := KeysFor(queue)
+	dlqKey := keys.DLQ()
 
 	var totalRetried int64
 	for {
@@ -618,8 +630,9 @@ func (c *client) RetryAllDeadLetters(ctx context.Context, queue string) (int64, 
 }
 
 func (c *client) PurgeAllDeadLetters(ctx context.Context, queue string) (int64, error) {
-	dlqKey := DLQKey(queue)
-	dlqIndexKey := DLQIndexKey(queue)
+	keys := KeysFor(queue)
+	dlqKey := keys.DLQ()
+	dlqIndexKey := keys.DLQIndex()
 
 	count, err := c.rdb.ZCard(ctx, dlqKey).Result()
 	if err != nil {
@@ -637,7 +650,7 @@ func (c *client) PurgeAllDeadLetters(ctx context.Context, queue string) (int64, 
 }
 
 func (c *client) ListActiveTasks(ctx context.Context, queue string, limit int) ([]*ActiveTask, error) {
-	streamKey := StreamKey(queue)
+	streamKey := KeysFor(queue).Stream()
 
 	msgs, err := c.rdb.XRangeN(ctx, streamKey, "-", "+", int64(limit)).Result()
 	if err != nil {
@@ -708,7 +721,8 @@ func (c *client) ListActiveTasks(ctx context.Context, queue string, limit int) (
 }
 
 func (c *client) DeleteActiveTask(ctx context.Context, queue string, streamID string) error {
-	streamKey := StreamKey(queue)
+	keys := KeysFor(queue)
+	streamKey := keys.Stream()
 
 	msgs, err := c.rdb.XRangeN(ctx, streamKey, streamID, streamID, 1).Result()
 	if err != nil {
@@ -731,7 +745,7 @@ func (c *client) DeleteActiveTask(ctx context.Context, queue string, streamID st
 			_ = c.CancelTask(ctx, queue, task.ID)
 		}
 		if task.UniqueKey != "" {
-			lockKey := UniqueKey(queue, task.UniqueKey)
+			lockKey := keys.Unique(task.UniqueKey)
 			_ = c.rdb.Del(ctx, lockKey).Err()
 		}
 	}

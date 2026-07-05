@@ -33,8 +33,9 @@ func (s *delayedScheduler) Run(ctx context.Context) error {
 	ticker := time.NewTicker(s.pollInterval)
 	defer ticker.Stop()
 
-	delayedKey := DelayedKey(s.queue)
-	streamKey := StreamKey(s.queue)
+	keys := KeysFor(s.queue)
+	delayedKey := keys.Delayed()
+	streamKey := keys.Stream()
 
 	// Lua script moves ready tasks from ZSET to Stream and removes them from ZSET, returning the moved elements
 	luaScript := `

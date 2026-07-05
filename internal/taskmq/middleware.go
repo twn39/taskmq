@@ -92,7 +92,7 @@ func RetryAndDLQMiddleware(broker TaskBroker, retryPolicy RetryPolicy, dlqPolicy
 		}
 
 		c.Task.Retry++
-		streamKey := StreamKey(c.Queue)
+		streamKey := KeysFor(c.Queue).Stream()
 
 		if errors.Is(err, ErrNoHandler) || !retryPolicy.ShouldRetry(c.Task, err) {
 			dlqPolicy.BeforeDeadLetter(c.Context, c.Task, err)

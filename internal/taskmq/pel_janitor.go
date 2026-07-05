@@ -60,7 +60,7 @@ func (j *pelRecoveryJanitor) Run(ctx context.Context) error {
 	defer ticker.Stop()
 
 	minIdleTime := j.minIdleTime
-	streamKey := StreamKey(j.queue)
+	streamKey := KeysFor(j.queue).Stream()
 
 	// Semaphore to limit concurrent processing of reclaimed tasks
 	sem := make(chan struct{}, j.concurrency)

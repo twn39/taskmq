@@ -84,7 +84,7 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 
 // Start starts the worker pool consumers, scheduler, and janitor loops
 func (w *workerPool) Start(ctx context.Context) error {
-	streamKey := StreamKey(w.queue)
+	streamKey := KeysFor(w.queue).Stream()
 	err := w.rdb.XGroupCreateMkStream(ctx, streamKey, w.group, "$").Err()
 	if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
 		return fmt.Errorf("failed to create stream or group: %w", err)
@@ -144,7 +144,7 @@ func (w *workerPool) Start(ctx context.Context) error {
 func (w *workerPool) runBackgroundLoop(workerID int) {
 	defer w.wg.Done()
 	consumerName := fmt.Sprintf("%s-%d", w.consumer, workerID)
-	streamKey := StreamKey(w.queue)
+	streamKey := KeysFor(w.queue).Stream()
 
 	w.logger.Debug("Worker background loop started", zap.String("consumer", consumerName))
 
@@ -219,7 +219,7 @@ func (w *workerPool) runBackgroundLoop(workerID int) {
 }
 
 func (w *workerPool) ProcessMessage(ctx context.Context, msg redis.XMessage) {
-	w.processMessage(ctx, StreamKey(w.queue), msg)
+	w.processMessage(ctx, KeysFor(w.queue).Stream(), msg)
 }
 
 func RateLimitKey(queue string, groupKey string) string {

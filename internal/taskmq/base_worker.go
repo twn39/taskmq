@@ -175,7 +175,7 @@ func (b *baseWorker) processMessage(ctx context.Context, streamKey string, msg r
 
 
 	// Check if task is already cancelled before execution (pre-execution check for backlog tasks)
-	cancelledKey := fmt.Sprintf("taskmq:{%s}:cancelled:%s", task.Queue, task.ID)
+	cancelledKey := KeysFor(task.Queue).Cancelled(task.ID)
 	isCancelled, err := b.rdb.Exists(ctx, cancelledKey).Result()
 	if err == nil && isCancelled > 0 {
 		b.logger.Warn("Task was cancelled before execution, discarding atomically", zap.String("task_id", task.ID))
@@ -253,7 +253,7 @@ func (b *baseWorker) startCancelSubscriber(ctx context.Context, wg *sync.WaitGro
 		defer wg.Done()
 		channels := make([]string, len(queues))
 		for i, q := range queues {
-			channels[i] = fmt.Sprintf("taskmq:{%s}:cancel", q)
+			channels[i] = KeysFor(q).CancelChannel()
 		}
 		pubsub := b.rdb.Subscribe(ctx, channels...)
 		defer pubsub.Close()
@@ -310,7 +310,7 @@ func (b *baseWorker) getOrInitPauseChan(queue string) chan struct{} {
 
 func (b *baseWorker) reconcilePausedStates(ctx context.Context, queues []string) {
 	for _, q := range queues {
-		pausedKey := PausedKey(q)
+		pausedKey := KeysFor(q).Paused()
 		val, err := b.rdb.Exists(ctx, pausedKey).Result()
 		if err == nil {
 			isPaused := val > 0
@@ -332,7 +332,7 @@ func (b *baseWorker) startControlSubscriber(ctx context.Context, wg *sync.WaitGr
 		defer wg.Done()
 		channels := make([]string, len(queues))
 		for i, q := range queues {
-			channels[i] = ControlChannel(q)
+			channels[i] = KeysFor(q).Control()
 		}
 		pubsub := b.rdb.Subscribe(ctx, channels...)
 		defer pubsub.Close()
@@ -355,7 +355,7 @@ func (b *baseWorker) startControlSubscriber(ctx context.Context, wg *sync.WaitGr
 				// Find which queue channel this message belongs to
 				var matchedQueue string
 				for _, q := range queues {
-					if msg.Channel == ControlChannel(q) {
+					if msg.Channel == KeysFor(q).Control() {
 						matchedQueue = q
 						break
 					}
