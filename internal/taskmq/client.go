@@ -6,6 +6,8 @@ import (
 	_ "embed"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -42,6 +44,15 @@ type CronJob struct {
 	NextRunTime time.Time `json:"next_run_time"`
 }
 
+type ActiveTask struct {
+	*Task
+	StreamID   string    `json:"stream_id"`
+	Status     string    `json:"status"` // "Pending" or "Processing"
+	Consumer   string    `json:"consumer,omitempty"`
+	Deliveries int64     `json:"deliveries,omitempty"`
+	EnqueuedAt time.Time `json:"enqueued_at"`
+}
+
 type Client interface {
 	Enqueue(ctx context.Context, task *Task) error
 	EnqueueIn(ctx context.Context, task *Task, delay time.Duration) error
@@ -62,6 +73,8 @@ type Client interface {
 	ListCronJobs(ctx context.Context, queue string) ([]*CronJob, error)
 	RunCronJob(ctx context.Context, queue string, jobName string) error
 	DeleteCronJob(ctx context.Context, queue string, jobName string) error
+	ListActiveTasks(ctx context.Context, queue string, limit int) ([]*ActiveTask, error)
+	DeleteActiveTask(ctx context.Context, queue string, streamID string) error
 }
 
 type client struct {
@@ -565,4 +578,124 @@ func (c *client) PurgeAllDeadLetters(ctx context.Context, queue string) (int64, 
 		return 0, err
 	}
 	return count, nil
+}
+
+func (c *client) ListActiveTasks(ctx context.Context, queue string, limit int) ([]*ActiveTask, error) {
+	streamKey := StreamKey(queue)
+
+	msgs, err := c.rdb.XRangeN(ctx, streamKey, "-", "+", int64(limit)).Result()
+	if err != nil {
+		return nil, err
+	}
+
+	if len(msgs) == 0 {
+		return []*ActiveTask{}, nil
+	}
+
+	pelMap := make(map[string]*redis.XPendingExt)
+	groups, err := c.rdb.XInfoGroups(ctx, streamKey).Result()
+	if err == nil {
+		for _, g := range groups {
+			pends, err := c.rdb.XPendingExt(ctx, &redis.XPendingExtArgs{
+				Stream: streamKey,
+				Group:  g.Name,
+				Start:  "-",
+				End:    "+",
+				Count:  int64(limit * 2),
+			}).Result()
+			if err == nil {
+				for i := range pends {
+					pelMap[pends[i].ID] = &pends[i]
+				}
+			}
+		}
+	}
+
+	tasks := make([]*ActiveTask, 0, len(msgs))
+	for _, msg := range msgs {
+		var serialized []byte
+		if valStr, ok := msg.Values["task"].(string); ok {
+			serialized = []byte(valStr)
+		} else if valBytes, ok := msg.Values["task"].([]byte); ok {
+			serialized = valBytes
+		} else {
+			continue
+		}
+
+		task := &Task{}
+		err := c.codec.Unmarshal(serialized, task)
+		if err != nil {
+			continue
+		}
+
+		status := "Pending"
+		var consumer string
+		var deliveries int64
+
+		if p, isPending := pelMap[msg.ID]; isPending {
+			status = "Processing"
+			consumer = p.Consumer
+			deliveries = p.RetryCount
+		}
+
+		tasks = append(tasks, &ActiveTask{
+			Task:       task,
+			StreamID:   msg.ID,
+			Status:     status,
+			Consumer:   consumer,
+			Deliveries: deliveries,
+			EnqueuedAt: parseStreamTime(msg.ID),
+		})
+	}
+
+	return tasks, nil
+}
+
+func (c *client) DeleteActiveTask(ctx context.Context, queue string, streamID string) error {
+	streamKey := StreamKey(queue)
+
+	msgs, err := c.rdb.XRangeN(ctx, streamKey, streamID, streamID, 1).Result()
+	if err != nil {
+		return err
+	}
+	if len(msgs) == 0 {
+		return fmt.Errorf("taskmq: active task not found in stream: %s", streamID)
+	}
+
+	var serialized []byte
+	if valStr, ok := msgs[0].Values["task"].(string); ok {
+		serialized = []byte(valStr)
+	} else if valBytes, ok := msgs[0].Values["task"].([]byte); ok {
+		serialized = valBytes
+	}
+
+	task := &Task{}
+	if err := c.codec.Unmarshal(serialized, task); err == nil {
+		if task.ID != "" {
+			_ = c.CancelTask(ctx, queue, task.ID)
+		}
+		if task.UniqueKey != "" {
+			lockKey := UniqueKey(queue, task.UniqueKey)
+			_ = c.rdb.Del(ctx, lockKey).Err()
+		}
+	}
+
+	groups, err := c.rdb.XInfoGroups(ctx, streamKey).Result()
+	if err == nil {
+		for _, g := range groups {
+			_ = c.rdb.XAck(ctx, streamKey, g.Name, streamID).Err()
+		}
+	}
+
+	return c.rdb.XDel(ctx, streamKey, streamID).Err()
+}
+
+func parseStreamTime(streamID string) time.Time {
+	parts := strings.Split(streamID, "-")
+	if len(parts) > 0 {
+		if ms, err := strconv.ParseInt(parts[0], 10, 64); err == nil {
+			return time.UnixMilli(ms)
+		}
+	}
+	return time.Time{}
 }

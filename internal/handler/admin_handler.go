@@ -371,3 +371,47 @@ func (h *AdminHandler) PurgeAllDLQ(c *echo.Context) error {
 		"count":   count,
 	})
 }
+
+func (h *AdminHandler) ListActive(c *echo.Context) error {
+	ctx := c.Request().Context()
+	queue := c.Param("queue")
+	if queue == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue parameter"})
+	}
+
+	limitStr := c.QueryParam("limit")
+	limit := 50
+	if limitStr != "" {
+		if lim, err := strconv.Atoi(limitStr); err == nil && lim > 0 {
+			limit = lim
+		}
+	}
+
+	tasks, err := h.client.ListActiveTasks(ctx, queue, limit)
+	if err != nil {
+		h.logger.Error("Failed to list active tasks", zap.String("queue", queue), zap.Error(err))
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	if tasks == nil {
+		return c.JSON(http.StatusOK, []interface{}{})
+	}
+	return c.JSON(http.StatusOK, tasks)
+}
+
+func (h *AdminHandler) DeleteActive(c *echo.Context) error {
+	ctx := c.Request().Context()
+	queue := c.Param("queue")
+	id := c.Param("id")
+	if queue == "" || id == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue or id parameter"})
+	}
+
+	if err := h.client.DeleteActiveTask(ctx, queue, id); err != nil {
+		h.logger.Error("Failed to delete active task", zap.String("queue", queue), zap.String("id", id), zap.Error(err))
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+
+	return c.JSON(http.StatusOK, map[string]string{"message": fmt.Sprintf("Active task '%s' successfully deleted/cancelled", id)})
+}
+

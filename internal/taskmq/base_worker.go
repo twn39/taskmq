@@ -94,7 +94,7 @@ func (b *baseWorker) buildMiddlewareChain() {
 		func(c *ConsumeContext) error {
 			handler, exists := b.handlers[c.Task.Name]
 			if !exists {
-				return fmt.Errorf("no handler registered: %s", c.Task.Name)
+				return fmt.Errorf("%w: %s", ErrNoHandler, c.Task.Name)
 			}
 			if c.Task.TimeoutMs > 0 {
 				timeoutCtx, cancel := context.WithTimeout(c.Context, time.Duration(c.Task.TimeoutMs)*time.Millisecond)
@@ -167,15 +167,12 @@ func (b *baseWorker) processMessage(ctx context.Context, streamKey string, msg r
 	var task Task
 	err := b.codec.Unmarshal(payload, &task)
 	if err != nil {
-		b.logger.Error("Failed to deserialize task", zap.Error(err))
+		b.logger.Error("Failed to deserialize task, discarding corrupted message", zap.Error(err))
+		_ = b.rdb.XAck(ctx, streamKey, b.group, msg.ID).Err()
+		_ = b.rdb.XDel(ctx, streamKey, msg.ID).Err()
 		return
 	}
 
-	_, exists := b.handlers[task.Name]
-	if !exists {
-		b.logger.Error("No handler registered", zap.String("task_name", task.Name))
-		return
-	}
 
 	// Check if task is already cancelled before execution (pre-execution check for backlog tasks)
 	cancelledKey := fmt.Sprintf("taskmq:{%s}:cancelled:%s", task.Queue, task.ID)

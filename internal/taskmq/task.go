@@ -2,8 +2,11 @@ package taskmq
 
 import (
 	"encoding/json"
+	"errors"
 	"time"
 )
+
+var ErrNoHandler = errors.New("taskmq: no handler registered")
 
 // UniqueScope defines when the unique lock should be released
 type UniqueScope int

@@ -2,6 +2,7 @@ package taskmq
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"sync"
 	"time"
@@ -93,7 +94,7 @@ func RetryAndDLQMiddleware(broker TaskBroker, retryPolicy RetryPolicy, dlqPolicy
 		c.Task.Retry++
 		streamKey := StreamKey(c.Queue)
 
-		if !retryPolicy.ShouldRetry(c.Task, err) {
+		if errors.Is(err, ErrNoHandler) || !retryPolicy.ShouldRetry(c.Task, err) {
 			dlqPolicy.BeforeDeadLetter(c.Context, c.Task, err)
 			dlqName := dlqPolicy.DLQQueueName(c.Task)
 
