@@ -53,18 +53,24 @@ type ActiveTask struct {
 	EnqueuedAt time.Time `json:"enqueued_at"`
 }
 
-type Enqueuer interface {
-	Enqueue(ctx context.Context, task *Task) error
-	EnqueueIn(ctx context.Context, task *Task, delay time.Duration) error
-	EnqueueAt(ctx context.Context, task *Task, at time.Time) error
+type TaskOption func(*Task) error
+
+type EnqueueClient interface {
+	Enqueue(ctx context.Context, task *Task, opts ...TaskOption) error
+	EnqueueIn(ctx context.Context, task *Task, delay time.Duration, opts ...TaskOption) error
+	EnqueueAt(ctx context.Context, task *Task, at time.Time, opts ...TaskOption) error
 }
 
-type CronRegistrar interface {
-	RegisterCron(ctx context.Context, jobName string, spec string, task *Task) error
+type Enqueuer = EnqueueClient
+
+type CronClient interface {
+	RegisterCron(ctx context.Context, jobName string, spec string, task *Task, opts ...TaskOption) error
 	ListCronJobs(ctx context.Context, queue string) ([]*CronJob, error)
 	RunCronJob(ctx context.Context, queue string, jobName string) error
 	DeleteCronJob(ctx context.Context, queue string, jobName string) error
 }
+
+type CronRegistrar = CronClient
 
 type DLQManager interface {
 	ListDeadLetters(ctx context.Context, queue string, limit int) ([]*Task, error)
@@ -95,14 +101,18 @@ type TaskCanceler interface {
 	CancelTask(ctx context.Context, queue, taskID string) error
 }
 
-type Client interface {
-	Enqueuer
-	CronRegistrar
+type AdminClient interface {
 	DLQManager
 	QueueController
 	ScheduledTaskManager
 	ActiveTaskManager
 	TaskCanceler
+}
+
+type Client interface {
+	EnqueueClient
+	CronClient
+	AdminClient
 }
 
 type client struct {
@@ -167,7 +177,13 @@ func (c *client) acquireUniqueLock(ctx context.Context, task *Task) (bool, error
 }
 
 // Enqueue adds a task to the Redis stream immediately (active queue)
-func (c *client) Enqueue(ctx context.Context, task *Task) error {
+func (c *client) Enqueue(ctx context.Context, task *Task, opts ...TaskOption) error {
+	for _, opt := range opts {
+		if err := opt(task); err != nil {
+			return err
+		}
+	}
+
 	if task.ID == "" {
 		task.ID = generateUUID()
 	}
@@ -208,12 +224,18 @@ func (c *client) Enqueue(ctx context.Context, task *Task) error {
 }
 
 // EnqueueIn adds a task to the delayed queue with a delay duration
-func (c *client) EnqueueIn(ctx context.Context, task *Task, delay time.Duration) error {
-	return c.EnqueueAt(ctx, task, time.Now().Add(delay))
+func (c *client) EnqueueIn(ctx context.Context, task *Task, delay time.Duration, opts ...TaskOption) error {
+	return c.EnqueueAt(ctx, task, time.Now().Add(delay), opts...)
 }
 
 // EnqueueAt adds a task to the delayed queue to be executed at a specific time
-func (c *client) EnqueueAt(ctx context.Context, task *Task, at time.Time) error {
+func (c *client) EnqueueAt(ctx context.Context, task *Task, at time.Time, opts ...TaskOption) error {
+	for _, opt := range opts {
+		if err := opt(task); err != nil {
+			return err
+		}
+	}
+
 	if task.ID == "" {
 		task.ID = generateUUID()
 	}
@@ -314,7 +336,13 @@ func (c *client) RetryDeadLetter(ctx context.Context, queue string, taskID strin
 	return c.DeleteDeadLetter(ctx, queue, taskID)
 }
 
-func (c *client) RegisterCron(ctx context.Context, jobName string, spec string, task *Task) error {
+func (c *client) RegisterCron(ctx context.Context, jobName string, spec string, task *Task, opts ...TaskOption) error {
+	for _, opt := range opts {
+		if err := opt(task); err != nil {
+			return err
+		}
+	}
+
 	sched, err := CronParser.Parse(spec)
 	if err != nil {
 		return fmt.Errorf("taskmq: invalid cron spec: %w", err)
@@ -726,4 +754,66 @@ func parseStreamTime(streamID string) time.Time {
 		}
 	}
 	return time.Time{}
+}
+
+func WithTaskID(id string) TaskOption {
+	return func(t *Task) error {
+		if id == "" {
+			return errors.New("taskmq: task ID cannot be empty")
+		}
+		t.ID = id
+		return nil
+	}
+}
+
+func WithTaskMaxRetry(max int) TaskOption {
+	return func(t *Task) error {
+		if max < 0 {
+			return fmt.Errorf("taskmq: max retry must be non-negative: %d", max)
+		}
+		t.MaxRetry = max
+		return nil
+	}
+}
+
+func WithTaskTimeout(timeout time.Duration) TaskOption {
+	return func(t *Task) error {
+		if timeout <= 0 {
+			return fmt.Errorf("taskmq: timeout must be positive: %v", timeout)
+		}
+		t.TimeoutMs = int(timeout.Milliseconds())
+		return nil
+	}
+}
+
+func WithTaskUnique(uniqueKey string, ttl time.Duration, scope UniqueScope) TaskOption {
+	return func(t *Task) error {
+		if uniqueKey == "" {
+			return errors.New("taskmq: unique key cannot be empty")
+		}
+		if ttl <= 0 {
+			return fmt.Errorf("taskmq: unique TTL must be positive: %v", ttl)
+		}
+		t.UniqueKey = uniqueKey
+		t.UniqueTTLMs = int(ttl.Milliseconds())
+		t.UniqueScope = scope
+		return nil
+	}
+}
+
+func WithTaskGroupKey(groupKey string) TaskOption {
+	return func(t *Task) error {
+		t.GroupKey = groupKey
+		return nil
+	}
+}
+
+func WithTaskQueue(queue string) TaskOption {
+	return func(t *Task) error {
+		if queue == "" {
+			return errors.New("taskmq: queue name cannot be empty")
+		}
+		t.Queue = queue
+		return nil
+	}
 }
