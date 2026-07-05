@@ -10,6 +10,10 @@ if existing == serializedTask then
 	return 0
 end
 
+if existing then
+	redis.call('ZREM', delayedKey, existing)
+end
+
 redis.call('HSET', configsKey, jobName, serializedTask)
 redis.call('ZADD', delayedKey, firstRunScore, serializedTask)
 return 1

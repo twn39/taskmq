@@ -398,3 +398,88 @@ func TestTaskMQ_CronSelfHealing_Pagination_WithinLimit(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, 9, len(finalMembers), "Self-healing loop should not have rescheduled the cron task because it was within scan limit")
 }
+
+func TestTaskMQ_CronOverwrite(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	queueName := "cron_overwrite_test_queue"
+
+	var version1Count int64
+	var version2Count int64
+	doneChan := make(chan bool, 1)
+
+	var rdb *goredis.Client
+	var client taskmq.Client
+
+	app := fxtest.New(t,
+		fx.Provide(
+			NewTestConfig,
+			logger.NewLogger,
+			internalredis.NewRedisClient,
+			taskmq.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithConcurrency(2),
+					taskmq.WithCronHealingInterval(1*time.Second),
+				)
+				pool.Register("cron:overwrite", func(ctx context.Context, task *taskmq.Task) error {
+					payload := string(task.Payload)
+					if payload == "version-1" {
+						atomic.AddInt64(&version1Count, 1)
+					} else if payload == "version-2" {
+						atomic.AddInt64(&version2Count, 1)
+						select {
+						case doneChan <- true:
+						default:
+						}
+					}
+					return nil
+				})
+				return pool
+			},
+		),
+		fx.Invoke(taskmq.RegisterWorkerPoolLifecycle),
+		fx.Populate(&rdb, &client),
+	)
+
+	// Clean up Redis before test
+	err := rdb.Del(ctx,
+		taskmq.StreamKey(queueName),
+		taskmq.DelayedKey(queueName),
+		taskmq.CronConfigsKey(queueName),
+	).Err()
+	assert.NoError(t, err)
+
+	// Register version-1 (runs every second)
+	task1 := taskmq.NewTask("cron:overwrite", []byte("version-1"), taskmq.TaskOptions{
+		Queue: queueName,
+	})
+	err = client.RegisterCron(ctx, "cron:overwrite", "*/1 * * * * *", task1)
+	assert.NoError(t, err)
+
+	// Immediately overwrite with version-2 (runs every second)
+	task2 := taskmq.NewTask("cron:overwrite", []byte("version-2"), taskmq.TaskOptions{
+		Queue: queueName,
+	})
+	err = client.RegisterCron(ctx, "cron:overwrite", "*/1 * * * * *", task2)
+	assert.NoError(t, err)
+
+	// Start worker pool
+	app.RequireStart()
+	defer app.RequireStop()
+
+	// Wait for version-2 to trigger at least once
+	select {
+	case <-doneChan:
+		// Success!
+	case <-ctx.Done():
+		t.Fatal("Timeout waiting for version-2 of cron job")
+	}
+
+	// Give a bit of extra time to ensure version-1 didn't trigger
+	time.Sleep(1500 * time.Millisecond)
+
+	assert.Equal(t, int64(0), atomic.LoadInt64(&version1Count), "Version 1 should have been completely unscheduled/removed on overwrite")
+	assert.GreaterOrEqual(t, atomic.LoadInt64(&version2Count), int64(1), "Version 2 should have executed at least once")
+}
