@@ -73,9 +73,9 @@ func (b *baseWorker) initBase(rdb *redis.Client, logger *zap.Logger, opt *BaseWo
 
 	b.groupKeyExtractor = opt.groupKeyExtractor
 
-	b.broker = opt.broker
-	b.retryPolicy = opt.retryPolicy
-	b.deadLetterPolicy = opt.deadLetterPolicy
+	b.broker = opt.policies.broker
+	b.retryPolicy = opt.policies.retryPolicy
+	b.deadLetterPolicy = opt.policies.deadLetterPolicy
 
 	b.sem = make(chan struct{}, b.execPoolSize)
 }

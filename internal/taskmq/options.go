@@ -14,36 +14,48 @@ type CronManagerFactory func(rdb *redis.Client, logger *zap.Logger, queue string
 type SchedulerFactory func(rdb *redis.Client, logger *zap.Logger, queue string, cronManager CronManager, codec Codec, pollInterval time.Duration) Runner
 type JanitorFactory func(rdb *redis.Client, logger *zap.Logger, queue string, group string, consumer string, concurrency int, checkInterval time.Duration, minIdleTime time.Duration) PELRecoveryJanitor
 
+type CronOptions struct {
+	healingInterval      time.Duration
+	lockTTL              time.Duration
+	scanBatchSize        int
+	scanMaxCount         int
+	manager              CronManager
+	factory              CronManagerFactory
+}
+
+type SchedulerOptions struct {
+	pollInterval         time.Duration
+	scheduler            Runner
+	factory              SchedulerFactory
+}
+
+type JanitorOptions struct {
+	interval             time.Duration
+	minIdleTime          time.Duration
+	janitor              Runner
+	factory              JanitorFactory
+}
+
+type PolicyOptions struct {
+	broker               TaskBroker
+	retryPolicy          RetryPolicy
+	deadLetterPolicy     DeadLetterPolicy
+}
+
 type BaseWorkerOptions struct {
-	group                    string
-	consumer                 string
-	concurrency              int
-	codec                    Codec
-	syncExecution            bool
-	executionPoolSize        int
-	cronHealingInterval      time.Duration
-	cronHealingLockTTL       time.Duration
-	cronHealingScanBatchSize int
-	cronHealingScanMaxCount  int
+	group                string
+	consumer             string
+	concurrency          int
+	codec                Codec
+	syncExecution        bool
+	executionPoolSize    int
+	context              context.Context
+	groupKeyExtractor    func([]byte) string
 
-	cronManager      CronManager
-	scheduler        Runner
-	janitor          Runner
-	broker           TaskBroker
-	retryPolicy      RetryPolicy
-	deadLetterPolicy DeadLetterPolicy
-
-	schedulerPollInterval time.Duration
-	janitorInterval       time.Duration
-	janitorMinIdleTime    time.Duration
-
-	cronManagerFactory CronManagerFactory
-	schedulerFactory   SchedulerFactory
-	janitorFactory     JanitorFactory
-
-	context context.Context
-
-	groupKeyExtractor func([]byte) string
+	cron                 CronOptions
+	scheduler            SchedulerOptions
+	janitor              JanitorOptions
+	policies             PolicyOptions
 }
 
 type WorkerPoolOptions struct {
@@ -108,17 +120,23 @@ func defaultBaseWorkerOptions(codec Codec) BaseWorkerOptions {
 		group:                    "taskmq-group",
 		consumer:                 "taskmq-consumer-1",
 		codec:                    codec,
-		cronHealingInterval:      1 * time.Minute,
-		cronHealingLockTTL:       50 * time.Second,
-		cronHealingScanBatchSize: 100,
-		cronHealingScanMaxCount:  1000,
-		schedulerPollInterval:    500 * time.Millisecond,
-		janitorInterval:          3 * time.Second,
-		janitorMinIdleTime:       5 * time.Second,
-		cronManagerFactory:       DefaultCronManagerFactory,
-		schedulerFactory:         DefaultSchedulerFactory,
-		janitorFactory:           DefaultJanitorFactory,
 		context:                  context.Background(),
+		cron: CronOptions{
+			healingInterval:      1 * time.Minute,
+			lockTTL:              50 * time.Second,
+			scanBatchSize:        100,
+			scanMaxCount:         1000,
+			factory:              DefaultCronManagerFactory,
+		},
+		scheduler: SchedulerOptions{
+			pollInterval:         500 * time.Millisecond,
+			factory:              DefaultSchedulerFactory,
+		},
+		janitor: JanitorOptions{
+			interval:             3 * time.Second,
+			minIdleTime:          5 * time.Second,
+			factory:              DefaultJanitorFactory,
+		},
 	}
 }
 
@@ -135,39 +153,39 @@ func defaultPriorityWorkerOptions(codec Codec) PriorityWorkerOptions {
 }
 
 func buildSharedPoolDefaults(rdb *redis.Client, opts *WorkerPoolOptions) {
-	if opts.broker == nil {
-		opts.broker = NewRedisBroker(rdb, opts.codec)
+	if opts.policies.broker == nil {
+		opts.policies.broker = NewRedisBroker(rdb, opts.codec)
 	}
-	if opts.retryPolicy == nil {
-		opts.retryPolicy = NewExponentialBackoff(100*time.Millisecond, 1*time.Hour, true)
+	if opts.policies.retryPolicy == nil {
+		opts.policies.retryPolicy = NewExponentialBackoff(100*time.Millisecond, 1*time.Hour, true)
 	}
-	if opts.deadLetterPolicy == nil {
-		opts.deadLetterPolicy = NewStandardDeadLetterPolicy("", nil)
+	if opts.policies.deadLetterPolicy == nil {
+		opts.policies.deadLetterPolicy = NewStandardDeadLetterPolicy("", nil)
 	}
 }
 
 func buildDefaultPoolComponents(rdb *redis.Client, logger *zap.Logger, queue string, opts *WorkerPoolOptions) {
-	if opts.cronManager == nil && opts.cronManagerFactory != nil {
-		opts.cronManager = opts.cronManagerFactory(rdb, logger, queue, opts.codec, opts.cronHealingInterval, opts.cronHealingLockTTL, opts.cronHealingScanBatchSize, opts.cronHealingScanMaxCount)
+	if opts.cron.manager == nil && opts.cron.factory != nil {
+		opts.cron.manager = opts.cron.factory(rdb, logger, queue, opts.codec, opts.cron.healingInterval, opts.cron.lockTTL, opts.cron.scanBatchSize, opts.cron.scanMaxCount)
 	}
-	if opts.scheduler == nil && opts.schedulerFactory != nil {
-		opts.scheduler = opts.schedulerFactory(rdb, logger, queue, opts.cronManager, opts.codec, opts.schedulerPollInterval)
+	if opts.scheduler.scheduler == nil && opts.scheduler.factory != nil {
+		opts.scheduler.scheduler = opts.scheduler.factory(rdb, logger, queue, opts.cron.manager, opts.codec, opts.scheduler.pollInterval)
 	}
-	if opts.janitor == nil && opts.janitorFactory != nil {
-		opts.janitor = opts.janitorFactory(rdb, logger, queue, opts.group, opts.consumer, opts.concurrency, opts.janitorInterval, opts.janitorMinIdleTime)
+	if opts.janitor.janitor == nil && opts.janitor.factory != nil {
+		opts.janitor.janitor = opts.janitor.factory(rdb, logger, queue, opts.group, opts.consumer, opts.concurrency, opts.janitor.interval, opts.janitor.minIdleTime)
 	}
 	buildSharedPoolDefaults(rdb, opts)
 }
 
 func buildSharedPriorityDefaults(rdb *redis.Client, opts *PriorityWorkerOptions) {
-	if opts.broker == nil {
-		opts.broker = NewRedisBroker(rdb, opts.codec)
+	if opts.policies.broker == nil {
+		opts.policies.broker = NewRedisBroker(rdb, opts.codec)
 	}
-	if opts.retryPolicy == nil {
-		opts.retryPolicy = NewExponentialBackoff(100*time.Millisecond, 1*time.Hour, true)
+	if opts.policies.retryPolicy == nil {
+		opts.policies.retryPolicy = NewExponentialBackoff(100*time.Millisecond, 1*time.Hour, true)
 	}
-	if opts.deadLetterPolicy == nil {
-		opts.deadLetterPolicy = NewStandardDeadLetterPolicy("", nil)
+	if opts.policies.deadLetterPolicy == nil {
+		opts.policies.deadLetterPolicy = NewStandardDeadLetterPolicy("", nil)
 	}
 }
 
@@ -235,7 +253,7 @@ func WithCronHealingInterval(interval time.Duration) sharedOption {
 		if interval <= 0 {
 			return fmt.Errorf("cron healing interval must be positive: got %v", interval)
 		}
-		o.cronHealingInterval = interval
+		o.cron.healingInterval = interval
 		return nil
 	}
 }
@@ -245,7 +263,7 @@ func WithCronHealingLockTTL(ttl time.Duration) sharedOption {
 		if ttl <= 0 {
 			return fmt.Errorf("cron healing lock TTL must be positive: got %v", ttl)
 		}
-		o.cronHealingLockTTL = ttl
+		o.cron.lockTTL = ttl
 		return nil
 	}
 }
@@ -255,7 +273,7 @@ func WithCronHealingScanBatchSize(size int) sharedOption {
 		if size <= 0 {
 			return fmt.Errorf("cron healing scan batch size must be positive: got %d", size)
 		}
-		o.cronHealingScanBatchSize = size
+		o.cron.scanBatchSize = size
 		return nil
 	}
 }
@@ -265,7 +283,7 @@ func WithCronHealingScanMaxCount(count int) sharedOption {
 		if count <= 0 {
 			return fmt.Errorf("cron healing scan max count must be positive: got %d", count)
 		}
-		o.cronHealingScanMaxCount = count
+		o.cron.scanMaxCount = count
 		return nil
 	}
 }
@@ -275,7 +293,7 @@ func WithSchedulerPollInterval(interval time.Duration) sharedOption {
 		if interval <= 0 {
 			return fmt.Errorf("scheduler poll interval must be positive: got %v", interval)
 		}
-		o.schedulerPollInterval = interval
+		o.scheduler.pollInterval = interval
 		return nil
 	}
 }
@@ -285,7 +303,7 @@ func WithJanitorInterval(interval time.Duration) sharedOption {
 		if interval <= 0 {
 			return fmt.Errorf("janitor interval must be positive: got %v", interval)
 		}
-		o.janitorInterval = interval
+		o.janitor.interval = interval
 		return nil
 	}
 }
@@ -295,7 +313,7 @@ func WithJanitorMinIdleTime(idleTime time.Duration) sharedOption {
 		if idleTime <= 0 {
 			return fmt.Errorf("janitor min idle time must be positive: got %v", idleTime)
 		}
-		o.janitorMinIdleTime = idleTime
+		o.janitor.minIdleTime = idleTime
 		return nil
 	}
 }
@@ -353,7 +371,7 @@ func WithCronManager(m CronManager) sharedOption {
 		if m == nil {
 			return errors.New("cron manager cannot be nil")
 		}
-		o.cronManager = m
+		o.cron.manager = m
 		return nil
 	}
 }
@@ -363,7 +381,7 @@ func WithScheduler(s Runner) sharedOption {
 		if s == nil {
 			return errors.New("scheduler cannot be nil")
 		}
-		o.scheduler = s
+		o.scheduler.scheduler = s
 		return nil
 	}
 }
@@ -373,7 +391,7 @@ func WithJanitor(j Runner) sharedOption {
 		if j == nil {
 			return errors.New("janitor cannot be nil")
 		}
-		o.janitor = j
+		o.janitor.janitor = j
 		return nil
 	}
 }
@@ -383,7 +401,7 @@ func WithBroker(b TaskBroker) sharedOption {
 		if b == nil {
 			return errors.New("broker cannot be nil")
 		}
-		o.broker = b
+		o.policies.broker = b
 		return nil
 	}
 }
@@ -393,7 +411,7 @@ func WithRetryPolicy(p RetryPolicy) sharedOption {
 		if p == nil {
 			return errors.New("retry policy cannot be nil")
 		}
-		o.retryPolicy = p
+		o.policies.retryPolicy = p
 		return nil
 	}
 }
@@ -403,7 +421,7 @@ func WithDeadLetterPolicy(p DeadLetterPolicy) sharedOption {
 		if p == nil {
 			return errors.New("dead letter policy cannot be nil")
 		}
-		o.deadLetterPolicy = p
+		o.policies.deadLetterPolicy = p
 		return nil
 	}
 }
@@ -413,7 +431,7 @@ func WithCronManagerFactory(f CronManagerFactory) sharedOption {
 		if f == nil {
 			return errors.New("cron manager factory cannot be nil")
 		}
-		o.cronManagerFactory = f
+		o.cron.factory = f
 		return nil
 	}
 }
@@ -423,7 +441,7 @@ func WithSchedulerFactory(f SchedulerFactory) sharedOption {
 		if f == nil {
 			return errors.New("scheduler factory cannot be nil")
 		}
-		o.schedulerFactory = f
+		o.scheduler.factory = f
 		return nil
 	}
 }
@@ -433,7 +451,7 @@ func WithJanitorFactory(f JanitorFactory) sharedOption {
 		if f == nil {
 			return errors.New("janitor factory cannot be nil")
 		}
-		o.janitorFactory = f
+		o.janitor.factory = f
 		return nil
 	}
 }

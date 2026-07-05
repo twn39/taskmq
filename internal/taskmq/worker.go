@@ -58,9 +58,9 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 	pool := &workerPool{
 		baseWorker:  base,
 		queue:       queue,
-		cronManager: opt.cronManager,
-		scheduler:   opt.scheduler,
-		janitor:     opt.janitor,
+		cronManager: opt.cron.manager,
+		scheduler:   opt.scheduler.scheduler,
+		janitor:     opt.janitor.janitor,
 	}
 
 	pool.getQueueRateLimit = func(qName string) (int64, time.Duration, string) {

@@ -53,28 +53,56 @@ type ActiveTask struct {
 	EnqueuedAt time.Time `json:"enqueued_at"`
 }
 
-type Client interface {
+type Enqueuer interface {
 	Enqueue(ctx context.Context, task *Task) error
 	EnqueueIn(ctx context.Context, task *Task, delay time.Duration) error
 	EnqueueAt(ctx context.Context, task *Task, at time.Time) error
+}
+
+type CronRegistrar interface {
 	RegisterCron(ctx context.Context, jobName string, spec string, task *Task) error
+	ListCronJobs(ctx context.Context, queue string) ([]*CronJob, error)
+	RunCronJob(ctx context.Context, queue string, jobName string) error
+	DeleteCronJob(ctx context.Context, queue string, jobName string) error
+}
+
+type DLQManager interface {
 	ListDeadLetters(ctx context.Context, queue string, limit int) ([]*Task, error)
 	DeleteDeadLetter(ctx context.Context, queue string, taskID string) error
 	RetryDeadLetter(ctx context.Context, queue string, taskID string) error
 	RetryAllDeadLetters(ctx context.Context, queue string) (int64, error)
 	PurgeAllDeadLetters(ctx context.Context, queue string) (int64, error)
-	CancelTask(ctx context.Context, queue, taskID string) error
+}
+
+type QueueController interface {
 	Pause(ctx context.Context, queue string) error
 	Resume(ctx context.Context, queue string) error
 	IsPaused(ctx context.Context, queue string) (bool, error)
+}
+
+type ScheduledTaskManager interface {
 	ListScheduledTasks(ctx context.Context, queue string, limit int) ([]*ScheduledTask, error)
 	RunScheduledTask(ctx context.Context, queue string, taskID string) error
 	DeleteScheduledTask(ctx context.Context, queue string, taskID string) error
-	ListCronJobs(ctx context.Context, queue string) ([]*CronJob, error)
-	RunCronJob(ctx context.Context, queue string, jobName string) error
-	DeleteCronJob(ctx context.Context, queue string, jobName string) error
+}
+
+type ActiveTaskManager interface {
 	ListActiveTasks(ctx context.Context, queue string, limit int) ([]*ActiveTask, error)
 	DeleteActiveTask(ctx context.Context, queue string, streamID string) error
+}
+
+type TaskCanceler interface {
+	CancelTask(ctx context.Context, queue, taskID string) error
+}
+
+type Client interface {
+	Enqueuer
+	CronRegistrar
+	DLQManager
+	QueueController
+	ScheduledTaskManager
+	ActiveTaskManager
+	TaskCanceler
 }
 
 type client struct {

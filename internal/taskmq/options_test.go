@@ -25,14 +25,14 @@ func TestDefaultWorkerOptions(t *testing.T) {
 	if opts.codec != codec {
 		t.Error("expected codec to match the passed codec")
 	}
-	if opts.cronHealingInterval != 1*time.Minute {
-		t.Errorf("expected default cronHealingInterval to be 1m, got %v", opts.cronHealingInterval)
+	if opts.cron.healingInterval != 1*time.Minute {
+		t.Errorf("expected default cronHealingInterval to be 1m, got %v", opts.cron.healingInterval)
 	}
-	if opts.schedulerPollInterval != 500*time.Millisecond {
-		t.Errorf("expected default schedulerPollInterval to be 500ms, got %v", opts.schedulerPollInterval)
+	if opts.scheduler.pollInterval != 500*time.Millisecond {
+		t.Errorf("expected default schedulerPollInterval to be 500ms, got %v", opts.scheduler.pollInterval)
 	}
-	if opts.janitorInterval != 3*time.Second {
-		t.Errorf("expected default janitorInterval to be 3s, got %v", opts.janitorInterval)
+	if opts.janitor.interval != 3*time.Second {
+		t.Errorf("expected default janitorInterval to be 3s, got %v", opts.janitor.interval)
 	}
 }
 

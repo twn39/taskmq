@@ -116,24 +116,24 @@ func NewPriorityWorker(rdb *redis.Client, logger *zap.Logger, opts ...PriorityWo
 	// Multi-queue priority mode components initialization
 	for _, q := range pw.queues {
 		var qCron CronManager
-		if opt.cronManagerFactory != nil {
-			qCron = opt.cronManagerFactory(rdb, logger, q.Name, pw.codec, opt.cronHealingInterval, opt.cronHealingLockTTL, opt.cronHealingScanBatchSize, opt.cronHealingScanMaxCount)
+		if opt.cron.factory != nil {
+			qCron = opt.cron.factory(rdb, logger, q.Name, pw.codec, opt.cron.healingInterval, opt.cron.lockTTL, opt.cron.scanBatchSize, opt.cron.scanMaxCount)
 		} else {
-			qCron = newCronManager(rdb, logger, q.Name, pw.codec, opt.cronHealingInterval, opt.cronHealingLockTTL, opt.cronHealingScanBatchSize, opt.cronHealingScanMaxCount)
+			qCron = newCronManager(rdb, logger, q.Name, pw.codec, opt.cron.healingInterval, opt.cron.lockTTL, opt.cron.scanBatchSize, opt.cron.scanMaxCount)
 		}
 
 		var qSched Runner
-		if opt.schedulerFactory != nil {
-			qSched = opt.schedulerFactory(rdb, logger, q.Name, qCron, pw.codec, opt.schedulerPollInterval)
+		if opt.scheduler.factory != nil {
+			qSched = opt.scheduler.factory(rdb, logger, q.Name, qCron, pw.codec, opt.scheduler.pollInterval)
 		} else {
-			qSched = newDelayedScheduler(rdb, logger, q.Name, qCron, pw.codec, opt.schedulerPollInterval)
+			qSched = newDelayedScheduler(rdb, logger, q.Name, qCron, pw.codec, opt.scheduler.pollInterval)
 		}
 
 		var qJan PELRecoveryJanitor
-		if opt.janitorFactory != nil {
-			qJan = opt.janitorFactory(rdb, logger, q.Name, pw.group, pw.consumer, pw.concurrency, opt.janitorInterval, opt.janitorMinIdleTime)
+		if opt.janitor.factory != nil {
+			qJan = opt.janitor.factory(rdb, logger, q.Name, pw.group, pw.consumer, pw.concurrency, opt.janitor.interval, opt.janitor.minIdleTime)
 		} else {
-			qJan = newPELRecoveryJanitor(rdb, logger, q.Name, pw.group, pw.consumer, pw.concurrency, opt.janitorInterval, opt.janitorMinIdleTime, nil)
+			qJan = newPELRecoveryJanitor(rdb, logger, q.Name, pw.group, pw.consumer, pw.concurrency, opt.janitor.interval, opt.janitor.minIdleTime, nil)
 		}
 
 		pw.cronManagers[q.Name] = qCron
