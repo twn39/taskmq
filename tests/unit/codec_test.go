@@ -1,10 +1,10 @@
 package unit
 
 import (
-	"bytes"
 	"testing"
 	"time"
 
+	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/twn39/taskmq/internal/taskmq"
 )
@@ -43,18 +43,12 @@ func TestCodecs(t *testing.T) {
 			err = tc.codec.Unmarshal(data, &decoded)
 			assert.NoError(t, err)
 
-			assert.Equal(t, task.ID, decoded.ID)
-			assert.Equal(t, task.Queue, decoded.Queue)
-			assert.Equal(t, task.Name, decoded.Name)
-			assert.True(t, bytes.Equal(task.Payload, decoded.Payload))
-			assert.Equal(t, task.Retry, decoded.Retry)
-			assert.Equal(t, task.MaxRetry, decoded.MaxRetry)
-			assert.Equal(t, task.TimeoutMs, decoded.TimeoutMs)
-			assert.Equal(t, task.UniqueKey, decoded.UniqueKey)
-			assert.Equal(t, task.UniqueTTLMs, decoded.UniqueTTLMs)
-			assert.Equal(t, task.LastError, decoded.LastError)
-			assert.Equal(t, task.CronSpec, decoded.CronSpec)
-			assert.True(t, task.CreatedAt.Equal(decoded.CreatedAt))
+			timeComparer := cmp.Comparer(func(x, y time.Time) bool {
+				return x.Equal(y)
+			})
+			if diff := cmp.Diff(task, &decoded, timeComparer); diff != "" {
+				t.Errorf("Codec round-trip mismatch (-expected +actual):\n%s", diff)
+			}
 		})
 	}
 }
