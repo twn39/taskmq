@@ -79,12 +79,12 @@ func TestTaskMQ_BackpressureFlow(t *testing.T) {
 	task1 := taskmq.NewTask("task:slow", []byte("payload 1"), taskmq.TaskOptions{
 		Queue:    queueName,
 		Timeout:  5 * time.Second,
-		MaxRetry: 1,
+		MaxRetry: taskmq.Ptr(1),
 	})
 	task2 := taskmq.NewTask("task:slow", []byte("payload 2"), taskmq.TaskOptions{
 		Queue:    queueName,
 		Timeout:  1 * time.Second,
-		MaxRetry: 1,
+		MaxRetry: taskmq.Ptr(1),
 	})
 
 	err = client.Enqueue(ctx, task1)

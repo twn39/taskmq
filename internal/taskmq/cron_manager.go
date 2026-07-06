@@ -176,7 +176,7 @@ func (m *cronManager) Run(ctx context.Context) error {
 				// Generate next task run using deterministic ID to prevent duplicates
 				nextTask := NewTask(task.Name, task.Payload, TaskOptions{
 					Queue:    task.Queue,
-					MaxRetry: task.MaxRetry,
+					MaxRetry: Ptr(task.MaxRetry),
 				})
 				nextTask.CronSpec = task.CronSpec
 				nextTask.ID = fmt.Sprintf("cron:%s:%d", jobName, nextTime.UnixMilli())
@@ -215,7 +215,7 @@ func (m *cronManager) Reschedule(ctx context.Context, task *Task) error {
 	// Create next run using a deterministic task ID
 	nextTask := NewTask(task.Name, task.Payload, TaskOptions{
 		Queue:    task.Queue,
-		MaxRetry: task.MaxRetry,
+		MaxRetry: Ptr(task.MaxRetry),
 	})
 	nextTask.CronSpec = task.CronSpec
 	nextTask.ID = fmt.Sprintf("cron:%s:%d", task.Name, nextTime.UnixMilli())

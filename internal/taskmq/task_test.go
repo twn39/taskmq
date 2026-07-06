@@ -29,7 +29,7 @@ func TestNewTask_WithOptions(t *testing.T) {
 	opts := TaskOptions{
 		ID:          "custom-id",
 		Queue:       "custom-q",
-		MaxRetry:    5,
+		MaxRetry:    Ptr(5),
 		Timeout:     5 * time.Second,
 		UniqueKey:   "uniq-1",
 		UniqueTTL:   10 * time.Minute,

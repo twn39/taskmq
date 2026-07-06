@@ -141,16 +141,15 @@ func TestTaskMQ_UniqueScope_UntilSuccess(t *testing.T) {
 	defer app.RequireStop()
 
 	// 1. Enqueue unique task that fails, with UniqueUntilSuccess.
-	// Use WithTaskMaxRetry(0) so task1 goes directly to DLQ on failure with no retries.
-	// NOTE: MaxRetry:0 in TaskOptions is ignored by NewTask (condition is opt.MaxRetry > 0),
-	// so we must use the WithTaskMaxRetry TaskOption in Enqueue instead.
+	// Set MaxRetry: taskmq.Ptr(0) directly in TaskOptions so task1 goes directly to DLQ on failure with no retries.
 	task1 := taskmq.NewTask("task:unq_success", []byte("fail"), taskmq.TaskOptions{
 		Queue:       queueName,
+		MaxRetry:    taskmq.Ptr(0),
 		UniqueKey:   "success-key",
 		UniqueTTL:   10 * time.Second,
 		UniqueScope: taskmq.UniqueUntilSuccess,
 	})
-	err := client.Enqueue(ctx, task1, taskmq.WithTaskMaxRetry(0))
+	err := client.Enqueue(ctx, task1)
 	assert.NoError(t, err)
 
 	// Wait for handler to execute and fail

@@ -72,7 +72,7 @@ func TestTaskMQ_DLQFlow(t *testing.T) {
 	// Enqueue a task with MaxRetry = 1 (runs once, fails, immediately archived to DLQ)
 	task := taskmq.NewTask("task:fail", []byte("fail payload"), taskmq.TaskOptions{
 		Queue:    queueName,
-		MaxRetry: 1,
+		MaxRetry: taskmq.Ptr(1),
 	})
 
 	err := client.Enqueue(ctx, task)
@@ -127,7 +127,7 @@ func TestTaskMQ_DLQFlow(t *testing.T) {
 
 	taskToDelete := taskmq.NewTask("task:fail", []byte("delete payload"), taskmq.TaskOptions{
 		Queue:    queueName,
-		MaxRetry: 1,
+		MaxRetry: taskmq.Ptr(1),
 	})
 
 	err = client.Enqueue(ctx, taskToDelete)

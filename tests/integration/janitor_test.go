@@ -139,7 +139,7 @@ func TestTaskMQ_PoisonPillRecovery(t *testing.T) {
 	// Enqueue a task with MaxRetry = 1 after starting w1
 	task := taskmq.NewTask("task:poison", []byte("poison payload"), taskmq.TaskOptions{
 		Queue:    queueName,
-		MaxRetry: 1,
+		MaxRetry: taskmq.Ptr(1),
 	})
 	err := client.Enqueue(ctx, task)
 	assert.NoError(t, err)

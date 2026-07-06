@@ -200,7 +200,7 @@ func TestTaskMQ_ExecutionPoolPanicRecovery(t *testing.T) {
 
 	task := taskmq.NewTask("task:panic-test", []byte("panic-payload"), taskmq.TaskOptions{
 		Queue:    queueName,
-		MaxRetry: 1, // Fail immediately to DLQ
+		MaxRetry: taskmq.Ptr(1), // Fail immediately to DLQ
 	})
 
 	err := client.Enqueue(ctx, task)

@@ -67,7 +67,7 @@ func TestTaskMQ_RetryFlow(t *testing.T) {
 	// Enqueue a task that allows 3 retries (MaxRetry = 3)
 	task := taskmq.NewTask("task:fail", []byte("fail payload"), taskmq.TaskOptions{
 		Queue:    queueName,
-		MaxRetry: 3,
+		MaxRetry: taskmq.Ptr(3),
 	})
 
 	err := client.Enqueue(ctx, task)
@@ -130,7 +130,7 @@ func TestTaskMQ_UnregisteredHandlerRetryAndDLQ(t *testing.T) {
 	// Enqueue a task with MaxRetry = 2
 	task := taskmq.NewTask("task:some_unregistered_job", []byte("data"), taskmq.TaskOptions{
 		Queue:    queueName,
-		MaxRetry: 2,
+		MaxRetry: taskmq.Ptr(2),
 	})
 
 	err := client.Enqueue(ctx, task)

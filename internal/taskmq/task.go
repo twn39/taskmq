@@ -42,7 +42,7 @@ type Task struct {
 type TaskOptions struct {
 	ID          string
 	Queue       string
-	MaxRetry    int
+	MaxRetry    *int
 	Timeout     time.Duration
 	UniqueKey   string
 	UniqueTTL   time.Duration
@@ -70,8 +70,8 @@ func NewTask(name string, payload []byte, opts ...TaskOptions) *Task {
 		if opt.Queue != "" {
 			task.Queue = opt.Queue
 		}
-		if opt.MaxRetry > 0 {
-			task.MaxRetry = opt.MaxRetry
+		if opt.MaxRetry != nil {
+			task.MaxRetry = *opt.MaxRetry
 		}
 		if opt.Timeout > 0 {
 			task.TimeoutMs = int(opt.Timeout.Milliseconds())
@@ -105,4 +105,9 @@ func DeserializeTask(data string) (*Task, error) {
 		return nil, err
 	}
 	return &task, nil
+}
+
+// Ptr returns a pointer to the passed value. Useful for setting optional fields in struct literals.
+func Ptr[T any](v T) *T {
+	return &v
 }

@@ -31,7 +31,7 @@ func toTaskmqTask(t *taskmqv1.Task) *Task {
 	task := NewTask(t.Name, t.Payload, TaskOptions{
 		ID:        t.Id,
 		Queue:     t.Queue,
-		MaxRetry:  int(t.MaxRetry),
+		MaxRetry:  Ptr(int(t.MaxRetry)),
 		Timeout:   time.Duration(t.TimeoutMs) * time.Millisecond,
 		UniqueKey: t.UniqueKey,
 		UniqueTTL: time.Duration(t.UniqueTtlMs) * time.Millisecond,

@@ -130,7 +130,7 @@ func TestTaskMQ_TimeoutCancellationFlow(t *testing.T) {
 	// Enqueue a task with TimeoutMs = 500 (0.5 second), MaxRetry = 2
 	task := taskmq.NewTask("task:slow", []byte("slow payload"), taskmq.TaskOptions{
 		Queue:    queueName,
-		MaxRetry: 2,
+		MaxRetry: taskmq.Ptr(2),
 		Timeout:  500 * time.Millisecond,
 	})
 
