@@ -2,6 +2,7 @@ package taskmq
 
 import (
 	"context"
+	"fmt"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -173,8 +174,13 @@ func (b *redisBroker) ScheduleRetry(ctx context.Context, task *Task, streamKey, 
 	if err != nil {
 		return err
 	}
-	delayedKey := KeysFor(task.Queue).Delayed()
+	keys := KeysFor(task.Queue)
+	delayedKey := keys.Delayed()
 	_, err = handleFailureCmd.Run(ctx, b.rdb, []string{delayedKey, streamKey, "", ""}, "retry", msgID, group, runAt.UnixMilli(), serialized, "", "").Result()
+	if err == nil {
+		// Notify the delayed scheduler so it wakes up instead of waiting up to maxSleep (10s).
+		_ = b.rdb.Publish(ctx, keys.DelayedWakeupChannel(), fmt.Sprintf("%d", runAt.UnixMilli())).Err()
+	}
 	return err
 }
 
@@ -187,6 +193,10 @@ func (b *redisBroker) DeferRateLimitedTask(ctx context.Context, msgID string, ta
 	delayedKey := keys.Delayed()
 	streamKey := keys.Stream()
 	_, err = deferRateLimitedTaskCmd.Run(ctx, b.rdb, []string{delayedKey, streamKey}, group, msgID, runAt.UnixMilli(), serialized).Result()
+	if err == nil {
+		// Notify the delayed scheduler so it wakes up instead of waiting up to maxSleep (10s).
+		_ = b.rdb.Publish(ctx, keys.DelayedWakeupChannel(), fmt.Sprintf("%d", runAt.UnixMilli())).Err()
+	}
 	return err
 }
 

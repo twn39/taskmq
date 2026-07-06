@@ -53,6 +53,10 @@ func (k QueueKeys) CancelChannel() string {
 	return fmt.Sprintf("taskmq:{%s}:cancel", k.queue)
 }
 
+func (k QueueKeys) DelayedWakeupChannel() string {
+	return fmt.Sprintf("taskmq:{%s}:delayed_wakeup", k.queue)
+}
+
 // Compatibility layer for older global functions to prevent breaking external dependencies and tests
 
 func StreamKey(queue string) string {
@@ -93,4 +97,8 @@ func CancelledKey(queue, taskID string) string {
 
 func CancelChannel(queue string) string {
 	return KeysFor(queue).CancelChannel()
+}
+
+func DelayedWakeupChannel(queue string) string {
+	return KeysFor(queue).DelayedWakeupChannel()
 }

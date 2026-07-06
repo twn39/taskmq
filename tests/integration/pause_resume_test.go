@@ -59,6 +59,22 @@ func TestTaskMQ_PauseResume_SingleQueue(t *testing.T) {
 	app.RequireStart()
 	defer app.RequireStop()
 
+	// Wait for control subscriber to be ready
+	controlChannel := taskmq.ControlChannel(queueName)
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatal("Timeout waiting for control subscriber to be ready")
+		default:
+			numSub, err := rdb.PubSubNumSub(ctx, controlChannel).Result()
+			if err == nil && numSub[controlChannel] > 0 {
+				goto ready
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+ready:
+
 	// Case 1: Active queue - Task 1 should be processed immediately
 	task1 := taskmq.NewTask("task:pause_resume", []byte("task1"), taskmq.TaskOptions{Queue: queueName})
 	err := client.Enqueue(ctx, task1)
@@ -70,6 +86,9 @@ func TestTaskMQ_PauseResume_SingleQueue(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("Timeout waiting for task1 to be processed")
 	}
+
+	// Wait briefly to ensure the worker's control subscriber is fully established
+	time.Sleep(200 * time.Millisecond)
 
 	// Case 2: Pause queue - Enqueue Task 2, it should NOT be processed
 	err = client.Pause(ctx, queueName)

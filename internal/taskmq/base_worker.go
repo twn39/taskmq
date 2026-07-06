@@ -217,6 +217,37 @@ func (b *baseWorker) processMessage(ctx context.Context, streamKey string, msg r
 		return
 	}
 
+	// Override task.Retry if delivery count is passed (representing crashes / reclaims)
+	if devCountVal, ok := msg.Values["__delivery_count"]; ok {
+		var devCount int64
+		switch v := devCountVal.(type) {
+		case int64:
+			devCount = v
+		case int:
+			devCount = int64(v)
+		case float64:
+			devCount = int64(v)
+		}
+		if devCount > 0 {
+			task.Retry = int(devCount) - 1
+		}
+	}
+
+	// Check if the task has exceeded MaxRetry due to crash recovery
+	if task.Retry > task.MaxRetry {
+		b.logger.Warn("Task has exceeded MaxRetry due to crash recovery, routing directly to DLQ",
+			zap.String("task_id", task.ID),
+			zap.Int("retry", task.Retry),
+			zap.Int("max_retry", task.MaxRetry),
+		)
+		dlqName := b.deadLetterPolicy.DLQQueueName(&task)
+		b.deadLetterPolicy.BeforeDeadLetter(ctx, &task, fmt.Errorf("task exceeded max retry limits (%d/%d) due to worker crashes", task.Retry, task.MaxRetry))
+		errMove := b.broker.MoveToDLQ(ctx, &task, streamKey, msg.ID, b.group, dlqName)
+		if errMove != nil {
+			b.logger.Error("Failed to move task to DLQ in crash recovery check", zap.Error(errMove))
+		}
+		return
+	}
 
 	// Check if task is already cancelled before execution (pre-execution check for backlog tasks)
 	cancelledKey := KeysFor(task.Queue).Cancelled(task.ID)

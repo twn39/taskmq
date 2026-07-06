@@ -150,3 +150,67 @@ func TestTaskMQ_TimeoutCancellationFlow(t *testing.T) {
 	}
 	t.Log("Task successfully timed out on first run and triggered retry")
 }
+
+func TestTaskMQ_DelayedSchedulerWakeup(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	queueName := "wakeup_test_queue"
+	streamKey := taskmq.StreamKey(queueName)
+	delayedKey := taskmq.DelayedKey(queueName)
+
+	runChan := make(chan time.Time, 1)
+
+	var rdb *goredis.Client
+	var client taskmq.Client
+
+	app := fxtest.New(t,
+		fx.Provide(
+			NewTestConfig,
+			logger.NewLogger,
+			internalredis.NewRedisClient,
+			taskmq.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
+				// We configure the scheduler with a very long poll interval (e.g. 5 seconds)
+				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
+					taskmq.WithGroup("wakeup-group"),
+					taskmq.WithConsumer("wakeup-consumer"),
+					taskmq.WithConcurrency(1),
+					taskmq.WithSchedulerPollInterval(5*time.Second),
+				)
+				pool.Register("task:wakeup", func(ctx context.Context, task *taskmq.Task) error {
+					runChan <- time.Now()
+					return nil
+				})
+				return pool
+			},
+		),
+		fx.Invoke(taskmq.RegisterWorkerPoolLifecycle),
+		fx.Populate(&rdb, &client),
+	)
+
+	rdb.Del(ctx, streamKey, delayedKey)
+	defer rdb.Del(ctx, streamKey, delayedKey)
+
+	enqueueTime := time.Now()
+
+	app.RequireStart()
+	defer app.RequireStop()
+
+	// Enqueue with a 1-second delay
+	task := taskmq.NewTask("task:wakeup", []byte("wakeup data"), taskmq.TaskOptions{
+		Queue: queueName,
+	})
+	err := client.EnqueueIn(ctx, task, 1*time.Second)
+	assert.NoError(t, err)
+
+	select {
+	case execTime := <-runChan:
+		duration := execTime.Sub(enqueueTime)
+		// If it takes significantly less than 5 seconds, it means the wakeup channel successfully preempted the 5s timer!
+		assert.Less(t, duration.Seconds(), 2.5, "Task should execute in under 2.5 seconds, preempting the 5-second poll interval")
+		t.Logf("Task executed after %v (5s poll interval successfully preempted)", duration)
+	case <-ctx.Done():
+		t.Fatal("Timeout waiting for delayed task execution")
+	}
+}

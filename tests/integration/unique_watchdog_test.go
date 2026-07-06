@@ -98,6 +98,8 @@ func TestTaskMQ_UniqueScope_UntilSuccess(t *testing.T) {
 
 	queueName := "unq_success_queue"
 	streamKey := taskmq.StreamKey(queueName)
+	dlqKey := taskmq.DLQKey(queueName)
+	dlqIndexKey := taskmq.DLQIndexKey(queueName)
 	uniqueLockKey := taskmq.UniqueKey(queueName, "success-key")
 
 	runChan := make(chan error, 5)
@@ -132,20 +134,23 @@ func TestTaskMQ_UniqueScope_UntilSuccess(t *testing.T) {
 		fx.Populate(&rdb, &client),
 	)
 
-	rdb.Del(ctx, streamKey, uniqueLockKey)
-	defer rdb.Del(ctx, streamKey, uniqueLockKey)
+	rdb.Del(ctx, streamKey, uniqueLockKey, dlqKey, dlqIndexKey)
+	defer rdb.Del(ctx, streamKey, uniqueLockKey, dlqKey, dlqIndexKey)
 
 	app.RequireStart()
 	defer app.RequireStop()
 
-	// 1. Enqueue unique task that fails, with UniqueUntilSuccess
+	// 1. Enqueue unique task that fails, with UniqueUntilSuccess.
+	// Use WithTaskMaxRetry(0) so task1 goes directly to DLQ on failure with no retries.
+	// NOTE: MaxRetry:0 in TaskOptions is ignored by NewTask (condition is opt.MaxRetry > 0),
+	// so we must use the WithTaskMaxRetry TaskOption in Enqueue instead.
 	task1 := taskmq.NewTask("task:unq_success", []byte("fail"), taskmq.TaskOptions{
 		Queue:       queueName,
 		UniqueKey:   "success-key",
 		UniqueTTL:   10 * time.Second,
 		UniqueScope: taskmq.UniqueUntilSuccess,
 	})
-	err := client.Enqueue(ctx, task1)
+	err := client.Enqueue(ctx, task1, taskmq.WithTaskMaxRetry(0))
 	assert.NoError(t, err)
 
 	// Wait for handler to execute and fail
@@ -156,8 +161,8 @@ func TestTaskMQ_UniqueScope_UntilSuccess(t *testing.T) {
 		t.Fatal("Timeout waiting for task 1 to execute")
 	}
 
-	// Wait briefly for middleware failure cleanup
-	time.Sleep(200 * time.Millisecond)
+	// Wait for middleware failure cleanup: MoveToDLQ + ReleaseUniqueLock must finish.
+	time.Sleep(500 * time.Millisecond)
 
 	// 2. Try to enqueue task 2 with the same key while task 1 is scheduled for retry.
 	// It should succeed because UniqueUntilSuccess releases the lock immediately on execution failure!

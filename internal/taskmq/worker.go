@@ -193,6 +193,23 @@ func (w *workerPool) runBackgroundLoop(workerID int) {
 
 			for _, stream := range streams {
 				for _, msg := range stream.Messages {
+					// Re-check pause state: XReadGroup may have returned immediately
+					// due to a new message arriving while the queue was being paused.
+					// Wait for resume here so the message is not left stuck in the PEL.
+					if w.isQueuePaused(w.queue) {
+						w.logger.Debug("Queue was paused while XReadGroup was blocking; waiting for resume before processing",
+							zap.String("queue", w.queue),
+							zap.String("msg_id", msg.ID),
+						)
+						pauseCh := w.getOrInitPauseChan(w.queue)
+						select {
+						case <-w.consumerCtx.Done():
+							return
+						case <-pauseCh:
+							w.logger.Debug("Queue resumed, processing buffered message", zap.String("queue", w.queue))
+						}
+					}
+
 					if w.syncExecution {
 						w.ProcessMessage(w.consumerCtx, msg)
 					} else {

@@ -95,7 +95,50 @@ func (j *pelRecoveryJanitor) Run(ctx context.Context) error {
 
 			if len(claimed) > 0 {
 				j.logger.Warn("Janitor reclaimed stalled active tasks from PEL", zap.Int("count", len(claimed)))
+
+				// Batch query XPendingExt for delivery counts (RetryCount)
+				var pends []redis.XPendingExt
+				var pendErr error
+				if len(claimed) == 1 {
+					pends, pendErr = j.rdb.XPendingExt(ctx, &redis.XPendingExtArgs{
+						Stream:   streamKey,
+						Group:    j.group,
+						Start:    claimed[0].ID,
+						End:      claimed[0].ID,
+						Count:    1,
+						Consumer: j.consumer,
+					}).Result()
+				} else {
+					pends, pendErr = j.rdb.XPendingExt(ctx, &redis.XPendingExtArgs{
+						Stream:   streamKey,
+						Group:    j.group,
+						Start:    claimed[0].ID,
+						End:      claimed[len(claimed)-1].ID,
+						Count:    int64(len(claimed)),
+						Consumer: j.consumer,
+					}).Result()
+				}
+
+				pendingMap := make(map[string]int64)
+				if pendErr == nil {
+					for _, p := range pends {
+						pendingMap[p.ID] = p.RetryCount
+					}
+				} else {
+					j.logger.Error("Janitor failed to batch query pending message delivery counts", zap.Error(pendErr))
+				}
+
 				for _, msg := range claimed {
+					deliveryCount, ok := pendingMap[msg.ID]
+					if !ok {
+						deliveryCount = 1 // Fallback
+					}
+
+					if msg.Values == nil {
+						msg.Values = make(map[string]interface{})
+					}
+					msg.Values["__delivery_count"] = deliveryCount
+
 					// Acquire semaphore slot or wait if limit reached
 					select {
 					case sem <- struct{}{}:

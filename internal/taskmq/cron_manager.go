@@ -186,10 +186,13 @@ func (m *cronManager) Run(ctx context.Context) error {
 					continue
 				}
 
-				_ = m.rdb.ZAdd(ctx, delayedKey, redis.Z{
+				errZAdd := m.rdb.ZAdd(ctx, delayedKey, redis.Z{
 					Score:  float64(nextTime.UnixMilli()),
 					Member: string(serialized),
 				}).Err()
+				if errZAdd == nil {
+					_ = m.rdb.Publish(ctx, KeysFor(task.Queue).DelayedWakeupChannel(), fmt.Sprintf("%d", nextTime.UnixMilli())).Err()
+				}
 			}
 		}
 	}
@@ -223,8 +226,7 @@ func (m *cronManager) Reschedule(ctx context.Context, task *Task) error {
 		return err
 	}
 
-	delayedKey := DelayedKey(task.Queue)
-	err = m.rdb.ZAdd(ctx, delayedKey, redis.Z{
+	err = m.rdb.ZAdd(ctx, KeysFor(task.Queue).Delayed(), redis.Z{
 		Score:  float64(nextTime.UnixMilli()),
 		Member: string(serialized),
 	}).Err()
@@ -233,6 +235,8 @@ func (m *cronManager) Reschedule(ctx context.Context, task *Task) error {
 		m.logger.Error("Cron: failed to ZADD next run to ZSET", zap.Error(err))
 		return err
 	}
+
+	_ = m.rdb.Publish(ctx, KeysFor(task.Queue).DelayedWakeupChannel(), fmt.Sprintf("%d", nextTime.UnixMilli())).Err()
 
 	m.logger.Debug("Cron: scheduled next run", zap.String("job_name", task.Name), zap.Time("next_run", nextTime))
 	return nil

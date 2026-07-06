@@ -266,13 +266,19 @@ func (c *client) EnqueueAt(ctx context.Context, task *Task, at time.Time, opts .
 		if val, ok := res.(int64); ok && val == -1 {
 			return ErrDuplicateTask
 		}
+		_ = c.rdb.Publish(ctx, keys.DelayedWakeupChannel(), strconv.FormatInt(at.UnixMilli(), 10)).Err()
 		return nil
 	}
 
-	return c.rdb.ZAdd(ctx, delayedKey, redis.Z{
+	err = c.rdb.ZAdd(ctx, delayedKey, redis.Z{
 		Score:  float64(at.UnixMilli()),
 		Member: serialized,
 	}).Err()
+	if err != nil {
+		return err
+	}
+	_ = c.rdb.Publish(ctx, keys.DelayedWakeupChannel(), strconv.FormatInt(at.UnixMilli(), 10)).Err()
+	return nil
 }
 
 // ListDeadLetters returns the list of dead-letter tasks in the queue, sorted by descending death time
@@ -371,6 +377,9 @@ func (c *client) RegisterCron(ctx context.Context, jobName string, spec string, 
 	firstRun := sched.Next(time.Now())
 
 	_, err = registerCronCmd.Run(ctx, c.rdb, []string{configsKey, delayedKey}, jobName, spec, serialized, firstRun.UnixMilli()).Result()
+	if err == nil {
+		_ = c.rdb.Publish(ctx, keys.DelayedWakeupChannel(), strconv.FormatInt(firstRun.UnixMilli(), 10)).Err()
+	}
 	return err
 }
 

@@ -24,6 +24,7 @@ func TestTaskMQ_UniquenessFlow(t *testing.T) {
 	uniqueLockKey := taskmq.UniqueKey(queueName, "my-unique-key")
 
 	runChan := make(chan bool, 1)
+	blockChan := make(chan struct{})
 
 	var rdb *goredis.Client
 	var client taskmq.Client
@@ -41,6 +42,7 @@ func TestTaskMQ_UniquenessFlow(t *testing.T) {
 					taskmq.WithConcurrency(1),
 				)
 				pool.Register("task:unique", func(ctx context.Context, task *taskmq.Task) error {
+					<-blockChan
 					runChan <- true
 					return nil
 				})
@@ -74,6 +76,9 @@ func TestTaskMQ_UniquenessFlow(t *testing.T) {
 	})
 	err = client.Enqueue(ctx, task2)
 	assert.ErrorIs(t, err, taskmq.ErrDuplicateTask, "Should return ErrDuplicateTask on duplicates")
+
+	// Allow task 1 to finish
+	close(blockChan)
 
 	// 3. Wait for task 1 to run successfully
 	select {

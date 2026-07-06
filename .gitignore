@@ -18,3 +18,4 @@
 *.log
 /static/*
 .codegraph
+code_review.md
