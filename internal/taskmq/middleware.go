@@ -215,7 +215,10 @@ func UniqueLockWatchdogMiddleware(broker TaskBroker, logger *zap.Logger) CoreHan
 
 		// UniqueUntilSuccess: If error occurs, release unique lock during retry delay
 		if err != nil && task.UniqueScope == UniqueUntilSuccess {
-			if rErr := broker.ReleaseUniqueLock(context.Background(), task); rErr != nil {
+			releaseCtx, cancelRelease := context.WithTimeout(context.Background(), 5*time.Second)
+			rErr := broker.ReleaseUniqueLock(releaseCtx, task)
+			cancelRelease()
+			if rErr != nil {
 				logger.Error("Failed to release unique lock on failure for UniqueUntilSuccess",
 					zap.String("task_id", task.ID),
 					zap.Error(rErr),

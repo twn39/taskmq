@@ -48,10 +48,9 @@ const luaHandleFailure = `
 	redis.call("XDEL", streamKey, msgId)
 
 	-- Add to DLQ or Retry Delayed ZSet
-	redis.call("ZADD", targetKey, score, serializedTask)
-
-	-- Clean up uniqueness lock if moving to DLQ and lock matches
 	if action == "dlq" then
+		redis.call("ZADD", targetKey, score, taskId)
+
 		-- Set the secondary index in DLQ Hash
 		if dlqIndexKey ~= nil and dlqIndexKey ~= "" and taskId ~= nil and taskId ~= "" then
 			redis.call("HSET", dlqIndexKey, taskId, serializedTask)
@@ -61,23 +60,8 @@ const luaHandleFailure = `
 		-- Before removing from Sorted Set, clean them up from the Hash index.
 		if dlqIndexKey ~= nil and dlqIndexKey ~= "" then
 			local toRemove = redis.call("ZRANGE", targetKey, 0, -1001)
-			for _, member in ipairs(toRemove) do
-				local id = nil
-				if string.sub(member, 1, 1) == "{" then
-					id = string.match(member, '"id"%s*:%s*"([^"]+)"')
-				else
-					if #member >= 2 then
-						local b1 = string.byte(member, 1)
-						local b2 = string.byte(member, 2)
-						local len = b1 * 256 + b2
-						if #member >= 2 + len then
-							id = string.sub(member, 3, 2 + len)
-						end
-					end
-				end
-				if id then
-					redis.call("HDEL", dlqIndexKey, id)
-				end
+			for _, id in ipairs(toRemove) do
+				redis.call("HDEL", dlqIndexKey, id)
 			end
 		end
 
@@ -88,6 +72,8 @@ const luaHandleFailure = `
 				redis.call("DEL", lockKey)
 			end
 		end
+	else
+		redis.call("ZADD", targetKey, score, serializedTask)
 	end
 	return 1
 `

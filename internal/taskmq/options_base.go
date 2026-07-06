@@ -24,6 +24,7 @@ type BaseWorkerOptions struct {
 	executionPool     ExecutionPool
 	context           context.Context
 	groupKeyExtractor func([]byte) string
+	shutdownTimeout   time.Duration
 
 	cron      CronOptions
 	scheduler SchedulerOptions
@@ -43,11 +44,12 @@ func (o sharedOption) ApplyPriorityWorker(opts *PriorityWorkerOptions) error {
 
 func defaultBaseWorkerOptions(codec Codec) BaseWorkerOptions {
 	return BaseWorkerOptions{
-		concurrency: 5,
-		group:       "taskmq-group",
-		consumer:    "taskmq-consumer-1",
-		codec:       codec,
-		context:     context.Background(),
+		concurrency:     5,
+		group:           "taskmq-group",
+		consumer:        "taskmq-consumer-1",
+		codec:           codec,
+		context:         context.Background(),
+		shutdownTimeout: 1 * time.Second,
 		cron: CronOptions{
 			healingInterval: 1 * time.Minute,
 			lockTTL:         50 * time.Second,
@@ -157,6 +159,16 @@ func WithExecutionPool(pool ExecutionPool) sharedOption {
 			return errors.New("execution pool cannot be nil")
 		}
 		o.executionPool = pool
+		return nil
+	}
+}
+
+func WithShutdownTimeout(d time.Duration) sharedOption {
+	return func(o *BaseWorkerOptions) error {
+		if d <= 0 {
+			return errors.New("shutdown timeout must be greater than 0")
+		}
+		o.shutdownTimeout = d
 		return nil
 	}
 }

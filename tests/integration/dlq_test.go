@@ -191,7 +191,7 @@ func TestTaskMQ_DLQIndexCapacityProtection(t *testing.T) {
 		task := taskmq.NewTask("task:test", []byte(fmt.Sprintf("payload-%d", i)), taskmq.TaskOptions{
 			Queue: queueName,
 		})
-		task.ID = fmt.Sprintf("task-id-%d", i)
+		task.ID = fmt.Sprintf("task-id-%04d", i)
 		err := broker.MoveToDLQ(ctx, task, "fake-stream", "fake-msg-id", "fake-group", queueName)
 		assert.NoError(t, err)
 	}
@@ -208,13 +208,13 @@ func TestTaskMQ_DLQIndexCapacityProtection(t *testing.T) {
 
 	// 4. Verify the 5 oldest tasks (1 to 5) are evicted from Hash index
 	for i := 1; i <= 5; i++ {
-		exists, err := rdb.HExists(ctx, dlqIndexKey, fmt.Sprintf("task-id-%d", i)).Result()
+		exists, err := rdb.HExists(ctx, dlqIndexKey, fmt.Sprintf("task-id-%04d", i)).Result()
 		assert.NoError(t, err)
 		assert.False(t, exists, "Task %d should have been evicted from DLQ Hash index", i)
 	}
 
-	// 5. Verify task-id-6 is present
-	exists6, err := rdb.HExists(ctx, dlqIndexKey, "task-id-6").Result()
+	// 5. Verify task-id-0006 is present
+	exists6, err := rdb.HExists(ctx, dlqIndexKey, "task-id-0006").Result()
 	assert.NoError(t, err)
 	assert.True(t, exists6)
 }
@@ -253,7 +253,7 @@ func TestTaskMQ_DLQIndexCapacityProtection_Binary(t *testing.T) {
 		task := taskmq.NewTask("task:test", []byte(fmt.Sprintf("payload-%d", i)), taskmq.TaskOptions{
 			Queue: queueName,
 		})
-		task.ID = fmt.Sprintf("task-id-%d", i)
+		task.ID = fmt.Sprintf("task-id-%04d", i)
 		err := broker.MoveToDLQ(ctx, task, "fake-stream", "fake-msg-id", "fake-group", queueName)
 		assert.NoError(t, err)
 	}
@@ -270,13 +270,13 @@ func TestTaskMQ_DLQIndexCapacityProtection_Binary(t *testing.T) {
 
 	// Verify the 5 oldest tasks (1 to 5) are evicted from Hash index
 	for i := 1; i <= 5; i++ {
-		exists, err := rdb.HExists(ctx, dlqIndexKey, fmt.Sprintf("task-id-%d", i)).Result()
+		exists, err := rdb.HExists(ctx, dlqIndexKey, fmt.Sprintf("task-id-%04d", i)).Result()
 		assert.NoError(t, err)
 		assert.False(t, exists, "Task %d should have been evicted from DLQ Hash index", i)
 	}
 
-	// Verify task-id-6 is present
-	exists6, err := rdb.HExists(ctx, dlqIndexKey, "task-id-6").Result()
+	// Verify task-id-0006 is present
+	exists6, err := rdb.HExists(ctx, dlqIndexKey, "task-id-0006").Result()
 	assert.NoError(t, err)
 	assert.True(t, exists6)
 }

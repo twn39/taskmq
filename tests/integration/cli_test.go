@@ -113,7 +113,7 @@ func TestTaskMQ_CLI_Operations(t *testing.T) {
 	deadTask.Retry = 3
 	deadTask.LastError = "connection failure"
 	serializedDead, _ := taskmq.JSONCodec{}.Marshal(deadTask)
-	err = rdb.ZAdd(ctx, dlqKey, goredis.Z{Score: float64(time.Now().UnixMilli()), Member: serializedDead}).Err()
+	err = rdb.ZAdd(ctx, dlqKey, goredis.Z{Score: float64(time.Now().UnixMilli()), Member: deadTask.ID}).Err()
 	assert.NoError(t, err)
 	err = rdb.HSet(ctx, dlqIndexKey, deadTask.ID, serializedDead).Err()
 	assert.NoError(t, err)
@@ -144,7 +144,7 @@ func TestTaskMQ_CLI_Operations(t *testing.T) {
 	assert.Equal(t, int64(0), dlqCount, "Task should be removed from DLQ")
 
 	// Put it back to test DLQ deletion
-	err = rdb.ZAdd(ctx, dlqKey, goredis.Z{Score: float64(time.Now().UnixMilli()), Member: serializedDead}).Err()
+	err = rdb.ZAdd(ctx, dlqKey, goredis.Z{Score: float64(time.Now().UnixMilli()), Member: deadTask.ID}).Err()
 	assert.NoError(t, err)
 	err = rdb.HSet(ctx, dlqIndexKey, deadTask.ID, serializedDead).Err()
 	assert.NoError(t, err)

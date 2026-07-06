@@ -150,7 +150,7 @@ func TestAdminDashboard(t *testing.T) {
 		rdb.Del(ctx, dlqKey, dlqIndexKey)
 		defer rdb.Del(ctx, dlqKey, dlqIndexKey)
 
-		err := rdb.ZAdd(ctx, dlqKey, goredis.Z{Score: float64(time.Now().UnixMilli()), Member: serializedDead}).Err()
+		err := rdb.ZAdd(ctx, dlqKey, goredis.Z{Score: float64(time.Now().UnixMilli()), Member: deadTask.ID}).Err()
 		assert.NoError(t, err)
 		err = rdb.HSet(ctx, dlqIndexKey, deadTask.ID, serializedDead).Err()
 		assert.NoError(t, err)
@@ -171,7 +171,7 @@ func TestAdminDashboard(t *testing.T) {
 		assert.Contains(t, rec.Body.String(), "re-enqueued for retry")
 
 		// Re-add to test deletion
-		err = rdb.ZAdd(ctx, dlqKey, goredis.Z{Score: float64(time.Now().UnixMilli()), Member: serializedDead}).Err()
+		err = rdb.ZAdd(ctx, dlqKey, goredis.Z{Score: float64(time.Now().UnixMilli()), Member: deadTask.ID}).Err()
 		assert.NoError(t, err)
 		err = rdb.HSet(ctx, dlqIndexKey, deadTask.ID, serializedDead).Err()
 		assert.NoError(t, err)
@@ -200,7 +200,7 @@ func TestAdminDashboard(t *testing.T) {
 			deadTask.LastError = "bulk error"
 			serialized, _ := json.Marshal(deadTask)
 
-			rdb.ZAdd(ctx, dlqKey, goredis.Z{Score: float64(time.Now().UnixMilli()), Member: serialized})
+			rdb.ZAdd(ctx, dlqKey, goredis.Z{Score: float64(time.Now().UnixMilli()), Member: deadTask.ID})
 			rdb.HSet(ctx, dlqIndexKey, deadTask.ID, serialized)
 		}
 
@@ -233,7 +233,7 @@ func TestAdminDashboard(t *testing.T) {
 			deadTask := taskmq.NewTask("task:bulk-failed", []byte("bad-data"), taskmq.TaskOptions{Queue: queueName})
 			deadTask.ID = fmt.Sprintf("dead-id-purge-%d", i)
 			serialized, _ := json.Marshal(deadTask)
-			rdb.ZAdd(ctx, dlqKey, goredis.Z{Score: float64(time.Now().UnixMilli()), Member: serialized})
+			rdb.ZAdd(ctx, dlqKey, goredis.Z{Score: float64(time.Now().UnixMilli()), Member: deadTask.ID})
 			rdb.HSet(ctx, dlqIndexKey, deadTask.ID, serialized)
 		}
 

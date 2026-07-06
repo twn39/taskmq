@@ -44,6 +44,9 @@ type baseWorker struct {
 	middlewareChain []CoreHandlerFunc
 	cancelations    *Cancelations
 
+	// Graceful shutdown timeout configuration
+	shutdownTimeout time.Duration
+
 	// Queue Pause/Resume Tracking
 	mu           sync.RWMutex
 	pausedQueues map[string]bool
@@ -72,6 +75,7 @@ func (b *baseWorker) initBase(rdb *redis.Client, logger *zap.Logger, opt *BaseWo
 	}
 
 	b.groupKeyExtractor = opt.groupKeyExtractor
+	b.shutdownTimeout = opt.shutdownTimeout
 
 	b.broker = opt.policies.broker
 	b.retryPolicy = opt.policies.retryPolicy
@@ -175,9 +179,9 @@ func (b *baseWorker) Stop(ctxs ...context.Context) {
 	var waitCtx context.Context
 	var cancel context.CancelFunc
 	if len(ctxs) > 0 {
-		waitCtx, cancel = context.WithTimeout(ctxs[0], 1*time.Second)
+		waitCtx, cancel = context.WithTimeout(ctxs[0], b.shutdownTimeout)
 	} else {
-		waitCtx, cancel = context.WithTimeout(context.Background(), 1*time.Second)
+		waitCtx, cancel = context.WithTimeout(context.Background(), b.shutdownTimeout)
 	}
 	defer cancel()
 
@@ -340,7 +344,19 @@ func (b *baseWorker) startCancelSubscriber(ctx context.Context, wg *sync.WaitGro
 				return
 			case msg, ok := <-ch:
 				if !ok {
-					return
+					b.logger.Warn("Cancel subscriber: PubSub channel closed, refreshing subscription")
+					pubsub.Close()
+					if ctx.Err() != nil {
+						return
+					}
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(1 * time.Second): // Backoff to prevent tight spin
+					}
+					pubsub = b.rdb.Subscribe(ctx, channels...)
+					ch = pubsub.Channel()
+					continue
 				}
 				taskID := msg.Payload
 				b.cancelations.Cancel(taskID)
@@ -424,7 +440,19 @@ func (b *baseWorker) startControlSubscriber(ctx context.Context, wg *sync.WaitGr
 				b.reconcilePausedStates(ctx, queues)
 			case msg, ok := <-ch:
 				if !ok {
-					return
+					b.logger.Warn("Control subscriber: PubSub channel closed, refreshing subscription")
+					pubsub.Close()
+					if ctx.Err() != nil {
+						return
+					}
+					select {
+					case <-ctx.Done():
+						return
+					case <-time.After(1 * time.Second): // Backoff to prevent tight spin
+					}
+					pubsub = b.rdb.Subscribe(ctx, channels...)
+					ch = pubsub.Channel()
+					continue
 				}
 
 				// Find which queue channel this message belongs to

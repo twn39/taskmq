@@ -284,15 +284,31 @@ func (c *client) EnqueueAt(ctx context.Context, task *Task, at time.Time, opts .
 // ListDeadLetters returns the list of dead-letter tasks in the queue, sorted by descending death time
 func (c *client) ListDeadLetters(ctx context.Context, queue string, limit int) ([]*Task, error) {
 	dlqKey := KeysFor(queue).DLQ()
-	members, err := c.rdb.ZRevRange(ctx, dlqKey, 0, int64(limit-1)).Result()
+	taskIDs, err := c.rdb.ZRevRange(ctx, dlqKey, 0, int64(limit-1)).Result()
+	if err != nil {
+		return nil, err
+	}
+	if len(taskIDs) == 0 {
+		return nil, nil
+	}
+
+	dlqIndexKey := KeysFor(queue).DLQIndex()
+	members, err := c.rdb.HMGet(ctx, dlqIndexKey, taskIDs...).Result()
 	if err != nil {
 		return nil, err
 	}
 
 	tasks := make([]*Task, 0, len(members))
 	for _, m := range members {
+		if m == nil {
+			continue
+		}
+		str, ok := m.(string)
+		if !ok {
+			continue
+		}
 		task := &Task{}
-		err := c.codec.Unmarshal(unsafeStringToBytes(m), task)
+		err := c.codec.Unmarshal(unsafeStringToBytes(str), task)
 		if err != nil {
 			continue // skip corrupted data
 		}
@@ -604,21 +620,37 @@ func (c *client) DeleteCronJob(ctx context.Context, queue string, jobName string
 func (c *client) RetryAllDeadLetters(ctx context.Context, queue string) (int64, error) {
 	keys := KeysFor(queue)
 	dlqKey := keys.DLQ()
+	dlqIndexKey := keys.DLQIndex()
 
 	var totalRetried int64
 	for {
-		members, err := c.rdb.ZRange(ctx, dlqKey, 0, 99).Result()
+		taskIDs, err := c.rdb.ZRange(ctx, dlqKey, 0, 99).Result()
 		if err != nil {
 			return totalRetried, err
 		}
-		if len(members) == 0 {
+		if len(taskIDs) == 0 {
 			break
 		}
 
-		for _, m := range members {
+		members, err := c.rdb.HMGet(ctx, dlqIndexKey, taskIDs...).Result()
+		if err != nil {
+			return totalRetried, err
+		}
+
+		for i, m := range members {
+			taskID := taskIDs[i]
+			if m == nil {
+				_ = c.DeleteDeadLetter(ctx, queue, taskID)
+				continue
+			}
+			str, ok := m.(string)
+			if !ok {
+				_ = c.DeleteDeadLetter(ctx, queue, taskID)
+				continue
+			}
 			task := &Task{}
-			if err := c.codec.Unmarshal(unsafeStringToBytes(m), task); err != nil {
-				_ = c.DeleteDeadLetter(ctx, queue, task.ID)
+			if err := c.codec.Unmarshal(unsafeStringToBytes(str), task); err != nil {
+				_ = c.DeleteDeadLetter(ctx, queue, taskID)
 				continue
 			}
 
