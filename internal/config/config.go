@@ -44,18 +44,40 @@ type QueueConfig struct {
 }
 
 type TaskMQConfig struct {
-	Codec                    string        `mapstructure:"codec"`
-	DefaultUniqueTTL         time.Duration `mapstructure:"default_unique_ttl"`
-	CronHealingInterval      time.Duration `mapstructure:"cron_healing_interval"`
-	CronHealingLockTTL       time.Duration `mapstructure:"cron_healing_lock_ttl"`
-	CronHealingScanBatchSize int           `mapstructure:"cron_healing_scan_batch_size"`
-	CronHealingScanMaxCount  int           `mapstructure:"cron_healing_scan_max_count"`
-	SchedulerPollInterval    time.Duration `mapstructure:"scheduler_poll_interval"`
-	JanitorInterval          time.Duration `mapstructure:"janitor_interval"`
-	JanitorMinIdleTime       time.Duration `mapstructure:"janitor_min_idle_time"`
-	PriorityQueuesEnabled    bool          `mapstructure:"priority_queues_enabled"`
-	PriorityStrategy         string        `mapstructure:"priority_strategy"`
-	Queues                   []QueueConfig `mapstructure:"queues"`
+	Codec                    string          `mapstructure:"codec"`
+	DefaultUniqueTTL         time.Duration   `mapstructure:"default_unique_ttl"`
+	CronHealingInterval      time.Duration   `mapstructure:"cron_healing_interval"`
+	CronHealingLockTTL       time.Duration   `mapstructure:"cron_healing_lock_ttl"`
+	CronHealingScanBatchSize int             `mapstructure:"cron_healing_scan_batch_size"`
+	CronHealingScanMaxCount  int             `mapstructure:"cron_healing_scan_max_count"`
+	SchedulerPollInterval    time.Duration   `mapstructure:"scheduler_poll_interval"`
+	JanitorInterval          time.Duration   `mapstructure:"janitor_interval"`
+	JanitorMinIdleTime       time.Duration   `mapstructure:"janitor_min_idle_time"`
+	PriorityQueuesEnabled    bool            `mapstructure:"priority_queues_enabled"`
+	PriorityStrategy         string          `mapstructure:"priority_strategy"`
+	Queues                   []QueueConfig   `mapstructure:"queues"`
+	Lifecycle                LifecycleConfig `mapstructure:"lifecycle"`
+}
+
+// LifecycleConfig mirrors taskmq.LifecycleConfig for YAML/env loading.
+// Zero limits mean disabled (except dlq_max_count defaulted to 1000).
+type LifecycleConfig struct {
+	StreamMaxLen          int64         `mapstructure:"stream_maxlen"`
+	EnqueueSoftLimit      int64         `mapstructure:"enqueue_soft_limit"`
+	EnqueueHardLimit      int64         `mapstructure:"enqueue_hard_limit"`
+	DelayedMaxCount       int64         `mapstructure:"delayed_max_count"`
+	DelayedMaxDelay       time.Duration `mapstructure:"delayed_max_delay"`
+	DelayedOverflow       string        `mapstructure:"delayed_overflow"`
+	// DLQMaxCount: nil = default 1000; ptr(0) = unlimited; >0 = cap.
+	DLQMaxCount *int64 `mapstructure:"dlq_max_count"`
+	DLQMaxAge   time.Duration `mapstructure:"dlq_max_age"`
+	CancelledTTL          time.Duration `mapstructure:"cancelled_ttl"`
+	MaxPayloadBytes       int           `mapstructure:"max_payload_bytes"`
+	SafeTrimEnabled       *bool         `mapstructure:"safe_trim_enabled"`
+	SafeTrimInterval      time.Duration `mapstructure:"safe_trim_interval"`
+	SafeTrimBatchLimit    int64         `mapstructure:"safe_trim_batch_limit"`
+	IdleConsumerTimeout   time.Duration `mapstructure:"idle_consumer_timeout"`
+	PurgeCancelledDelayed *bool         `mapstructure:"purge_cancelled_delayed"`
 }
 
 // NewConfig loads the configuration from environment variables and/or config files
@@ -88,6 +110,14 @@ func NewConfig() (*Config, error) {
 			"concurrency": 5,
 		},
 	})
+	// Lifecycle defaults: compatible with historical behavior (DLQ 1000, SafeTrim on).
+	// Note: dlq_max_count default applied in LifecycleFromConfig when nil (not via viper pointer).
+	v.SetDefault("taskmq.lifecycle.cancelled_ttl", 24*time.Hour)
+	v.SetDefault("taskmq.lifecycle.delayed_overflow", "reject")
+	v.SetDefault("taskmq.lifecycle.safe_trim_enabled", true)
+	v.SetDefault("taskmq.lifecycle.safe_trim_interval", 30*time.Second)
+	v.SetDefault("taskmq.lifecycle.safe_trim_batch_limit", int64(1000))
+	v.SetDefault("taskmq.lifecycle.purge_cancelled_delayed", true)
 
 	// Enable environment variable support
 	// This makes env vars like TASKMQ_SERVER_PORT map to server.port

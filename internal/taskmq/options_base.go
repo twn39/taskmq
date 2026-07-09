@@ -30,6 +30,10 @@ type BaseWorkerOptions struct {
 	scheduler SchedulerOptions
 	janitor   JanitorOptions
 	policies  PolicyOptions
+
+	// lifecycle bounds Redis memory (admission, DLQ, SafeTrim).
+	lifecycle         *Lifecycle
+	retentionJanitor  Runner // optional override; built from lifecycle when nil
 }
 
 type sharedOption func(*BaseWorkerOptions) error
@@ -71,7 +75,7 @@ func defaultBaseWorkerOptions(codec Codec) BaseWorkerOptions {
 
 func buildSharedPoolDefaults(rdb *redis.Client, opts *WorkerPoolOptions) {
 	if opts.policies.broker == nil {
-		opts.policies.broker = NewRedisBroker(rdb, opts.codec)
+		opts.policies.broker = NewRedisBroker(rdb, opts.codec, opts.lifecycle)
 	}
 	if opts.policies.retryPolicy == nil {
 		opts.policies.retryPolicy = NewExponentialBackoff(100*time.Millisecond, 1*time.Hour, true)
@@ -83,7 +87,7 @@ func buildSharedPoolDefaults(rdb *redis.Client, opts *WorkerPoolOptions) {
 
 func buildSharedPriorityDefaults(rdb *redis.Client, opts *PriorityWorkerOptions) {
 	if opts.policies.broker == nil {
-		opts.policies.broker = NewRedisBroker(rdb, opts.codec)
+		opts.policies.broker = NewRedisBroker(rdb, opts.codec, opts.lifecycle)
 	}
 	if opts.policies.retryPolicy == nil {
 		opts.policies.retryPolicy = NewExponentialBackoff(100*time.Millisecond, 1*time.Hour, true)
@@ -91,6 +95,35 @@ func buildSharedPriorityDefaults(rdb *redis.Client, opts *PriorityWorkerOptions)
 	if opts.policies.deadLetterPolicy == nil {
 		opts.policies.deadLetterPolicy = NewStandardDeadLetterPolicy("", nil)
 	}
+}
+
+// WithLifecycle attaches memory / admission lifecycle policy to workers and brokers.
+func WithLifecycle(lc *Lifecycle) sharedOption {
+	return func(o *BaseWorkerOptions) error {
+		if lc == nil {
+			return errors.New("lifecycle cannot be nil")
+		}
+		o.lifecycle = lc
+		return nil
+	}
+}
+
+// WithRetentionJanitor overrides the retention janitor runner.
+func WithRetentionJanitor(r Runner) sharedOption {
+	return func(o *BaseWorkerOptions) error {
+		if r == nil {
+			return errors.New("retention janitor cannot be nil")
+		}
+		o.retentionJanitor = r
+		return nil
+	}
+}
+
+func streamHardLimitFrom(lc *Lifecycle) int64 {
+	if lc == nil {
+		return 0
+	}
+	return lc.Config().EnqueueHardLimit
 }
 
 func WithContext(ctx context.Context) sharedOption {

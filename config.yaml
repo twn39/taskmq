@@ -23,6 +23,24 @@ taskmq:
   scheduler_poll_interval: 500ms
   janitor_interval: 3s
   janitor_min_idle_time: 5s
+  # Memory / storage lifecycle (defaults are production-safe and backward compatible).
+  # Hard limits default to 0 (disabled). Enable in prod when needed.
+  lifecycle:
+    # stream_maxlen: 0                 # optional catastrophe valve (prefer hard limit + safe trim)
+    # enqueue_soft_limit: 0
+    # enqueue_hard_limit: 0            # reject Enqueue when XLEN >= limit
+    # delayed_max_count: 0
+    # delayed_max_delay: 0
+    delayed_overflow: reject           # reject | drop_farthest
+    dlq_max_count: 1000                # 0 = unlimited
+    # dlq_max_age: 168h
+    cancelled_ttl: 24h
+    # max_payload_bytes: 0
+    safe_trim_enabled: true
+    safe_trim_interval: 30s
+    safe_trim_batch_limit: 1000
+    purge_cancelled_delayed: true
+    # idle_consumer_timeout: 0         # e.g. 1h to prune idle group consumers
   queues:
     - name: "default"
       concurrency: 5

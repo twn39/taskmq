@@ -16,20 +16,14 @@ import (
 // ErrDuplicateTask is returned when a unique task cannot be enqueued because a duplicate already exists.
 var ErrDuplicateTask = errors.New("taskmq: duplicate task in queue")
 
-//go:embed scripts/enqueue_unique.lua
-var enqueueUniqueScript string
-
-//go:embed scripts/enqueue_unique_delayed.lua
-var enqueueUniqueDelayedScript string
-
 //go:embed scripts/register_cron.lua
 var registerCronScript string
 
 //go:embed scripts/delete_dead_letter.lua
 var deleteDeadLetterScript string
 
-var enqueueUniqueCmd = redis.NewScript(enqueueUniqueScript)
-var enqueueUniqueDelayedCmd = redis.NewScript(enqueueUniqueDelayedScript)
+// Unique/delayed enqueue scripts live in lifecycle.go (with capacity limits).
+
 var registerCronCmd = redis.NewScript(registerCronScript)
 var deleteDeadLetterCmd = redis.NewScript(deleteDeadLetterScript)
 
@@ -119,6 +113,7 @@ type client struct {
 	rdb              *redis.Client
 	codec            Codec
 	defaultUniqueTTL time.Duration
+	lifecycle        *Lifecycle
 }
 
 type ClientOption func(*client)
@@ -136,6 +131,13 @@ func WithDefaultUniqueTTL(ttl time.Duration) ClientOption {
 	}
 }
 
+// WithClientLifecycle attaches retention / admission policy to the client.
+func WithClientLifecycle(lc *Lifecycle) ClientOption {
+	return func(c *client) {
+		c.lifecycle = lc
+	}
+}
+
 func NewClient(rdb *redis.Client, opts ...ClientOption) Client {
 	c := &client{
 		rdb:   rdb,
@@ -145,6 +147,51 @@ func NewClient(rdb *redis.Client, opts ...ClientOption) Client {
 		opt(c)
 	}
 	return c
+}
+
+// Lifecycle returns the attached lifecycle (may be nil).
+func (c *client) Lifecycle() *Lifecycle {
+	return c.lifecycle
+}
+
+func (c *client) hardLimit() int64 {
+	if c.lifecycle == nil {
+		return 0
+	}
+	return c.lifecycle.Config().EnqueueHardLimit
+}
+
+func (c *client) streamMaxLen() int64 {
+	if c.lifecycle == nil {
+		return 0
+	}
+	return c.lifecycle.Config().StreamMaxLen
+}
+
+func (c *client) delayedMaxCount() int64 {
+	if c.lifecycle == nil {
+		return 0
+	}
+	return c.lifecycle.Config().DelayedMaxCount
+}
+
+func (c *client) metrics() *LifecycleMetrics {
+	if c.lifecycle == nil {
+		return nil
+	}
+	return c.lifecycle.Metrics()
+}
+
+func (c *client) uniqueTTL(task *Task) time.Duration {
+	ttl := time.Duration(task.UniqueTTLMs) * time.Millisecond
+	if ttl <= 0 {
+		if c.defaultUniqueTTL > 0 {
+			ttl = c.defaultUniqueTTL
+		} else {
+			ttl = 1 * time.Hour
+		}
+	}
+	return ttl
 }
 
 // generateUUID generates a lightweight pseudo-random UUID-v4-like string
@@ -188,6 +235,12 @@ func (c *client) Enqueue(ctx context.Context, task *Task, opts ...TaskOption) er
 		task.ID = generateUUID()
 	}
 
+	if c.lifecycle != nil {
+		if err := c.lifecycle.CheckPayloadSize(task.Payload); err != nil {
+			return err
+		}
+	}
+
 	serialized, err := c.codec.Marshal(task)
 	if err != nil {
 		return err
@@ -195,33 +248,34 @@ func (c *client) Enqueue(ctx context.Context, task *Task, opts ...TaskOption) er
 
 	keys := KeysFor(task.Queue)
 	streamKey := keys.Stream()
+	hard := c.hardLimit()
+	maxlen := c.streamMaxLen()
+
+	if c.lifecycle != nil {
+		c.lifecycle.NoteSoftLimitIfNeeded(ctx, c.rdb, task.Queue)
+	}
 
 	if task.UniqueKey != "" {
-		ttl := time.Duration(task.UniqueTTLMs) * time.Millisecond
-		if ttl <= 0 {
-			if c.defaultUniqueTTL > 0 {
-				ttl = c.defaultUniqueTTL
-			} else {
-				ttl = 1 * time.Hour // Default to 1 hour
-			}
-		}
+		ttl := c.uniqueTTL(task)
 		uniqueKey := keys.Unique(task.UniqueKey)
-		res, err := enqueueUniqueCmd.Run(ctx, c.rdb, []string{uniqueKey, streamKey}, task.ID, int(ttl.Milliseconds()), serialized).Result()
+		res, err := enqueueUniqueWithLimitCmd.Run(ctx, c.rdb,
+			[]string{uniqueKey, streamKey},
+			task.ID, int(ttl.Milliseconds()), serialized, hard, maxlen,
+		).Result()
 		if err != nil {
 			return err
 		}
-		if val, ok := res.(int64); ok && val == -1 {
-			return ErrDuplicateTask
-		}
-		return nil
+		return mapEnqueueScriptResult(res, c.metrics(), false)
 	}
 
-	return c.rdb.XAdd(ctx, &redis.XAddArgs{
-		Stream: streamKey,
-		Values: map[string]interface{}{
-			"task": serialized,
-		},
-	}).Err()
+	res, err := enqueueStreamCmd.Run(ctx, c.rdb,
+		[]string{streamKey},
+		hard, maxlen, serialized,
+	).Result()
+	if err != nil {
+		return err
+	}
+	return mapEnqueueScriptResult(res, c.metrics(), false)
 }
 
 // EnqueueIn adds a task to the delayed queue with a delay duration
@@ -241,6 +295,15 @@ func (c *client) EnqueueAt(ctx context.Context, task *Task, at time.Time, opts .
 		task.ID = generateUUID()
 	}
 
+	if c.lifecycle != nil {
+		if err := c.lifecycle.CheckPayloadSize(task.Payload); err != nil {
+			return err
+		}
+		if err := c.lifecycle.CheckDelayedMaxDelay(at); err != nil {
+			return err
+		}
+	}
+
 	serialized, err := c.codec.Marshal(task)
 	if err != nil {
 		return err
@@ -248,33 +311,37 @@ func (c *client) EnqueueAt(ctx context.Context, task *Task, at time.Time, opts .
 
 	keys := KeysFor(task.Queue)
 	delayedKey := keys.Delayed()
+	maxCount := c.delayedMaxCount()
+	overflow := 0
+	if c.lifecycle != nil {
+		overflow = c.lifecycle.overflowArg()
+	}
 
 	if task.UniqueKey != "" {
-		ttl := time.Duration(task.UniqueTTLMs) * time.Millisecond
-		if ttl <= 0 {
-			if c.defaultUniqueTTL > 0 {
-				ttl = c.defaultUniqueTTL
-			} else {
-				ttl = 1 * time.Hour // Default to 1 hour
-			}
-		}
+		ttl := c.uniqueTTL(task)
 		uniqueKey := keys.Unique(task.UniqueKey)
-		res, err := enqueueUniqueDelayedCmd.Run(ctx, c.rdb, []string{uniqueKey, delayedKey}, task.ID, int(ttl.Milliseconds()), serialized, at.UnixMilli()).Result()
+		res, err := enqueueUniqueDelayedLimitCmd.Run(ctx, c.rdb,
+			[]string{uniqueKey, delayedKey},
+			task.ID, int(ttl.Milliseconds()), serialized, at.UnixMilli(), maxCount, overflow,
+		).Result()
 		if err != nil {
 			return err
 		}
-		if val, ok := res.(int64); ok && val == -1 {
-			return ErrDuplicateTask
+		if err := mapEnqueueScriptResult(res, c.metrics(), true); err != nil {
+			return err
 		}
 		_ = c.rdb.Publish(ctx, keys.DelayedWakeupChannel(), strconv.FormatInt(at.UnixMilli(), 10)).Err()
 		return nil
 	}
 
-	err = c.rdb.ZAdd(ctx, delayedKey, redis.Z{
-		Score:  float64(at.UnixMilli()),
-		Member: serialized,
-	}).Err()
+	res, err := enqueueDelayedWithLimitCmd.Run(ctx, c.rdb,
+		[]string{delayedKey},
+		at.UnixMilli(), serialized, maxCount, overflow,
+	).Result()
 	if err != nil {
+		return err
+	}
+	if err := mapEnqueueScriptResult(res, c.metrics(), true); err != nil {
 		return err
 	}
 	_ = c.rdb.Publish(ctx, keys.DelayedWakeupChannel(), strconv.FormatInt(at.UnixMilli(), 10)).Err()
@@ -402,7 +469,13 @@ func (c *client) RegisterCron(ctx context.Context, jobName string, spec string, 
 func (c *client) CancelTask(ctx context.Context, queue, taskID string) error {
 	keys := KeysFor(queue)
 	cancelledKey := keys.Cancelled(taskID)
-	if err := c.rdb.Set(ctx, cancelledKey, "1", 24*time.Hour).Err(); err != nil {
+	ttl := 24 * time.Hour
+	if c.lifecycle != nil {
+		if v := c.lifecycle.Config().CancelledTTL; v > 0 {
+			ttl = v
+		}
+	}
+	if err := c.rdb.Set(ctx, cancelledKey, "1", ttl).Err(); err != nil {
 		return fmt.Errorf("taskmq: failed to set cancel marker: %w", err)
 	}
 

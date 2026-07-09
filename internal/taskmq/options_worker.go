@@ -37,10 +37,13 @@ func buildDefaultPoolComponents(rdb *redis.Client, logger *zap.Logger, queue str
 		opts.cron.manager = opts.cron.factory(rdb, logger, queue, opts.codec, opts.cron.healingInterval, opts.cron.lockTTL, opts.cron.scanBatchSize, opts.cron.scanMaxCount)
 	}
 	if opts.scheduler.scheduler == nil && opts.scheduler.factory != nil {
-		opts.scheduler.scheduler = opts.scheduler.factory(rdb, logger, queue, opts.cron.manager, opts.codec, opts.scheduler.pollInterval)
+		opts.scheduler.scheduler = opts.scheduler.factory(rdb, logger, queue, opts.cron.manager, opts.codec, opts.scheduler.pollInterval, streamHardLimitFrom(opts.lifecycle))
 	}
 	if opts.janitor.janitor == nil && opts.janitor.factory != nil {
 		opts.janitor.janitor = opts.janitor.factory(rdb, logger, queue, opts.group, opts.consumer, opts.concurrency, opts.janitor.interval, opts.janitor.minIdleTime)
+	}
+	if opts.retentionJanitor == nil && opts.lifecycle != nil {
+		opts.retentionJanitor = newRetentionJanitor(rdb, logger, queue, opts.group, opts.codec, opts.lifecycle)
 	}
 	buildSharedPoolDefaults(rdb, opts)
 }

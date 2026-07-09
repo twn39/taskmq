@@ -251,7 +251,7 @@ func TestCustomFactories(t *testing.T) {
 		cronCalled = true
 		return &dummyCronManager{}
 	}
-	schedulerFactory := func(rdb *redis.Client, logger *zap.Logger, queue string, cronManager CronManager, codec Codec, pollInterval time.Duration) Runner {
+	schedulerFactory := func(rdb *redis.Client, logger *zap.Logger, queue string, cronManager CronManager, codec Codec, pollInterval time.Duration, streamHardLimit int64) Runner {
 		schedulerCalled = true
 		return &dummyScheduler{}
 	}

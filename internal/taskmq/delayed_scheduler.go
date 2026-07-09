@@ -11,22 +11,28 @@ import (
 )
 
 type delayedScheduler struct {
-	rdb          *redis.Client
-	logger       *zap.Logger
-	queue        string
-	cronManager  CronManager
-	codec        Codec
-	pollInterval time.Duration
+	rdb             *redis.Client
+	logger          *zap.Logger
+	queue           string
+	cronManager     CronManager
+	codec           Codec
+	pollInterval    time.Duration
+	streamHardLimit int64 // 0 = unlimited; when stream XLEN >= limit, skip promote
 }
 
-func newDelayedScheduler(rdb *redis.Client, logger *zap.Logger, queue string, cronManager CronManager, codec Codec, pollInterval time.Duration) Runner {
+func newDelayedScheduler(rdb *redis.Client, logger *zap.Logger, queue string, cronManager CronManager, codec Codec, pollInterval time.Duration, streamHardLimit ...int64) Runner {
+	var hard int64
+	if len(streamHardLimit) > 0 {
+		hard = streamHardLimit[0]
+	}
 	return &delayedScheduler{
-		rdb:          rdb,
-		logger:       logger,
-		queue:        queue,
-		cronManager:  cronManager,
-		codec:        codec,
-		pollInterval: pollInterval,
+		rdb:             rdb,
+		logger:          logger,
+		queue:           queue,
+		cronManager:     cronManager,
+		codec:           codec,
+		pollInterval:    pollInterval,
+		streamHardLimit: hard,
 	}
 }
 
@@ -45,11 +51,33 @@ func (s *delayedScheduler) Run(ctx context.Context) error {
 	wakeupChannel := keys.DelayedWakeupChannel()
 
 	// Lua script: atomically move ready tasks (score <= nowMs) from ZSET to Stream.
+	// ARGV[4]=streamHardLimit (0=off): if stream is full, return empty and keep delayed.
 	// Returns the moved members so caller can trigger cron reschedule logic.
 	luaScript := `
+		local hard = tonumber(ARGV[4]) or 0
+		if hard > 0 then
+			local n = redis.call('XLEN', KEYS[2])
+			if n >= hard then
+				return {}
+			end
+		end
 		local elements = redis.call('ZRANGEBYSCORE', KEYS[1], ARGV[1], ARGV[2], 'LIMIT', 0, ARGV[3])
 		if #elements > 0 then
 			for i, member in ipairs(elements) do
+				if hard > 0 then
+					local n = redis.call('XLEN', KEYS[2])
+					if n >= hard then
+						-- Partial promote: stop moving remaining members; they stay delayed.
+						local moved = {}
+						for j = 1, i - 1 do
+							moved[j] = elements[j]
+						end
+						for j = 1, #moved do
+							redis.call('ZREM', KEYS[1], moved[j])
+						end
+						return moved
+					end
+				end
 				redis.call('XADD', KEYS[2], '*', 'task', member)
 			end
 			for i, member in ipairs(elements) do
@@ -71,7 +99,7 @@ func (s *delayedScheduler) Run(ctx context.Context) error {
 	promoteReadyTasks := func() {
 		for {
 			nowMs := time.Now().UnixMilli()
-			res, err := s.rdb.Eval(ctx, luaScript, []string{delayedKey, streamKey}, 0, nowMs, batchSize).Result()
+			res, err := s.rdb.Eval(ctx, luaScript, []string{delayedKey, streamKey}, 0, nowMs, batchSize, s.streamHardLimit).Result()
 			if err != nil {
 				if ctx.Err() == nil {
 					s.logger.Error("Scheduler failed to poll delayed tasks", zap.Error(err))
@@ -81,6 +109,7 @@ func (s *delayedScheduler) Run(ctx context.Context) error {
 
 			elements, ok := res.([]interface{})
 			if !ok || len(elements) == 0 {
+				// Empty may mean no ready tasks OR stream at hard limit (backpressure).
 				return
 			}
 

@@ -9,16 +9,17 @@ import (
 	"go.uber.org/zap"
 )
 
-type SchedulerFactory func(rdb *redis.Client, logger *zap.Logger, queue string, cronManager CronManager, codec Codec, pollInterval time.Duration) Runner
+// SchedulerFactory builds a delayed scheduler. streamHardLimit is EnqueueHardLimit (0 = unlimited).
+type SchedulerFactory func(rdb *redis.Client, logger *zap.Logger, queue string, cronManager CronManager, codec Codec, pollInterval time.Duration, streamHardLimit int64) Runner
 
 type SchedulerOptions struct {
-	pollInterval         time.Duration
-	scheduler            Runner
-	factory              SchedulerFactory
+	pollInterval time.Duration
+	scheduler    Runner
+	factory      SchedulerFactory
 }
 
-func DefaultSchedulerFactory(rdb *redis.Client, logger *zap.Logger, queue string, cronManager CronManager, codec Codec, pollInterval time.Duration) Runner {
-	return newDelayedScheduler(rdb, logger, queue, cronManager, codec, pollInterval)
+func DefaultSchedulerFactory(rdb *redis.Client, logger *zap.Logger, queue string, cronManager CronManager, codec Codec, pollInterval time.Duration, streamHardLimit int64) Runner {
+	return newDelayedScheduler(rdb, logger, queue, cronManager, codec, pollInterval, streamHardLimit)
 }
 
 func WithScheduler(s Runner) sharedOption {

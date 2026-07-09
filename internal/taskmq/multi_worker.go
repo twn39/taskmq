@@ -69,11 +69,13 @@ func (m *multiWorker) Stop(ctxs ...context.Context) {
 
 type priorityWorker struct {
 	*baseWorker
-	queues           []QueuePriority
-	priorityStrategy string
-	schedulers       map[string]Runner
-	janitors         map[string]Runner
-	cronManagers     map[string]CronManager
+	queues            []QueuePriority
+	priorityStrategy  string
+	schedulers        map[string]Runner
+	janitors          map[string]Runner
+	retentionJanitors map[string]Runner
+	cronManagers      map[string]CronManager
+	lifecycle         *Lifecycle
 }
 
 func NewPriorityWorker(rdb *redis.Client, logger *zap.Logger, opts ...PriorityWorkerOption) Worker {
@@ -90,12 +92,14 @@ func NewPriorityWorker(rdb *redis.Client, logger *zap.Logger, opts ...PriorityWo
 	base.initBase(rdb, logger, &opt.BaseWorkerOptions)
 
 	pw := &priorityWorker{
-		baseWorker:       base,
-		queues:           opt.priorityQueues,
-		priorityStrategy: opt.priorityStrategy,
-		schedulers:       make(map[string]Runner),
-		janitors:         make(map[string]Runner),
-		cronManagers:     make(map[string]CronManager),
+		baseWorker:        base,
+		queues:            opt.priorityQueues,
+		priorityStrategy:  opt.priorityStrategy,
+		schedulers:        make(map[string]Runner),
+		janitors:          make(map[string]Runner),
+		retentionJanitors: make(map[string]Runner),
+		cronManagers:      make(map[string]CronManager),
+		lifecycle:         opt.lifecycle,
 	}
 
 	if pw.priorityStrategy == "" {
@@ -123,10 +127,11 @@ func NewPriorityWorker(rdb *redis.Client, logger *zap.Logger, opts ...PriorityWo
 		}
 
 		var qSched Runner
+		hard := streamHardLimitFrom(opt.lifecycle)
 		if opt.scheduler.factory != nil {
-			qSched = opt.scheduler.factory(rdb, logger, q.Name, qCron, pw.codec, opt.scheduler.pollInterval)
+			qSched = opt.scheduler.factory(rdb, logger, q.Name, qCron, pw.codec, opt.scheduler.pollInterval, hard)
 		} else {
-			qSched = newDelayedScheduler(rdb, logger, q.Name, qCron, pw.codec, opt.scheduler.pollInterval)
+			qSched = newDelayedScheduler(rdb, logger, q.Name, qCron, pw.codec, opt.scheduler.pollInterval, hard)
 		}
 
 		var qJan PELRecoveryJanitor
@@ -139,6 +144,9 @@ func NewPriorityWorker(rdb *redis.Client, logger *zap.Logger, opts ...PriorityWo
 		pw.cronManagers[q.Name] = qCron
 		pw.schedulers[q.Name] = qSched
 		pw.janitors[q.Name] = qJan
+		if opt.lifecycle != nil {
+			pw.retentionJanitors[q.Name] = newRetentionJanitor(rdb, logger, q.Name, pw.group, pw.codec, opt.lifecycle)
+		}
 	}
 
 	// Register processors for all janitors
@@ -194,6 +202,10 @@ func (pw *priorityWorker) Start(ctx context.Context) error {
 	for qName, jan := range pw.janitors {
 		pw.wg.Add(1)
 		go pw.runBackgroundLoop(jan, "janitor-"+qName)
+	}
+	for qName, ret := range pw.retentionJanitors {
+		pw.wg.Add(1)
+		go pw.runBackgroundLoop(ret, "retention-"+qName)
 	}
 	for qName, cron := range pw.cronManagers {
 		pw.wg.Add(1)

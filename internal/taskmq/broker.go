@@ -19,14 +19,21 @@ type TaskBroker interface {
 }
 
 type redisBroker struct {
-	rdb   *redis.Client
-	codec Codec
+	rdb       *redis.Client
+	codec     Codec
+	lifecycle *Lifecycle
 }
 
-func NewRedisBroker(rdb *redis.Client, codec Codec) TaskBroker {
+// NewRedisBroker creates a TaskBroker. Optional lifecycle controls DLQ capacity.
+func NewRedisBroker(rdb *redis.Client, codec Codec, lifecycle ...*Lifecycle) TaskBroker {
+	var lc *Lifecycle
+	if len(lifecycle) > 0 {
+		lc = lifecycle[0]
+	}
 	return &redisBroker{
-		rdb:   rdb,
-		codec: codec,
+		rdb:       rdb,
+		codec:     codec,
+		lifecycle: lc,
 	}
 }
 
@@ -42,6 +49,7 @@ const luaHandleFailure = `
 	local serializedTask = ARGV[5]
 	local expectedLockVal = ARGV[6]
 	local taskId = ARGV[7]
+	local maxCount = tonumber(ARGV[8]) or 0
 
 	-- Ack and delete the processed message from stream
 	redis.call("XACK", streamKey, groupName, msgId)
@@ -56,26 +64,27 @@ const luaHandleFailure = `
 			redis.call("HSET", dlqIndexKey, taskId, serializedTask)
 		end
 
-		-- Apply capacity protection: keep only latest 1000 DLQ items.
-		-- Before removing from Sorted Set, clean them up from the Hash index.
-		if dlqIndexKey ~= nil and dlqIndexKey ~= "" then
-			local toRemove = redis.call("ZRANGE", targetKey, 0, -1001)
+		-- Capacity protection: keep only latest maxCount DLQ items (0 = unlimited).
+		local evicted = 0
+		if maxCount > 0 and dlqIndexKey ~= nil and dlqIndexKey ~= "" then
+			local toRemove = redis.call("ZRANGE", targetKey, 0, -(maxCount + 1))
 			for _, id in ipairs(toRemove) do
 				redis.call("HDEL", dlqIndexKey, id)
+				evicted = evicted + 1
 			end
+			redis.call("ZREMRANGEBYRANK", targetKey, 0, -(maxCount + 1))
 		end
-
-		redis.call("ZREMRANGEBYRANK", targetKey, 0, -1001)
 
 		if lockKey ~= "" and expectedLockVal ~= "" then
 			if redis.call("GET", lockKey) == expectedLockVal then
 				redis.call("DEL", lockKey)
 			end
 		end
+		return evicted
 	else
 		redis.call("ZADD", targetKey, score, serializedTask)
 	end
-	return 1
+	return 0
 `
 
 const luaDeferRateLimitedTask = `
@@ -134,6 +143,13 @@ var (
 	renewUniqueLockCmd      = redis.NewScript(luaRenewUniqueLock)
 )
 
+func (b *redisBroker) dlqMaxCount() int64 {
+	if b.lifecycle == nil {
+		return 1000 // preserve historical default
+	}
+	return b.lifecycle.Config().DLQMaxCount
+}
+
 func (b *redisBroker) MoveToDLQ(ctx context.Context, task *Task, streamKey, msgID, group string, dlqQueueName string) error {
 	serialized, err := b.codec.Marshal(task)
 	if err != nil {
@@ -151,8 +167,18 @@ func (b *redisBroker) MoveToDLQ(ctx context.Context, task *Task, streamKey, msgI
 		uniqueLockVal = task.ID
 	}
 
-	_, err = handleFailureCmd.Run(ctx, b.rdb, []string{dlqKey, streamKey, uniqueLockKey, dlqIndexKey}, "dlq", msgID, group, nowMs, serialized, uniqueLockVal, task.ID).Result()
-	return err
+	maxCount := b.dlqMaxCount()
+	res, err := handleFailureCmd.Run(ctx, b.rdb, []string{dlqKey, streamKey, uniqueLockKey, dlqIndexKey},
+		"dlq", msgID, group, nowMs, serialized, uniqueLockVal, task.ID, maxCount).Result()
+	if err != nil {
+		return err
+	}
+	if b.lifecycle != nil {
+		if n, ok := res.(int64); ok && n > 0 {
+			b.lifecycle.Metrics().DLQEvictedTotal.Add(n)
+		}
+	}
+	return nil
 }
 
 func (b *redisBroker) ScheduleRetry(ctx context.Context, task *Task, streamKey, msgID, group string, runAt time.Time) error {
@@ -162,7 +188,8 @@ func (b *redisBroker) ScheduleRetry(ctx context.Context, task *Task, streamKey, 
 	}
 	keys := KeysFor(task.Queue)
 	delayedKey := keys.Delayed()
-	_, err = handleFailureCmd.Run(ctx, b.rdb, []string{delayedKey, streamKey, "", ""}, "retry", msgID, group, runAt.UnixMilli(), serialized, "", "").Result()
+	_, err = handleFailureCmd.Run(ctx, b.rdb, []string{delayedKey, streamKey, "", ""},
+		"retry", msgID, group, runAt.UnixMilli(), serialized, "", "", 0).Result()
 	if err == nil {
 		// Notify the delayed scheduler so it wakes up instead of waiting up to maxSleep (10s).
 		_ = b.rdb.Publish(ctx, keys.DelayedWakeupChannel(), fmt.Sprintf("%d", runAt.UnixMilli())).Err()

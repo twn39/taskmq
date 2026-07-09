@@ -31,10 +31,11 @@ type QueuePriority struct {
 
 type workerPool struct {
 	*baseWorker
-	queue       string
-	scheduler   Runner
-	janitor     Runner
-	cronManager CronManager
+	queue            string
+	scheduler        Runner
+	janitor          Runner
+	retentionJanitor Runner
+	cronManager      CronManager
 }
 
 func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...WorkerPoolOption) Worker {
@@ -56,11 +57,12 @@ func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...
 	base.rateLimitKeyField = opt.rateLimitKeyField
 
 	pool := &workerPool{
-		baseWorker:  base,
-		queue:       queue,
-		cronManager: opt.cron.manager,
-		scheduler:   opt.scheduler.scheduler,
-		janitor:     opt.janitor.janitor,
+		baseWorker:       base,
+		queue:            queue,
+		cronManager:      opt.cron.manager,
+		scheduler:        opt.scheduler.scheduler,
+		janitor:          opt.janitor.janitor,
+		retentionJanitor: opt.retentionJanitor,
 	}
 
 	pool.getQueueRateLimit = func(qName string) (int64, time.Duration, string) {
@@ -110,6 +112,16 @@ func (w *workerPool) Start(ctx context.Context) error {
 			defer w.wg.Done()
 			if err := w.janitor.Run(w.ctx); err != nil {
 				w.logger.Error("Janitor loop stopped with error", zap.Error(err))
+			}
+		}()
+	}
+
+	if w.retentionJanitor != nil {
+		w.wg.Add(1)
+		go func() {
+			defer w.wg.Done()
+			if err := w.retentionJanitor.Run(w.ctx); err != nil {
+				w.logger.Error("Retention janitor loop stopped with error", zap.Error(err))
 			}
 		}()
 	}
