@@ -4,16 +4,20 @@ import (
 	"context"
 	"testing"
 	"time"
-
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/twn39/taskmq/internal/logger"
-	internalredis "github.com/twn39/taskmq/internal/redis"
-	"github.com/twn39/taskmq/internal/taskmq"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 	"go.uber.org/zap"
+	"github.com/twn39/taskmq/internal/logger"
+	"github.com/twn39/taskmq/internal/taskmq"
+	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
+	"github.com/twn39/taskmq/internal/taskmq/keys"
+	"github.com/twn39/taskmq/internal/taskmq/lifecycle"
+	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
+	internalredis "github.com/twn39/taskmq/internal/redis"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 )
 
 func TestTaskMQ_ActiveInspector_ListTasks(t *testing.T) {
@@ -21,23 +25,23 @@ func TestTaskMQ_ActiveInspector_ListTasks(t *testing.T) {
 	defer cancel()
 
 	queueName := "active_list_test_queue"
-	streamKey := taskmq.StreamKey(queueName)
+	streamKey := keys.StreamKey(queueName)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
+			mqclient.NewClient,
 		),
 		fx.Populate(&rdb, &client),
 	)
 
-	rdb.Del(ctx, streamKey, taskmq.PausedKey(queueName))
-	defer rdb.Del(ctx, streamKey, taskmq.PausedKey(queueName))
+	rdb.Del(ctx, streamKey, keys.PausedKey(queueName))
+	defer rdb.Del(ctx, streamKey, keys.PausedKey(queueName))
 
 	app.RequireStart()
 	defer app.RequireStop()
@@ -48,7 +52,7 @@ func TestTaskMQ_ActiveInspector_ListTasks(t *testing.T) {
 	assert.Empty(t, tasks)
 
 	// 2. Enqueue task (will be Pending since no worker is running)
-	task1 := taskmq.NewTask("task:active_test_1", []byte("payload_1"), taskmq.TaskOptions{
+	task1 := taskmodel.NewTask("task:active_test_1", []byte("payload_1"), taskmodel.TaskOptions{
 		Queue: queueName,
 	})
 	err = client.Enqueue(ctx, task1)
@@ -73,30 +77,30 @@ func TestTaskMQ_ActiveInspector_DeletePending(t *testing.T) {
 	defer cancel()
 
 	queueName := "active_delete_test_queue"
-	streamKey := taskmq.StreamKey(queueName)
+	streamKey := keys.StreamKey(queueName)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
+			mqclient.NewClient,
 		),
 		fx.Populate(&rdb, &client),
 	)
 
-	uniqueKey := taskmq.UniqueKey(queueName, "unique_lock_active_inspector")
-	rdb.Del(ctx, streamKey, uniqueKey, taskmq.PausedKey(queueName))
-	defer rdb.Del(ctx, streamKey, uniqueKey, taskmq.PausedKey(queueName))
+	uniqueKey := keys.UniqueKey(queueName, "unique_lock_active_inspector")
+	rdb.Del(ctx, streamKey, uniqueKey, keys.PausedKey(queueName))
+	defer rdb.Del(ctx, streamKey, uniqueKey, keys.PausedKey(queueName))
 
 	app.RequireStart()
 	defer app.RequireStop()
 
 	// 1. Enqueue unique task
-	task := taskmq.NewTask("task:active_del_pending", []byte("data"), taskmq.TaskOptions{
+	task := taskmodel.NewTask("task:active_del_pending", []byte("data"), taskmodel.TaskOptions{
 		Queue:     queueName,
 		UniqueKey: "unique_lock_active_inspector",
 	})
@@ -104,12 +108,12 @@ func TestTaskMQ_ActiveInspector_DeletePending(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Verify duplicate task fails to enqueue
-	task2 := taskmq.NewTask("task:active_del_pending", []byte("data"), taskmq.TaskOptions{
+	task2 := taskmodel.NewTask("task:active_del_pending", []byte("data"), taskmodel.TaskOptions{
 		Queue:     queueName,
 		UniqueKey: "unique_lock_active_inspector",
 	})
 	err = client.Enqueue(ctx, task2)
-	assert.ErrorIs(t, err, taskmq.ErrDuplicateTask)
+	assert.ErrorIs(t, err, lifecycle.ErrDuplicateTask)
 
 	tasks, err := client.ListActiveTasks(ctx, queueName, 10)
 	assert.NoError(t, err)
@@ -134,27 +138,27 @@ func TestTaskMQ_ActiveInspector_DeleteProcessingAndCancel(t *testing.T) {
 	defer cancel()
 
 	queueName := "active_del_proc_test_queue"
-	streamKey := taskmq.StreamKey(queueName)
+	streamKey := keys.StreamKey(queueName)
 
 	startedChan := make(chan string, 1)
 	resultChan := make(chan error, 1)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithGroup("active-inspect-group"),
-					taskmq.WithConsumer("active-inspect-consumer"),
-					taskmq.WithConcurrency(1),
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithGroup("active-inspect-group"),
+					mqworker.WithConsumer("active-inspect-consumer"),
+					mqworker.WithConcurrency(1),
 				)
-				pool.Register("task:proc_cancel", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("task:proc_cancel", func(ctx context.Context, task *taskmodel.Task) error {
 					startedChan <- task.ID
 					select {
 					case <-ctx.Done():
@@ -173,14 +177,14 @@ func TestTaskMQ_ActiveInspector_DeleteProcessingAndCancel(t *testing.T) {
 	)
 
 	cancelKey := "taskmq:{" + queueName + "}:cancelled:test-active-cancel-id"
-	rdb.Del(ctx, streamKey, taskmq.PausedKey(queueName), cancelKey)
-	defer rdb.Del(ctx, streamKey, taskmq.PausedKey(queueName), cancelKey)
+	rdb.Del(ctx, streamKey, keys.PausedKey(queueName), cancelKey)
+	defer rdb.Del(ctx, streamKey, keys.PausedKey(queueName), cancelKey)
 
 	app.RequireStart()
 
 	// 1. Enqueue task
 	taskID := "test-active-cancel-id"
-	task := taskmq.NewTask("task:proc_cancel", []byte("payload"), taskmq.TaskOptions{
+	task := taskmodel.NewTask("task:proc_cancel", []byte("payload"), taskmodel.TaskOptions{
 		Queue: queueName,
 	})
 	task.ID = taskID

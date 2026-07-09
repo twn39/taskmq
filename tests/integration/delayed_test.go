@@ -5,15 +5,18 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
-	"github.com/twn39/taskmq/internal/logger"
-	internalredis "github.com/twn39/taskmq/internal/redis"
-	"github.com/twn39/taskmq/internal/taskmq"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 	"go.uber.org/zap"
+	"github.com/twn39/taskmq/internal/logger"
+	"github.com/twn39/taskmq/internal/taskmq"
+	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
+	"github.com/twn39/taskmq/internal/taskmq/keys"
+	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
+	internalredis "github.com/twn39/taskmq/internal/redis"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 )
 
 func TestTaskMQ_DelayedFlow(t *testing.T) {
@@ -21,27 +24,27 @@ func TestTaskMQ_DelayedFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "delayed_test_queue"
-	streamKey := taskmq.StreamKey(queueName)
-	delayedKey := taskmq.DelayedKey(queueName)
+	streamKey := keys.StreamKey(queueName)
+	delayedKey := keys.DelayedKey(queueName)
 
 	runChan := make(chan time.Time, 1)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithGroup("delayed-group"),
-					taskmq.WithConsumer("delayed-consumer"),
-					taskmq.WithConcurrency(1),
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithGroup("delayed-group"),
+					mqworker.WithConsumer("delayed-consumer"),
+					mqworker.WithConcurrency(1),
 				)
-				pool.Register("task:delayed", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("task:delayed", func(ctx context.Context, task *taskmodel.Task) error {
 					runChan <- time.Now()
 					return nil
 				})
@@ -61,7 +64,7 @@ func TestTaskMQ_DelayedFlow(t *testing.T) {
 	defer app.RequireStop()
 
 	// Enqueue with a 2-second delay
-	task := taskmq.NewTask("task:delayed", []byte("delayed data"), taskmq.TaskOptions{
+	task := taskmodel.NewTask("task:delayed", []byte("delayed data"), taskmodel.TaskOptions{
 		Queue: queueName,
 	})
 	err := client.EnqueueIn(ctx, task, 2*time.Second)
@@ -82,27 +85,27 @@ func TestTaskMQ_TimeoutCancellationFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "timeout_test_queue"
-	streamKey := taskmq.StreamKey(queueName)
-	delayedKey := taskmq.DelayedKey(queueName)
+	streamKey := keys.StreamKey(queueName)
+	delayedKey := keys.DelayedKey(queueName)
 
 	var execCount int64
 
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithGroup("timeout-group"),
-					taskmq.WithConsumer("timeout-consumer"),
-					taskmq.WithConcurrency(1),
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithGroup("timeout-group"),
+					mqworker.WithConsumer("timeout-consumer"),
+					mqworker.WithConcurrency(1),
 				)
-				pool.Register("task:slow", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("task:slow", func(ctx context.Context, task *taskmodel.Task) error {
 					atomic.AddInt64(&execCount, 1)
 
 					// Sleep for 3 seconds, but check if context is cancelled
@@ -128,9 +131,9 @@ func TestTaskMQ_TimeoutCancellationFlow(t *testing.T) {
 	defer app.RequireStop()
 
 	// Enqueue a task with TimeoutMs = 500 (0.5 second), MaxRetry = 2
-	task := taskmq.NewTask("task:slow", []byte("slow payload"), taskmq.TaskOptions{
+	task := taskmodel.NewTask("task:slow", []byte("slow payload"), taskmodel.TaskOptions{
 		Queue:    queueName,
-		MaxRetry: taskmq.Ptr(2),
+		MaxRetry: taskmodel.Ptr(2),
 		Timeout:  500 * time.Millisecond,
 	})
 
@@ -156,29 +159,29 @@ func TestTaskMQ_DelayedSchedulerWakeup(t *testing.T) {
 	defer cancel()
 
 	queueName := "wakeup_test_queue"
-	streamKey := taskmq.StreamKey(queueName)
-	delayedKey := taskmq.DelayedKey(queueName)
+	streamKey := keys.StreamKey(queueName)
+	delayedKey := keys.DelayedKey(queueName)
 
 	runChan := make(chan time.Time, 1)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
 				// We configure the scheduler with a very long poll interval (e.g. 5 seconds)
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithGroup("wakeup-group"),
-					taskmq.WithConsumer("wakeup-consumer"),
-					taskmq.WithConcurrency(1),
-					taskmq.WithSchedulerPollInterval(5*time.Second),
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithGroup("wakeup-group"),
+					mqworker.WithConsumer("wakeup-consumer"),
+					mqworker.WithConcurrency(1),
+					mqworker.WithSchedulerPollInterval(5*time.Second),
 				)
-				pool.Register("task:wakeup", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("task:wakeup", func(ctx context.Context, task *taskmodel.Task) error {
 					runChan <- time.Now()
 					return nil
 				})
@@ -198,7 +201,7 @@ func TestTaskMQ_DelayedSchedulerWakeup(t *testing.T) {
 	defer app.RequireStop()
 
 	// Enqueue with a 1-second delay
-	task := taskmq.NewTask("task:wakeup", []byte("wakeup data"), taskmq.TaskOptions{
+	task := taskmodel.NewTask("task:wakeup", []byte("wakeup data"), taskmodel.TaskOptions{
 		Queue: queueName,
 	})
 	err := client.EnqueueIn(ctx, task, 1*time.Second)

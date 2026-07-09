@@ -9,17 +9,18 @@ import (
 	"net/http/httptest"
 	"testing"
 	"time"
-
 	"github.com/labstack/echo/v5"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
-	"github.com/twn39/taskmq/internal/handler"
-	"github.com/twn39/taskmq/internal/logger"
-	internalredis "github.com/twn39/taskmq/internal/redis"
-	"github.com/twn39/taskmq/internal/server"
-	"github.com/twn39/taskmq/internal/taskmq"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
+	"github.com/twn39/taskmq/internal/handler"
+	"github.com/twn39/taskmq/internal/logger"
+	"github.com/twn39/taskmq/internal/server"
+	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
+	"github.com/twn39/taskmq/internal/taskmq/keys"
+	internalredis "github.com/twn39/taskmq/internal/redis"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 )
 
 func TestAdminDashboard(t *testing.T) {
@@ -28,14 +29,15 @@ func TestAdminDashboard(t *testing.T) {
 
 	var e *echo.Echo
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
+		mqclient.ProvideISP,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
+			mqclient.NewClient,
 			handler.NewAdminHandler,
 			server.NewServer,
 		),
@@ -138,10 +140,10 @@ func TestAdminDashboard(t *testing.T) {
 	t.Run("DLQ Management APIs", func(t *testing.T) {
 		// Mock a DLQ task in Redis
 		queueName := "test-admin-queue"
-		dlqKey := taskmq.DLQKey(queueName)
-		dlqIndexKey := taskmq.DLQIndexKey(queueName)
+		dlqKey := keys.DLQKey(queueName)
+		dlqIndexKey := keys.DLQIndexKey(queueName)
 
-		deadTask := taskmq.NewTask("task:failed-test", []byte("bad-data"), taskmq.TaskOptions{Queue: queueName})
+		deadTask := taskmodel.NewTask("task:failed-test", []byte("bad-data"), taskmodel.TaskOptions{Queue: queueName})
 		deadTask.ID = "test-dead-id"
 		deadTask.Retry = 3
 		deadTask.LastError = "some critical failure"
@@ -186,15 +188,15 @@ func TestAdminDashboard(t *testing.T) {
 
 	t.Run("DLQ Bulk Operations Management APIs", func(t *testing.T) {
 		queueName := "test-admin-queue"
-		dlqKey := taskmq.DLQKey(queueName)
-		dlqIndexKey := taskmq.DLQIndexKey(queueName)
+		dlqKey := keys.DLQKey(queueName)
+		dlqIndexKey := keys.DLQIndexKey(queueName)
 
 		rdb.Del(ctx, dlqKey, dlqIndexKey)
 		defer rdb.Del(ctx, dlqKey, dlqIndexKey)
 
 		// Create 5 dead tasks
 		for i := 0; i < 5; i++ {
-			deadTask := taskmq.NewTask("task:bulk-failed", []byte("bad-data"), taskmq.TaskOptions{Queue: queueName})
+			deadTask := taskmodel.NewTask("task:bulk-failed", []byte("bad-data"), taskmodel.TaskOptions{Queue: queueName})
 			deadTask.ID = fmt.Sprintf("dead-id-%d", i)
 			deadTask.Retry = 3
 			deadTask.LastError = "bulk error"
@@ -209,7 +211,7 @@ func TestAdminDashboard(t *testing.T) {
 		rec := httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
-		var tasks []*taskmq.Task
+		var tasks []*taskmodel.Task
 		json.Unmarshal(rec.Body.Bytes(), &tasks)
 		assert.Len(t, tasks, 5)
 
@@ -230,7 +232,7 @@ func TestAdminDashboard(t *testing.T) {
 
 		// 4. Create 3 more dead tasks to test Purge
 		for i := 0; i < 3; i++ {
-			deadTask := taskmq.NewTask("task:bulk-failed", []byte("bad-data"), taskmq.TaskOptions{Queue: queueName})
+			deadTask := taskmodel.NewTask("task:bulk-failed", []byte("bad-data"), taskmodel.TaskOptions{Queue: queueName})
 			deadTask.ID = fmt.Sprintf("dead-id-purge-%d", i)
 			serialized, _ := json.Marshal(deadTask)
 			rdb.ZAdd(ctx, dlqKey, goredis.Z{Score: float64(time.Now().UnixMilli()), Member: deadTask.ID})
@@ -255,7 +257,7 @@ func TestAdminDashboard(t *testing.T) {
 
 	t.Run("Scheduled Tasks Management APIs", func(t *testing.T) {
 		queueName := "test-admin-queue"
-		delayedKey := taskmq.DelayedKey(queueName)
+		delayedKey := keys.DelayedKey(queueName)
 
 		rdb.Del(ctx, delayedKey)
 		defer rdb.Del(ctx, delayedKey)
@@ -312,8 +314,8 @@ func TestAdminDashboard(t *testing.T) {
 
 	t.Run("Cron Schedules Management APIs", func(t *testing.T) {
 		queueName := "test-admin-queue"
-		configsKey := taskmq.CronConfigsKey(queueName)
-		delayedKey := taskmq.DelayedKey(queueName)
+		configsKey := keys.CronConfigsKey(queueName)
+		delayedKey := keys.DelayedKey(queueName)
 
 		rdb.Del(ctx, configsKey, delayedKey)
 		defer rdb.Del(ctx, configsKey, delayedKey)
@@ -321,7 +323,7 @@ func TestAdminDashboard(t *testing.T) {
 		// Register a cron job
 		jobName := "test-cron-job"
 		cronSpec := "*/5 * * * * *" // every 5 seconds
-		cronTask := taskmq.NewTask("task:cron-test", []byte("cron-payload"), taskmq.TaskOptions{Queue: queueName})
+		cronTask := taskmodel.NewTask("task:cron-test", []byte("cron-payload"), taskmodel.TaskOptions{Queue: queueName})
 		
 		err := client.RegisterCron(ctx, jobName, cronSpec, cronTask)
 		assert.NoError(t, err)

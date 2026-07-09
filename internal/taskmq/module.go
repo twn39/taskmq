@@ -9,179 +9,100 @@ import (
 	"github.com/redis/go-redis/v9"
 	taskmqv1 "github.com/twn39/taskmq/api/proto/taskmq/v1"
 	"github.com/twn39/taskmq/internal/config"
+	"github.com/twn39/taskmq/internal/taskmq/client"
+	"github.com/twn39/taskmq/internal/taskmq/codec"
+	"github.com/twn39/taskmq/internal/taskmq/grpcserver"
+	"github.com/twn39/taskmq/internal/taskmq/lifecycle"
+	"github.com/twn39/taskmq/internal/taskmq/worker"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 )
 
-// ProvideWorkersParams defines the injected parameters for ProvideWorkers
+// ProvideWorkersParams defines the injected parameters for ProvideWorkers.
 type ProvideWorkersParams struct {
 	fx.In
-	Rdb       *redis.Client
-	Logger    *zap.Logger
-	Codec     Codec
-	Cfg       *config.Config
-	RootCtx   context.Context `optional:"true"`
-	Lifecycle *Lifecycle
+	Rdb     *redis.Client
+	Logger  *zap.Logger
+	Codec   codec.Codec
+	Cfg     *config.Config
+	RootCtx context.Context `optional:"true"`
+	// Lifecycle is optional: when omitted, ProvideWorkers builds one from config.
+	Lifecycle *lifecycle.Lifecycle `optional:"true"`
 }
 
-// Module is the Fx module for TaskMQ dependencies
+// Module is the Fx module for TaskMQ dependencies.
 var Module = fx.Module("taskmq",
 	fx.Provide(
 		// Provide Codec based on config
-		func(cfg *config.Config) Codec {
+		func(cfg *config.Config) codec.Codec {
 			if strings.ToLower(cfg.TaskMQ.Codec) == "binary" {
-				return BinaryCodec{}
+				return codec.BinaryCodec{}
 			}
-			return JSONCodec{}
+			return codec.JSONCodec{}
 		},
 		// Provide shared Lifecycle from config
-		func(cfg *config.Config) *Lifecycle {
-			return NewLifecycle(LifecycleFromConfig(cfg))
+		func(cfg *config.Config) *lifecycle.Lifecycle {
+			return lifecycle.NewLifecycle(LifecycleFromConfig(cfg))
 		},
-		// Provide Client using injected config and codec
-		func(rdb *redis.Client, codec Codec, cfg *config.Config, lc *Lifecycle) Client {
-			return NewClient(rdb,
-				WithDefaultUniqueTTL(cfg.TaskMQ.DefaultUniqueTTL),
-				WithClientCodec(codec),
-				WithClientLifecycle(lc),
+		// Provide Client facade + ISP projections (zero-cost adapters).
+		func(rdb *redis.Client, c codec.Codec, cfg *config.Config, lc *lifecycle.Lifecycle) client.Client {
+			return client.NewClient(rdb,
+				client.WithDefaultUniqueTTL(cfg.TaskMQ.DefaultUniqueTTL),
+				client.WithClientCodec(c),
+				client.WithClientLifecycle(lc),
 			)
 		},
 		// Provide Workers dynamically based on configuration
 		ProvideWorkers,
 		// Provide gRPC Server constructor
-		NewGRPCServer,
+		grpcserver.NewGRPCServer,
+		// Client satisfies grpcserver.API (enqueue + cron + dlq).
+		func(c client.Client) grpcserver.API { return c },
 	),
+	// Project Client onto EnqueueClient / AdminClient / CronClient / …
+	client.ProvideISP,
 	fx.Invoke(
 		RegisterWorkerPoolLifecycle,
 		RegisterGRPCServerLifecycle,
 	),
 )
 
-// ProvideWorkers constructs and provides a Worker (implemented by multiWorker or priorityWorker) for all configured queues.
-func ProvideWorkers(p ProvideWorkersParams) (Worker, error) {
+// ProvideWorkers constructs and provides a Worker for all configured queues.
+func ProvideWorkers(p ProvideWorkersParams) (worker.Worker, error) {
 	lc := p.Lifecycle
 	if lc == nil {
-		lc = NewLifecycle(LifecycleFromConfig(p.Cfg))
+		lc = lifecycle.NewLifecycle(LifecycleFromConfig(p.Cfg))
 	}
-	return BuildWorkerTopologyWithLifecycle(p.Rdb, p.Logger, p.Cfg, p.Codec, p.RootCtx, lc)
+	return worker.BuildWorkerTopologyWithLifecycle(p.Rdb, p.Logger, p.Cfg, p.Codec, p.RootCtx, lc)
 }
 
 // BuildWorkerTopology constructs and returns a Worker based on the configuration.
-func BuildWorkerTopology(rdb *redis.Client, logger *zap.Logger, cfg *config.Config, codec Codec, rootCtx context.Context) (Worker, error) {
-	lc := NewLifecycle(LifecycleFromConfig(cfg))
-	return BuildWorkerTopologyWithLifecycle(rdb, logger, cfg, codec, rootCtx, lc)
+func BuildWorkerTopology(rdb *redis.Client, logger *zap.Logger, cfg *config.Config, c codec.Codec, rootCtx context.Context) (worker.Worker, error) {
+	lc := lifecycle.NewLifecycle(LifecycleFromConfig(cfg))
+	return worker.BuildWorkerTopologyWithLifecycle(rdb, logger, cfg, c, rootCtx, lc)
 }
 
-// BuildWorkerTopologyWithLifecycle is like BuildWorkerTopology but reuses a shared Lifecycle instance
-// (so client and workers share metrics / policy).
-func BuildWorkerTopologyWithLifecycle(rdb *redis.Client, logger *zap.Logger, cfg *config.Config, codec Codec, rootCtx context.Context, lc *Lifecycle) (Worker, error) {
-	workers := make(map[string]Worker)
-
-	queues := cfg.TaskMQ.Queues
-	if len(queues) == 0 {
-		queues = []config.QueueConfig{
-			{
-				Name:        "default",
-				Concurrency: 5,
-			},
-		}
-	}
-
-	priorityQueuesEnabled := cfg.TaskMQ.PriorityQueuesEnabled
-	priorityStrategy := cfg.TaskMQ.PriorityStrategy
-
-	var priorityQueues []QueuePriority
-	var priorityConcurrency int
-	var normalQueues []config.QueueConfig
-
-	for _, qCfg := range queues {
-		if priorityQueuesEnabled && qCfg.Priority > 0 {
-			priorityQueues = append(priorityQueues, QueuePriority{
-				Name:              qCfg.Name,
-				Weight:            qCfg.Priority,
-				RateLimitMax:      qCfg.RateLimitMax,
-				RateLimitDuration: qCfg.RateLimitDuration,
-				RateLimitKeyField: qCfg.RateLimitKeyField,
-			})
-			priorityConcurrency += qCfg.Concurrency
-		} else {
-			normalQueues = append(normalQueues, qCfg)
-		}
-	}
-
-	// 1. Instantiate the prioritized worker pool if enabled
-	if len(priorityQueues) > 0 {
-		if priorityConcurrency <= 0 {
-			priorityConcurrency = 5
-		}
-
-		commonOpts := buildCommonOptionsWithLifecycle(cfg, codec, rootCtx, lc)
-		opts := toPriorityOptions(commonOpts)
-		opts = append(opts, WithGroup("taskmq-priority-group"))
-		opts = append(opts, WithConsumer("taskmq-priority-consumer-1"))
-		opts = append(opts, WithConcurrency(priorityConcurrency))
-		opts = append(opts, WithPriorityQueues(priorityQueues))
-		opts = append(opts, WithPriorityStrategy(priorityStrategy))
-
-		pw := NewPriorityWorker(rdb, logger, opts...)
-
-		// Register the pool under all priority queue names
-		for _, pq := range priorityQueues {
-			workers[pq.Name] = pw
-		}
-	}
-
-	// 2. Instantiate normal queues independently
-	for _, qCfg := range normalQueues {
-		concurrency := 5
-		if qCfg.Concurrency > 0 {
-			concurrency = qCfg.Concurrency
-		}
-		group := "taskmq-group-" + qCfg.Name
-		if qCfg.Group != "" {
-			group = qCfg.Group
-		}
-		consumer := "taskmq-consumer-" + qCfg.Name + "-1"
-		if qCfg.Consumer != "" {
-			consumer = qCfg.Consumer
-		}
-
-		commonOpts := buildCommonOptionsWithLifecycle(cfg, codec, rootCtx, lc)
-		opts := toPoolOptions(commonOpts)
-		opts = append(opts, WithGroup(group))
-		opts = append(opts, WithConsumer(consumer))
-		opts = append(opts, WithConcurrency(concurrency))
-		if qCfg.RateLimitMax > 0 && qCfg.RateLimitDuration > 0 {
-			opts = append(opts, WithRateLimit(qCfg.RateLimitMax, qCfg.RateLimitDuration))
-		}
-		if qCfg.RateLimitKeyField != "" {
-			opts = append(opts, WithRateLimitKeyField(qCfg.RateLimitKeyField))
-		}
-
-		pool := NewWorkerPool(rdb, logger, qCfg.Name, opts...)
-		workers[qCfg.Name] = pool
-	}
-
-	return NewMultiQueueWorker(workers), nil
+// BuildWorkerTopologyWithLifecycle reuses a shared Lifecycle instance.
+func BuildWorkerTopologyWithLifecycle(rdb *redis.Client, logger *zap.Logger, cfg *config.Config, c codec.Codec, rootCtx context.Context, lc *lifecycle.Lifecycle) (worker.Worker, error) {
+	return worker.BuildWorkerTopologyWithLifecycle(rdb, logger, cfg, c, rootCtx, lc)
 }
-
 
 // RegisterWorkerPoolLifecycle registers worker pool startup and shutdown inside Fx container lifecycle hooks.
-func RegisterWorkerPoolLifecycle(lc fx.Lifecycle, worker Worker) {
+func RegisterWorkerPoolLifecycle(lc fx.Lifecycle, w worker.Worker) {
 	lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
-			return worker.Start(ctx)
+			return w.Start(ctx)
 		},
 		OnStop: func(ctx context.Context) error {
-			worker.Stop(ctx)
+			w.Stop(ctx)
 			return nil
 		},
 	})
 }
 
 // RegisterGRPCServerLifecycle registers gRPC server startup and graceful shutdown hooks.
-func RegisterGRPCServerLifecycle(lc fx.Lifecycle, grpcSrv *GRPCServer, cfg *config.Config, logger *zap.Logger) {
+func RegisterGRPCServerLifecycle(lc fx.Lifecycle, grpcSrv *grpcserver.GRPCServer, cfg *config.Config, logger *zap.Logger) {
 	s := grpc.NewServer()
 	taskmqv1.RegisterTaskMQServiceServer(s, grpcSrv)
 
@@ -208,94 +129,7 @@ func RegisterGRPCServerLifecycle(lc fx.Lifecycle, grpcSrv *GRPCServer, cfg *conf
 	})
 }
 
-func buildCommonOptions(cfg *config.Config, codec Codec, rootCtx context.Context) []sharedOption {
-	return buildCommonOptionsWithLifecycle(cfg, codec, rootCtx, NewLifecycle(LifecycleFromConfig(cfg)))
-}
-
-func buildCommonOptionsWithLifecycle(cfg *config.Config, codec Codec, rootCtx context.Context, lc *Lifecycle) []sharedOption {
-	var opts []sharedOption
-	if cfg.TaskMQ.CronHealingInterval > 0 {
-		opts = append(opts, WithCronHealingInterval(cfg.TaskMQ.CronHealingInterval))
-	}
-	if cfg.TaskMQ.CronHealingLockTTL > 0 {
-		opts = append(opts, WithCronHealingLockTTL(cfg.TaskMQ.CronHealingLockTTL))
-	}
-	if cfg.TaskMQ.CronHealingScanBatchSize > 0 {
-		opts = append(opts, WithCronHealingScanBatchSize(cfg.TaskMQ.CronHealingScanBatchSize))
-	}
-	if cfg.TaskMQ.CronHealingScanMaxCount > 0 {
-		opts = append(opts, WithCronHealingScanMaxCount(cfg.TaskMQ.CronHealingScanMaxCount))
-	}
-	if cfg.TaskMQ.SchedulerPollInterval > 0 {
-		opts = append(opts, WithSchedulerPollInterval(cfg.TaskMQ.SchedulerPollInterval))
-	}
-	if cfg.TaskMQ.JanitorInterval > 0 {
-		opts = append(opts, WithJanitorInterval(cfg.TaskMQ.JanitorInterval))
-	}
-	if cfg.TaskMQ.JanitorMinIdleTime > 0 {
-		opts = append(opts, WithJanitorMinIdleTime(cfg.TaskMQ.JanitorMinIdleTime))
-	}
-	opts = append(opts, WithCodec(codec))
-	if lc != nil {
-		opts = append(opts, WithLifecycle(lc))
-	}
-	if rootCtx != nil {
-		opts = append(opts, WithContext(rootCtx))
-	}
-	return opts
-}
-
-// LifecycleFromConfig maps config.LifecycleConfig → taskmq.LifecycleConfig.
-func LifecycleFromConfig(cfg *config.Config) LifecycleConfig {
-	out := DefaultLifecycleConfig()
-	if cfg == nil {
-		return out
-	}
-	lc := cfg.TaskMQ.Lifecycle
-	out.StreamMaxLen = lc.StreamMaxLen
-	out.EnqueueSoftLimit = lc.EnqueueSoftLimit
-	out.EnqueueHardLimit = lc.EnqueueHardLimit
-	out.DelayedMaxCount = lc.DelayedMaxCount
-	out.DelayedMaxDelay = lc.DelayedMaxDelay
-	if lc.DelayedOverflow != "" {
-		out.DelayedOverflow = DelayedOverflowPolicy(lc.DelayedOverflow)
-	}
-	if lc.DLQMaxCount != nil {
-		out.DLQMaxCount = *lc.DLQMaxCount // 0 = unlimited when explicitly set
-	}
-	out.DLQMaxAge = lc.DLQMaxAge
-	if lc.CancelledTTL > 0 {
-		out.CancelledTTL = lc.CancelledTTL
-	}
-	out.MaxPayloadBytes = lc.MaxPayloadBytes
-	if lc.SafeTrimInterval > 0 {
-		out.SafeTrimInterval = lc.SafeTrimInterval
-	}
-	if lc.SafeTrimBatchLimit > 0 {
-		out.SafeTrimBatchLimit = lc.SafeTrimBatchLimit
-	}
-	out.IdleConsumerTimeout = lc.IdleConsumerTimeout
-	if lc.SafeTrimEnabled != nil {
-		out.SafeTrimEnabled = *lc.SafeTrimEnabled
-	}
-	if lc.PurgeCancelledDelayed != nil {
-		out.PurgeCancelledDelayed = *lc.PurgeCancelledDelayed
-	}
-	return out
-}
-
-func toPoolOptions(shared []sharedOption) []WorkerPoolOption {
-	res := make([]WorkerPoolOption, len(shared))
-	for i, o := range shared {
-		res[i] = o
-	}
-	return res
-}
-
-func toPriorityOptions(shared []sharedOption) []PriorityWorkerOption {
-	res := make([]PriorityWorkerOption, len(shared))
-	for i, o := range shared {
-		res[i] = o
-	}
-	return res
+// LifecycleFromConfig maps config into lifecycle settings.
+func LifecycleFromConfig(cfg *config.Config) lifecycle.LifecycleConfig {
+	return lifecycle.FromConfig(cfg)
 }

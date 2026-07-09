@@ -7,17 +7,22 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/twn39/taskmq/internal/config"
-	"github.com/twn39/taskmq/internal/logger"
-	internalredis "github.com/twn39/taskmq/internal/redis"
-	"github.com/twn39/taskmq/internal/taskmq"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 	"go.uber.org/zap"
+	"github.com/twn39/taskmq/internal/config"
+	"github.com/twn39/taskmq/internal/logger"
+	"github.com/twn39/taskmq/internal/taskmq"
+	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
+	"github.com/twn39/taskmq/internal/taskmq/codec"
+	"github.com/twn39/taskmq/internal/taskmq/keys"
+	"github.com/twn39/taskmq/internal/taskmq/lifecycle"
+	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
+	internalredis "github.com/twn39/taskmq/internal/redis"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 )
 
 func lifecycleTestConfig(mutate func(*config.Config)) *config.Config {
@@ -34,13 +39,13 @@ func TestTaskMQ_Lifecycle_EnqueueHardLimit(t *testing.T) {
 	defer cancel()
 
 	queueName := "lifecycle_hard_limit_q"
-	streamKey := taskmq.StreamKey(queueName)
+	streamKey := keys.StreamKey(queueName)
 	// Block handlers so messages remain in the stream (PEL) and XLEN stays elevated.
 	block := make(chan struct{})
 
 	var rdb *goredis.Client
-	var client taskmq.Client
-	var lc *taskmq.Lifecycle
+	var client mqclient.Client
+	var lc *lifecycle.Lifecycle
 
 	app := fxtest.New(t,
 		fx.Provide(
@@ -54,25 +59,25 @@ func TestTaskMQ_Lifecycle_EnqueueHardLimit(t *testing.T) {
 			},
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			func(cfg *config.Config) *taskmq.Lifecycle {
-				return taskmq.NewLifecycle(taskmq.LifecycleFromConfig(cfg))
+			func(cfg *config.Config) *lifecycle.Lifecycle {
+				return lifecycle.NewLifecycle(taskmq.LifecycleFromConfig(cfg))
 			},
-			func(rdb *goredis.Client, codec taskmq.Codec, lifecycle *taskmq.Lifecycle) taskmq.Client {
-				return taskmq.NewClient(rdb,
-					taskmq.WithClientCodec(codec),
-					taskmq.WithClientLifecycle(lifecycle),
+			func(rdb *goredis.Client, codec codec.Codec, lifecycle *lifecycle.Lifecycle) mqclient.Client {
+				return mqclient.NewClient(rdb,
+					mqclient.WithClientCodec(codec),
+					mqclient.WithClientLifecycle(lifecycle),
 				)
 			},
-			func() taskmq.Codec { return taskmq.JSONCodec{} },
-			func(rdb *goredis.Client, logger *zap.Logger, lifecycle *taskmq.Lifecycle) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithGroup("lc-hard-g"),
-					taskmq.WithConsumer("lc-hard-c"),
-					taskmq.WithConcurrency(1),
-					taskmq.WithLifecycle(lifecycle),
-					taskmq.WithCodec(taskmq.JSONCodec{}),
+			func() codec.Codec { return codec.JSONCodec{} },
+			func(rdb *goredis.Client, logger *zap.Logger, lifecycle *lifecycle.Lifecycle) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithGroup("lc-hard-g"),
+					mqworker.WithConsumer("lc-hard-c"),
+					mqworker.WithConcurrency(1),
+					mqworker.WithLifecycle(lifecycle),
+					mqworker.WithCodec(codec.JSONCodec{}),
 				)
-				pool.Register("noop", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("noop", func(ctx context.Context, task *taskmodel.Task) error {
 					select {
 					case <-block:
 						return nil
@@ -87,25 +92,25 @@ func TestTaskMQ_Lifecycle_EnqueueHardLimit(t *testing.T) {
 		fx.Populate(&rdb, &client, &lc),
 	)
 
-	require.NoError(t, rdb.Del(ctx, streamKey, taskmq.DelayedKey(queueName), taskmq.DLQKey(queueName)).Err())
+	require.NoError(t, rdb.Del(ctx, streamKey, keys.DelayedKey(queueName), keys.DLQKey(queueName)).Err())
 	defer func() {
 		close(block)
-		_ = rdb.Del(ctx, streamKey, taskmq.DelayedKey(queueName), taskmq.DLQKey(queueName))
+		_ = rdb.Del(ctx, streamKey, keys.DelayedKey(queueName), keys.DLQKey(queueName))
 	}()
 
 	app.RequireStart()
 	defer app.RequireStop()
 
 	for i := 0; i < 3; i++ {
-		err := client.Enqueue(ctx, taskmq.NewTask("noop", []byte(fmt.Sprintf("%d", i)), taskmq.TaskOptions{Queue: queueName}))
+		err := client.Enqueue(ctx, taskmodel.NewTask("noop", []byte(fmt.Sprintf("%d", i)), taskmodel.TaskOptions{Queue: queueName}))
 		require.NoError(t, err, "enqueue %d", i)
 	}
 	// Allow worker to pick up at least one into PEL; remaining stay pending in stream.
 	time.Sleep(100 * time.Millisecond)
 
-	err := client.Enqueue(ctx, taskmq.NewTask("noop", []byte("overflow"), taskmq.TaskOptions{Queue: queueName}))
+	err := client.Enqueue(ctx, taskmodel.NewTask("noop", []byte("overflow"), taskmodel.TaskOptions{Queue: queueName}))
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, taskmq.ErrQueueFull))
+	assert.True(t, errors.Is(err, lifecycle.ErrQueueFull))
 	assert.GreaterOrEqual(t, lc.Metrics().EnqueueRejectedTotal.Load(), int64(1))
 
 	n, err := rdb.XLen(ctx, streamKey).Result()
@@ -118,12 +123,12 @@ func TestTaskMQ_Lifecycle_DelayedPromoteBackpressure(t *testing.T) {
 	defer cancel()
 
 	queueName := "lifecycle_promote_bp_q"
-	streamKey := taskmq.StreamKey(queueName)
-	delayedKey := taskmq.DelayedKey(queueName)
+	streamKey := keys.StreamKey(queueName)
+	delayedKey := keys.DelayedKey(queueName)
 	block := make(chan struct{})
 
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
@@ -138,22 +143,22 @@ func TestTaskMQ_Lifecycle_DelayedPromoteBackpressure(t *testing.T) {
 			},
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			func(cfg *config.Config) *taskmq.Lifecycle {
-				return taskmq.NewLifecycle(taskmq.LifecycleFromConfig(cfg))
+			func(cfg *config.Config) *lifecycle.Lifecycle {
+				return lifecycle.NewLifecycle(taskmq.LifecycleFromConfig(cfg))
 			},
-			func(rdb *goredis.Client, lifecycle *taskmq.Lifecycle) taskmq.Client {
-				return taskmq.NewClient(rdb, taskmq.WithClientLifecycle(lifecycle), taskmq.WithClientCodec(taskmq.JSONCodec{}))
+			func(rdb *goredis.Client, lifecycle *lifecycle.Lifecycle) mqclient.Client {
+				return mqclient.NewClient(rdb, mqclient.WithClientLifecycle(lifecycle), mqclient.WithClientCodec(codec.JSONCodec{}))
 			},
-			func(rdb *goredis.Client, logger *zap.Logger, lifecycle *taskmq.Lifecycle) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithGroup("lc-promo-g"),
-					taskmq.WithConsumer("lc-promo-c"),
-					taskmq.WithConcurrency(1),
-					taskmq.WithLifecycle(lifecycle),
-					taskmq.WithSchedulerPollInterval(50*time.Millisecond),
-					taskmq.WithCodec(taskmq.JSONCodec{}),
+			func(rdb *goredis.Client, logger *zap.Logger, lifecycle *lifecycle.Lifecycle) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithGroup("lc-promo-g"),
+					mqworker.WithConsumer("lc-promo-c"),
+					mqworker.WithConcurrency(1),
+					mqworker.WithLifecycle(lifecycle),
+					mqworker.WithSchedulerPollInterval(50*time.Millisecond),
+					mqworker.WithCodec(codec.JSONCodec{}),
 				)
-				pool.Register("later", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("later", func(ctx context.Context, task *taskmodel.Task) error {
 					select {
 					case <-block:
 						return nil
@@ -179,10 +184,10 @@ func TestTaskMQ_Lifecycle_DelayedPromoteBackpressure(t *testing.T) {
 
 	// Fill stream to hard limit; blocking handler keeps entries in stream/PEL.
 	for i := 0; i < 2; i++ {
-		require.NoError(t, client.Enqueue(ctx, taskmq.NewTask("later", []byte("s"), taskmq.TaskOptions{Queue: queueName})))
+		require.NoError(t, client.Enqueue(ctx, taskmodel.NewTask("later", []byte("s"), taskmodel.TaskOptions{Queue: queueName})))
 	}
 	// Ready delayed task should NOT promote while stream is full
-	require.NoError(t, client.EnqueueAt(ctx, taskmq.NewTask("later", []byte("d"), taskmq.TaskOptions{Queue: queueName}), time.Now().Add(-time.Second)))
+	require.NoError(t, client.EnqueueAt(ctx, taskmodel.NewTask("later", []byte("d"), taskmodel.TaskOptions{Queue: queueName}), time.Now().Add(-time.Second)))
 
 	// Wait for scheduler ticks
 	time.Sleep(250 * time.Millisecond)
@@ -201,10 +206,10 @@ func TestTaskMQ_Lifecycle_DelayedMaxCountAndDelay(t *testing.T) {
 	defer cancel()
 
 	queueName := "lifecycle_delayed_cap_q"
-	delayedKey := taskmq.DelayedKey(queueName)
+	delayedKey := keys.DelayedKey(queueName)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
@@ -220,18 +225,18 @@ func TestTaskMQ_Lifecycle_DelayedMaxCountAndDelay(t *testing.T) {
 			},
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			func(cfg *config.Config) *taskmq.Lifecycle {
-				return taskmq.NewLifecycle(taskmq.LifecycleFromConfig(cfg))
+			func(cfg *config.Config) *lifecycle.Lifecycle {
+				return lifecycle.NewLifecycle(taskmq.LifecycleFromConfig(cfg))
 			},
-			func(rdb *goredis.Client, lifecycle *taskmq.Lifecycle) taskmq.Client {
-				return taskmq.NewClient(rdb, taskmq.WithClientLifecycle(lifecycle))
+			func(rdb *goredis.Client, lifecycle *lifecycle.Lifecycle) mqclient.Client {
+				return mqclient.NewClient(rdb, mqclient.WithClientLifecycle(lifecycle))
 			},
-			func(rdb *goredis.Client, logger *zap.Logger, lifecycle *taskmq.Lifecycle) taskmq.Worker {
-				return taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithGroup("lc-del-g"),
-					taskmq.WithConsumer("lc-del-c"),
-					taskmq.WithConcurrency(1),
-					taskmq.WithLifecycle(lifecycle),
+			func(rdb *goredis.Client, logger *zap.Logger, lifecycle *lifecycle.Lifecycle) mqworker.Worker {
+				return mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithGroup("lc-del-g"),
+					mqworker.WithConsumer("lc-del-c"),
+					mqworker.WithConcurrency(1),
+					mqworker.WithLifecycle(lifecycle),
 				)
 			},
 		),
@@ -245,15 +250,15 @@ func TestTaskMQ_Lifecycle_DelayedMaxCountAndDelay(t *testing.T) {
 	app.RequireStart()
 	defer app.RequireStop()
 
-	err := client.EnqueueAt(ctx, taskmq.NewTask("x", []byte("1"), taskmq.TaskOptions{Queue: queueName}), time.Now().Add(48*time.Hour))
+	err := client.EnqueueAt(ctx, taskmodel.NewTask("x", []byte("1"), taskmodel.TaskOptions{Queue: queueName}), time.Now().Add(48*time.Hour))
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, taskmq.ErrDelayTooFar))
+	assert.True(t, errors.Is(err, lifecycle.ErrDelayTooFar))
 
-	require.NoError(t, client.EnqueueIn(ctx, taskmq.NewTask("x", []byte("1"), taskmq.TaskOptions{Queue: queueName}), 10*time.Minute))
-	require.NoError(t, client.EnqueueIn(ctx, taskmq.NewTask("x", []byte("2"), taskmq.TaskOptions{Queue: queueName}), 20*time.Minute))
-	err = client.EnqueueIn(ctx, taskmq.NewTask("x", []byte("3"), taskmq.TaskOptions{Queue: queueName}), 30*time.Minute)
+	require.NoError(t, client.EnqueueIn(ctx, taskmodel.NewTask("x", []byte("1"), taskmodel.TaskOptions{Queue: queueName}), 10*time.Minute))
+	require.NoError(t, client.EnqueueIn(ctx, taskmodel.NewTask("x", []byte("2"), taskmodel.TaskOptions{Queue: queueName}), 20*time.Minute))
+	err = client.EnqueueIn(ctx, taskmodel.NewTask("x", []byte("3"), taskmodel.TaskOptions{Queue: queueName}), 30*time.Minute)
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, taskmq.ErrDelayedFull))
+	assert.True(t, errors.Is(err, lifecycle.ErrDelayedFull))
 
 	n, err := rdb.ZCard(ctx, delayedKey).Result()
 	require.NoError(t, err)
@@ -265,13 +270,13 @@ func TestTaskMQ_Lifecycle_DLQMaxCountViaWorker(t *testing.T) {
 	defer cancel()
 
 	queueName := "lifecycle_dlq_cap_q"
-	streamKey := taskmq.StreamKey(queueName)
-	dlqKey := taskmq.DLQKey(queueName)
-	dlqIndexKey := taskmq.DLQIndexKey(queueName)
+	streamKey := keys.StreamKey(queueName)
+	dlqKey := keys.DLQKey(queueName)
+	dlqIndexKey := keys.DLQIndexKey(queueName)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
-	var lc *taskmq.Lifecycle
+	var client mqclient.Client
+	var lc *lifecycle.Lifecycle
 	var done int64
 
 	app := fxtest.New(t,
@@ -287,21 +292,21 @@ func TestTaskMQ_Lifecycle_DLQMaxCountViaWorker(t *testing.T) {
 			},
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			func(cfg *config.Config) *taskmq.Lifecycle {
-				return taskmq.NewLifecycle(taskmq.LifecycleFromConfig(cfg))
+			func(cfg *config.Config) *lifecycle.Lifecycle {
+				return lifecycle.NewLifecycle(taskmq.LifecycleFromConfig(cfg))
 			},
-			func(rdb *goredis.Client, lifecycle *taskmq.Lifecycle) taskmq.Client {
-				return taskmq.NewClient(rdb, taskmq.WithClientLifecycle(lifecycle))
+			func(rdb *goredis.Client, lifecycle *lifecycle.Lifecycle) mqclient.Client {
+				return mqclient.NewClient(rdb, mqclient.WithClientLifecycle(lifecycle))
 			},
-			func(rdb *goredis.Client, logger *zap.Logger, lifecycle *taskmq.Lifecycle) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithGroup("lc-dlq-g"),
-					taskmq.WithConsumer("lc-dlq-c"),
-					taskmq.WithConcurrency(1),
-					taskmq.WithLifecycle(lifecycle),
-					taskmq.WithCodec(taskmq.JSONCodec{}),
+			func(rdb *goredis.Client, logger *zap.Logger, lifecycle *lifecycle.Lifecycle) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithGroup("lc-dlq-g"),
+					mqworker.WithConsumer("lc-dlq-c"),
+					mqworker.WithConcurrency(1),
+					mqworker.WithLifecycle(lifecycle),
+					mqworker.WithCodec(codec.JSONCodec{}),
 				)
-				pool.Register("always_fail", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("always_fail", func(ctx context.Context, task *taskmodel.Task) error {
 					atomic.AddInt64(&done, 1)
 					return errors.New("force dlq")
 				})
@@ -320,9 +325,9 @@ func TestTaskMQ_Lifecycle_DLQMaxCountViaWorker(t *testing.T) {
 
 	// MaxRetry=0 → first failure goes to DLQ immediately.
 	for i := 0; i < 4; i++ {
-		task := taskmq.NewTask("always_fail", []byte("x"), taskmq.TaskOptions{
+		task := taskmodel.NewTask("always_fail", []byte("x"), taskmodel.TaskOptions{
 			Queue:    queueName,
-			MaxRetry: taskmq.Ptr(0),
+			MaxRetry: taskmodel.Ptr(0),
 		})
 		require.NoError(t, client.Enqueue(ctx, task))
 	}
@@ -353,7 +358,7 @@ func TestTaskMQ_Lifecycle_MaxPayloadRejected(t *testing.T) {
 	defer cancel()
 
 	queueName := "lifecycle_payload_q"
-	var client taskmq.Client
+	var client mqclient.Client
 	var rdb *goredis.Client
 
 	app := fxtest.New(t,
@@ -368,20 +373,20 @@ func TestTaskMQ_Lifecycle_MaxPayloadRejected(t *testing.T) {
 			},
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			func(cfg *config.Config) *taskmq.Lifecycle {
-				return taskmq.NewLifecycle(taskmq.LifecycleFromConfig(cfg))
+			func(cfg *config.Config) *lifecycle.Lifecycle {
+				return lifecycle.NewLifecycle(taskmq.LifecycleFromConfig(cfg))
 			},
-			func(rdb *goredis.Client, lifecycle *taskmq.Lifecycle) taskmq.Client {
-				return taskmq.NewClient(rdb, taskmq.WithClientLifecycle(lifecycle))
+			func(rdb *goredis.Client, lifecycle *lifecycle.Lifecycle) mqclient.Client {
+				return mqclient.NewClient(rdb, mqclient.WithClientLifecycle(lifecycle))
 			},
-			func(rdb *goredis.Client, logger *zap.Logger, lifecycle *taskmq.Lifecycle) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithGroup("lc-pay-g"),
-					taskmq.WithConsumer("lc-pay-c"),
-					taskmq.WithConcurrency(1),
-					taskmq.WithLifecycle(lifecycle),
+			func(rdb *goredis.Client, logger *zap.Logger, lifecycle *lifecycle.Lifecycle) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithGroup("lc-pay-g"),
+					mqworker.WithConsumer("lc-pay-c"),
+					mqworker.WithConcurrency(1),
+					mqworker.WithLifecycle(lifecycle),
 				)
-				pool.Register("x", func(ctx context.Context, task *taskmq.Task) error { return nil })
+				pool.Register("x", func(ctx context.Context, task *taskmodel.Task) error { return nil })
 				return pool
 			},
 		),
@@ -389,15 +394,15 @@ func TestTaskMQ_Lifecycle_MaxPayloadRejected(t *testing.T) {
 		fx.Populate(&client, &rdb),
 	)
 
-	_ = rdb.Del(ctx, taskmq.StreamKey(queueName))
+	_ = rdb.Del(ctx, keys.StreamKey(queueName))
 	app.RequireStart()
 	defer app.RequireStop()
 
-	err := client.Enqueue(ctx, taskmq.NewTask("x", []byte("123456789"), taskmq.TaskOptions{Queue: queueName}))
+	err := client.Enqueue(ctx, taskmodel.NewTask("x", []byte("123456789"), taskmodel.TaskOptions{Queue: queueName}))
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, taskmq.ErrPayloadTooLarge))
+	assert.True(t, errors.Is(err, lifecycle.ErrPayloadTooLarge))
 
-	require.NoError(t, client.Enqueue(ctx, taskmq.NewTask("x", []byte("12345678"), taskmq.TaskOptions{Queue: queueName})))
+	require.NoError(t, client.Enqueue(ctx, taskmodel.NewTask("x", []byte("12345678"), taskmodel.TaskOptions{Queue: queueName})))
 }
 
 func TestTaskMQ_Lifecycle_CancelledDelayedPurged(t *testing.T) {
@@ -405,10 +410,10 @@ func TestTaskMQ_Lifecycle_CancelledDelayedPurged(t *testing.T) {
 	defer cancel()
 
 	queueName := "lifecycle_cancel_delayed_q"
-	delayedKey := taskmq.DelayedKey(queueName)
+	delayedKey := keys.DelayedKey(queueName)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
@@ -427,23 +432,23 @@ func TestTaskMQ_Lifecycle_CancelledDelayedPurged(t *testing.T) {
 			},
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			func(cfg *config.Config) *taskmq.Lifecycle {
+			func(cfg *config.Config) *lifecycle.Lifecycle {
 				// Force short interval for purge-only mode
 				lcCfg := taskmq.LifecycleFromConfig(cfg)
 				lcCfg.SafeTrimInterval = 50 * time.Millisecond
 				lcCfg.PurgeCancelledDelayed = true
 				lcCfg.SafeTrimEnabled = false
-				return taskmq.NewLifecycle(lcCfg)
+				return lifecycle.NewLifecycle(lcCfg)
 			},
-			func(rdb *goredis.Client, lifecycle *taskmq.Lifecycle) taskmq.Client {
-				return taskmq.NewClient(rdb, taskmq.WithClientLifecycle(lifecycle))
+			func(rdb *goredis.Client, lifecycle *lifecycle.Lifecycle) mqclient.Client {
+				return mqclient.NewClient(rdb, mqclient.WithClientLifecycle(lifecycle))
 			},
-			func(rdb *goredis.Client, logger *zap.Logger, lifecycle *taskmq.Lifecycle) taskmq.Worker {
-				return taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithGroup("lc-cd-g"),
-					taskmq.WithConsumer("lc-cd-c"),
-					taskmq.WithConcurrency(1),
-					taskmq.WithLifecycle(lifecycle),
+			func(rdb *goredis.Client, logger *zap.Logger, lifecycle *lifecycle.Lifecycle) mqworker.Worker {
+				return mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithGroup("lc-cd-g"),
+					mqworker.WithConsumer("lc-cd-c"),
+					mqworker.WithConcurrency(1),
+					mqworker.WithLifecycle(lifecycle),
 				)
 			},
 		),
@@ -457,7 +462,7 @@ func TestTaskMQ_Lifecycle_CancelledDelayedPurged(t *testing.T) {
 	app.RequireStart()
 	defer app.RequireStop()
 
-	task := taskmq.NewTask("future", []byte("x"), taskmq.TaskOptions{Queue: queueName, ID: "cancel-me"})
+	task := taskmodel.NewTask("future", []byte("x"), taskmodel.TaskOptions{Queue: queueName, ID: "cancel-me"})
 	task.ID = "cancel-me"
 	require.NoError(t, client.EnqueueIn(ctx, task, 2*time.Hour))
 	require.NoError(t, client.CancelTask(ctx, queueName, "cancel-me"))
@@ -474,8 +479,8 @@ func TestTaskMQ_Lifecycle_ModuleSharedLifecycle(t *testing.T) {
 	defer cancel()
 
 	queueName := "lifecycle_module_q"
-	var client taskmq.Client
-	var lc *taskmq.Lifecycle
+	var client mqclient.Client
+	var lc *lifecycle.Lifecycle
 	var rdb *goredis.Client
 
 	app := fxtest.New(t,
@@ -496,7 +501,7 @@ func TestTaskMQ_Lifecycle_ModuleSharedLifecycle(t *testing.T) {
 		fx.Populate(&client, &lc, &rdb),
 	)
 
-	require.NoError(t, rdb.Del(ctx, taskmq.StreamKey(queueName)).Err())
+	require.NoError(t, rdb.Del(ctx, keys.StreamKey(queueName)).Err())
 	app.RequireStart()
 	defer app.RequireStop()
 
@@ -507,9 +512,9 @@ func TestTaskMQ_Lifecycle_ModuleSharedLifecycle(t *testing.T) {
 	require.NoError(t, client.Pause(ctx, queueName))
 	time.Sleep(80 * time.Millisecond)
 
-	require.NoError(t, client.Enqueue(ctx, taskmq.NewTask("x", []byte("1"), taskmq.TaskOptions{Queue: queueName})))
-	err := client.Enqueue(ctx, taskmq.NewTask("x", []byte("2"), taskmq.TaskOptions{Queue: queueName}))
+	require.NoError(t, client.Enqueue(ctx, taskmodel.NewTask("x", []byte("1"), taskmodel.TaskOptions{Queue: queueName})))
+	err := client.Enqueue(ctx, taskmodel.NewTask("x", []byte("2"), taskmodel.TaskOptions{Queue: queueName}))
 	require.Error(t, err)
-	assert.True(t, errors.Is(err, taskmq.ErrQueueFull))
+	assert.True(t, errors.Is(err, lifecycle.ErrQueueFull))
 	assert.GreaterOrEqual(t, lc.Metrics().EnqueueRejectedTotal.Load(), int64(1))
 }

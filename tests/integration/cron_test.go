@@ -6,15 +6,18 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
-	"github.com/twn39/taskmq/internal/logger"
-	internalredis "github.com/twn39/taskmq/internal/redis"
-	"github.com/twn39/taskmq/internal/taskmq"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 	"go.uber.org/zap"
+	"github.com/twn39/taskmq/internal/logger"
+	"github.com/twn39/taskmq/internal/taskmq"
+	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
+	"github.com/twn39/taskmq/internal/taskmq/keys"
+	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
+	internalredis "github.com/twn39/taskmq/internal/redis"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 )
 
 func TestTaskMQ_CronFlow(t *testing.T) {
@@ -27,23 +30,23 @@ func TestTaskMQ_CronFlow(t *testing.T) {
 	doneChan := make(chan bool, 1)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
-	var worker taskmq.Worker
+	var client mqclient.Client
+	var worker mqworker.Worker
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithConcurrency(2),
-					taskmq.WithCronHealingInterval(2*time.Second),
-					taskmq.WithCronHealingLockTTL(1800*time.Millisecond),
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithConcurrency(2),
+					mqworker.WithCronHealingInterval(2*time.Second),
+					mqworker.WithCronHealingLockTTL(1800*time.Millisecond),
 				)
 				// Register handler for the cron job
-				pool.Register("cron:ticker", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("cron:ticker", func(ctx context.Context, task *taskmodel.Task) error {
 					val := atomic.AddInt64(&runCount, 1)
 					if val >= 3 {
 						select {
@@ -62,14 +65,14 @@ func TestTaskMQ_CronFlow(t *testing.T) {
 
 	// Clean up Redis before test
 	err := rdb.Del(ctx,
-		taskmq.StreamKey(queueName),
-		taskmq.DelayedKey(queueName),
-		taskmq.CronConfigsKey(queueName),
+		keys.StreamKey(queueName),
+		keys.DelayedKey(queueName),
+		keys.CronConfigsKey(queueName),
 	).Err()
 	assert.NoError(t, err)
 
 	// Register the Cron task before starting the worker
-	task := taskmq.NewTask("cron:ticker", []byte("tick-payload"), taskmq.TaskOptions{
+	task := taskmodel.NewTask("cron:ticker", []byte("tick-payload"), taskmodel.TaskOptions{
 		Queue: queueName,
 	})
 	// Trigger every 2 seconds
@@ -89,7 +92,7 @@ func TestTaskMQ_CronFlow(t *testing.T) {
 
 	// Now verify Self-Healing:
 	// 1. Corrupt/Delete the ZSET entry representing the next scheduled run
-	delayedKey := taskmq.DelayedKey(queueName)
+	delayedKey := keys.DelayedKey(queueName)
 	err = rdb.Del(ctx, delayedKey).Err()
 	assert.NoError(t, err)
 
@@ -135,22 +138,22 @@ func TestTaskMQ_CronSelfHealing_CustomConfig(t *testing.T) {
 	doneChan := make(chan bool, 1)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
-	var worker taskmq.Worker
+	var client mqclient.Client
+	var worker mqworker.Worker
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithConcurrency(1),
-					taskmq.WithCronHealingInterval(1*time.Second),
-					taskmq.WithCronHealingLockTTL(800*time.Millisecond),
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithConcurrency(1),
+					mqworker.WithCronHealingInterval(1*time.Second),
+					mqworker.WithCronHealingLockTTL(800*time.Millisecond),
 				)
-				pool.Register("cron:healing:custom", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("cron:healing:custom", func(ctx context.Context, task *taskmodel.Task) error {
 					val := atomic.AddInt64(&runCount, 1)
 					if val >= 1 {
 						select {
@@ -169,14 +172,14 @@ func TestTaskMQ_CronSelfHealing_CustomConfig(t *testing.T) {
 
 	// Clean up Redis before test
 	err := rdb.Del(ctx,
-		taskmq.StreamKey(queueName),
-		taskmq.DelayedKey(queueName),
-		taskmq.CronConfigsKey(queueName),
+		keys.StreamKey(queueName),
+		keys.DelayedKey(queueName),
+		keys.CronConfigsKey(queueName),
 	).Err()
 	assert.NoError(t, err)
 
 	// Register the Cron task before starting the worker
-	task := taskmq.NewTask("cron:healing:custom", []byte("healing-payload"), taskmq.TaskOptions{
+	task := taskmodel.NewTask("cron:healing:custom", []byte("healing-payload"), taskmodel.TaskOptions{
 		Queue: queueName,
 	})
 	// Trigger every 1 second
@@ -195,7 +198,7 @@ func TestTaskMQ_CronSelfHealing_CustomConfig(t *testing.T) {
 	}
 
 	// Corrupt/Delete the ZSET entry to simulate broken chain
-	delayedKey := taskmq.DelayedKey(queueName)
+	delayedKey := keys.DelayedKey(queueName)
 	err = rdb.Del(ctx, delayedKey).Err()
 	assert.NoError(t, err)
 
@@ -237,21 +240,21 @@ func TestTaskMQ_CronSelfHealing_Pagination_ExceededLimit(t *testing.T) {
 	queueName := "cron_healing_pag_exceeded_test_queue"
 
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithConcurrency(1),
-					taskmq.WithCronHealingInterval(1*time.Second),
-					taskmq.WithCronHealingLockTTL(800*time.Millisecond),
-					taskmq.WithCronHealingScanBatchSize(2),
-					taskmq.WithCronHealingScanMaxCount(5),
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithConcurrency(1),
+					mqworker.WithCronHealingInterval(1*time.Second),
+					mqworker.WithCronHealingLockTTL(800*time.Millisecond),
+					mqworker.WithCronHealingScanBatchSize(2),
+					mqworker.WithCronHealingScanMaxCount(5),
 				)
 				return pool
 			},
@@ -262,14 +265,14 @@ func TestTaskMQ_CronSelfHealing_Pagination_ExceededLimit(t *testing.T) {
 
 	// Clean up Redis before test
 	err := rdb.Del(ctx,
-		taskmq.StreamKey(queueName),
-		taskmq.DelayedKey(queueName),
-		taskmq.CronConfigsKey(queueName),
+		keys.StreamKey(queueName),
+		keys.DelayedKey(queueName),
+		keys.CronConfigsKey(queueName),
 	).Err()
 	assert.NoError(t, err)
 
 	// 1. Register a Cron task.
-	task := taskmq.NewTask("cron:pagination", []byte("payload"), taskmq.TaskOptions{
+	task := taskmodel.NewTask("cron:pagination", []byte("payload"), taskmodel.TaskOptions{
 		Queue: queueName,
 	})
 	// Trigger every 10 minutes so it doesn't execute immediately
@@ -277,7 +280,7 @@ func TestTaskMQ_CronSelfHealing_Pagination_ExceededLimit(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Fetch the registered cron task from ZSET to find its score
-	delayedKey := taskmq.DelayedKey(queueName)
+	delayedKey := keys.DelayedKey(queueName)
 	members, err := rdb.ZRangeWithScores(ctx, delayedKey, 0, -1).Result()
 	assert.NoError(t, err)
 	assert.Len(t, members, 1)
@@ -285,7 +288,7 @@ func TestTaskMQ_CronSelfHealing_Pagination_ExceededLimit(t *testing.T) {
 
 	// 2. Add 8 dummy delayed tasks to the ZSET with a slightly lower score (so they are sorted before the cron task)
 	for i := 0; i < 8; i++ {
-		dummyTask := taskmq.NewTask("dummy", []byte("dummy-payload"), taskmq.TaskOptions{
+		dummyTask := taskmodel.NewTask("dummy", []byte("dummy-payload"), taskmodel.TaskOptions{
 			Queue: queueName,
 		})
 		serialized, err := json.Marshal(dummyTask)
@@ -327,21 +330,21 @@ func TestTaskMQ_CronSelfHealing_Pagination_WithinLimit(t *testing.T) {
 	queueName := "cron_healing_pag_within_test_queue"
 
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithConcurrency(1),
-					taskmq.WithCronHealingInterval(1*time.Second),
-					taskmq.WithCronHealingLockTTL(800*time.Millisecond),
-					taskmq.WithCronHealingScanBatchSize(2),
-					taskmq.WithCronHealingScanMaxCount(15),
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithConcurrency(1),
+					mqworker.WithCronHealingInterval(1*time.Second),
+					mqworker.WithCronHealingLockTTL(800*time.Millisecond),
+					mqworker.WithCronHealingScanBatchSize(2),
+					mqworker.WithCronHealingScanMaxCount(15),
 				)
 				return pool
 			},
@@ -352,14 +355,14 @@ func TestTaskMQ_CronSelfHealing_Pagination_WithinLimit(t *testing.T) {
 
 	// Clean up Redis before test
 	err := rdb.Del(ctx,
-		taskmq.StreamKey(queueName),
-		taskmq.DelayedKey(queueName),
-		taskmq.CronConfigsKey(queueName),
+		keys.StreamKey(queueName),
+		keys.DelayedKey(queueName),
+		keys.CronConfigsKey(queueName),
 	).Err()
 	assert.NoError(t, err)
 
 	// 1. Register a Cron task.
-	task := taskmq.NewTask("cron:pagination", []byte("payload"), taskmq.TaskOptions{
+	task := taskmodel.NewTask("cron:pagination", []byte("payload"), taskmodel.TaskOptions{
 		Queue: queueName,
 	})
 	// Trigger every 10 minutes so it doesn't execute immediately
@@ -367,7 +370,7 @@ func TestTaskMQ_CronSelfHealing_Pagination_WithinLimit(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Fetch the registered cron task from ZSET to find its score
-	delayedKey := taskmq.DelayedKey(queueName)
+	delayedKey := keys.DelayedKey(queueName)
 	members, err := rdb.ZRangeWithScores(ctx, delayedKey, 0, -1).Result()
 	assert.NoError(t, err)
 	assert.Len(t, members, 1)
@@ -375,7 +378,7 @@ func TestTaskMQ_CronSelfHealing_Pagination_WithinLimit(t *testing.T) {
 
 	// 2. Add 8 dummy delayed tasks to the ZSET with a slightly lower score (so they are sorted before the cron task)
 	for i := 0; i < 8; i++ {
-		dummyTask := taskmq.NewTask("dummy", []byte("dummy-payload"), taskmq.TaskOptions{
+		dummyTask := taskmodel.NewTask("dummy", []byte("dummy-payload"), taskmodel.TaskOptions{
 			Queue: queueName,
 		})
 		serialized, err := json.Marshal(dummyTask)
@@ -410,20 +413,20 @@ func TestTaskMQ_CronOverwrite(t *testing.T) {
 	doneChan := make(chan bool, 1)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithConcurrency(2),
-					taskmq.WithCronHealingInterval(1*time.Second),
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithConcurrency(2),
+					mqworker.WithCronHealingInterval(1*time.Second),
 				)
-				pool.Register("cron:overwrite", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("cron:overwrite", func(ctx context.Context, task *taskmodel.Task) error {
 					payload := string(task.Payload)
 					if payload == "version-1" {
 						atomic.AddInt64(&version1Count, 1)
@@ -445,21 +448,21 @@ func TestTaskMQ_CronOverwrite(t *testing.T) {
 
 	// Clean up Redis before test
 	err := rdb.Del(ctx,
-		taskmq.StreamKey(queueName),
-		taskmq.DelayedKey(queueName),
-		taskmq.CronConfigsKey(queueName),
+		keys.StreamKey(queueName),
+		keys.DelayedKey(queueName),
+		keys.CronConfigsKey(queueName),
 	).Err()
 	assert.NoError(t, err)
 
 	// Register version-1 (runs every second)
-	task1 := taskmq.NewTask("cron:overwrite", []byte("version-1"), taskmq.TaskOptions{
+	task1 := taskmodel.NewTask("cron:overwrite", []byte("version-1"), taskmodel.TaskOptions{
 		Queue: queueName,
 	})
 	err = client.RegisterCron(ctx, "cron:overwrite", "*/1 * * * * *", task1)
 	assert.NoError(t, err)
 
 	// Immediately overwrite with version-2 (runs every second)
-	task2 := taskmq.NewTask("cron:overwrite", []byte("version-2"), taskmq.TaskOptions{
+	task2 := taskmodel.NewTask("cron:overwrite", []byte("version-2"), taskmodel.TaskOptions{
 		Queue: queueName,
 	})
 	err = client.RegisterCron(ctx, "cron:overwrite", "*/1 * * * * *", task2)

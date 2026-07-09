@@ -10,13 +10,15 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	"github.com/twn39/taskmq/internal/taskmq"
+	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
+	mqkeys "github.com/twn39/taskmq/internal/taskmq/keys"
 	"github.com/urfave/cli/v3"
 )
 
 var (
-	rdb    *redis.Client
-	client taskmq.Client
+	rdb     *redis.Client
+	queues  mqclient.QueueController
+	dlq     mqclient.DLQManager
 )
 
 func initRedis(cmd *cli.Command) error {
@@ -37,7 +39,10 @@ func initRedis(cmd *cli.Command) error {
 		return fmt.Errorf("Failed to connect to Redis at %s: %w", addr, err)
 	}
 
-	client = taskmq.NewClient(rdb)
+	// NewClient still returns the facade; CLI only keeps narrow ports.
+	c := mqclient.NewClient(rdb)
+	queues = c
+	dlq = c
 	return nil
 }
 
@@ -115,7 +120,7 @@ func main() {
 					if err := initRedis(cmd); err != nil {
 						return cli.Exit(fmt.Sprintf("Error: %v", err), 1)
 					}
-					if err := client.Pause(ctx, queue); err != nil {
+					if err := queues.Pause(ctx, queue); err != nil {
 						return cli.Exit(fmt.Sprintf("Error: Failed to pause queue %s: %v", queue, err), 1)
 					}
 					fmt.Printf("Success: Queue '%s' paused successfully.\n", queue)
@@ -134,7 +139,7 @@ func main() {
 					if err := initRedis(cmd); err != nil {
 						return cli.Exit(fmt.Sprintf("Error: %v", err), 1)
 					}
-					if err := client.Resume(ctx, queue); err != nil {
+					if err := queues.Resume(ctx, queue); err != nil {
 						return cli.Exit(fmt.Sprintf("Error: Failed to resume queue %s: %v", queue, err), 1)
 					}
 					fmt.Printf("Success: Queue '%s' resumed successfully.\n", queue)
@@ -170,7 +175,7 @@ func main() {
 							if err := initRedis(cmd); err != nil {
 								return cli.Exit(fmt.Sprintf("Error: %v", err), 1)
 							}
-							tasks, err := client.ListDeadLetters(ctx, queue, limit)
+							tasks, err := dlq.ListDeadLetters(ctx, queue, limit)
 							if err != nil {
 								return cli.Exit(fmt.Sprintf("Error: Failed to list DLQ for queue %s: %v", queue, err), 1)
 							}
@@ -202,7 +207,7 @@ func main() {
 							if err := initRedis(cmd); err != nil {
 								return cli.Exit(fmt.Sprintf("Error: %v", err), 1)
 							}
-							if err := client.RetryDeadLetter(ctx, queue, taskID); err != nil {
+							if err := dlq.RetryDeadLetter(ctx, queue, taskID); err != nil {
 								return cli.Exit(fmt.Sprintf("Error: Failed to retry dead letter %s in queue %s: %v", taskID, queue, err), 1)
 							}
 							fmt.Printf("Success: Task '%s' in queue '%s' successfully re-enqueued for retry.\n", taskID, queue)
@@ -222,7 +227,7 @@ func main() {
 							if err := initRedis(cmd); err != nil {
 								return cli.Exit(fmt.Sprintf("Error: %v", err), 1)
 							}
-							if err := client.DeleteDeadLetter(ctx, queue, taskID); err != nil {
+							if err := dlq.DeleteDeadLetter(ctx, queue, taskID); err != nil {
 								return cli.Exit(fmt.Sprintf("Error: Failed to delete dead letter %s in queue %s: %v", taskID, queue, err), 1)
 							}
 							fmt.Printf("Success: Task '%s' deleted from DLQ in queue '%s'.\n", taskID, queue)
@@ -269,10 +274,10 @@ func handleStats(ctx context.Context, rdb *redis.Client) {
 	fmt.Fprintln(w, "QUEUE NAME\tSTATUS\tACTIVE (STREAM)\tSCHEDULED (ZSET)\tDEAD LETTER (DLQ)")
 
 	for q := range queuesMap {
-		pausedKey := taskmq.PausedKey(q)
-		streamKey := taskmq.StreamKey(q)
-		delayedKey := taskmq.DelayedKey(q)
-		dlqKey := taskmq.DLQKey(q)
+		pausedKey := mqkeys.PausedKey(q)
+		streamKey := mqkeys.StreamKey(q)
+		delayedKey := mqkeys.DelayedKey(q)
+		dlqKey := mqkeys.DLQKey(q)
 
 		// 1. Get Pause State
 		isPaused, err := rdb.Exists(ctx, pausedKey).Result()

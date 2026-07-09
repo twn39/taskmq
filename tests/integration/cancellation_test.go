@@ -5,15 +5,18 @@ import (
 	"sync"
 	"testing"
 	"time"
-
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
-	"github.com/twn39/taskmq/internal/logger"
-	internalredis "github.com/twn39/taskmq/internal/redis"
-	"github.com/twn39/taskmq/internal/taskmq"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 	"go.uber.org/zap"
+	"github.com/twn39/taskmq/internal/logger"
+	"github.com/twn39/taskmq/internal/taskmq"
+	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
+	"github.com/twn39/taskmq/internal/taskmq/keys"
+	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
+	internalredis "github.com/twn39/taskmq/internal/redis"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 )
 
 func TestTaskMQ_TaskCancellationFlow(t *testing.T) {
@@ -21,28 +24,28 @@ func TestTaskMQ_TaskCancellationFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "cancel_test_queue"
-	streamKey := taskmq.StreamKey(queueName)
+	streamKey := keys.StreamKey(queueName)
 	taskID := "test-running-cancel-id"
 
 	startedChan := make(chan string, 1)
 	resultChan := make(chan error, 1)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithGroup("cancel-group"),
-					taskmq.WithConsumer("cancel-consumer"),
-					taskmq.WithConcurrency(1),
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithGroup("cancel-group"),
+					mqworker.WithConsumer("cancel-consumer"),
+					mqworker.WithConcurrency(1),
 				)
-				pool.Register("task:cancel_running", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("task:cancel_running", func(ctx context.Context, task *taskmodel.Task) error {
 					startedChan <- task.ID
 					// Wait for cancellation signal up to 3 seconds
 					select {
@@ -69,7 +72,7 @@ func TestTaskMQ_TaskCancellationFlow(t *testing.T) {
 	defer app.RequireStop()
 
 	// 1. Enqueue task
-	task := taskmq.NewTask("task:cancel_running", []byte("data"), taskmq.TaskOptions{
+	task := taskmodel.NewTask("task:cancel_running", []byte("data"), taskmodel.TaskOptions{
 		Queue: queueName,
 	})
 	task.ID = taskID
@@ -103,28 +106,28 @@ func TestTaskMQ_TaskCancellationBeforeRun(t *testing.T) {
 	defer cancel()
 
 	queueName := "cancel_before_run_queue"
-	streamKey := taskmq.StreamKey(queueName)
+	streamKey := keys.StreamKey(queueName)
 	taskID := "test-before-cancel-id"
 
 	var mu sync.Mutex
 	handlerInvoked := false
 
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithGroup("cancel-before-run-group"),
-					taskmq.WithConsumer("cancel-before-run-consumer"),
-					taskmq.WithConcurrency(1),
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithGroup("cancel-before-run-group"),
+					mqworker.WithConsumer("cancel-before-run-consumer"),
+					mqworker.WithConcurrency(1),
 				)
-				pool.Register("task:cancel_before", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("task:cancel_before", func(ctx context.Context, task *taskmodel.Task) error {
 					mu.Lock()
 					handlerInvoked = true
 					mu.Unlock()
@@ -145,7 +148,7 @@ func TestTaskMQ_TaskCancellationBeforeRun(t *testing.T) {
 	_ = rdb.XGroupCreateMkStream(ctx, streamKey, "cancel-before-run-group", "0").Err()
 
 	// 1. Enqueue task before starting worker
-	task := taskmq.NewTask("task:cancel_before", []byte("data"), taskmq.TaskOptions{
+	task := taskmodel.NewTask("task:cancel_before", []byte("data"), taskmodel.TaskOptions{
 		Queue: queueName,
 	})
 	task.ID = taskID

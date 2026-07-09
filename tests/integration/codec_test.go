@@ -4,15 +4,19 @@ import (
 	"context"
 	"testing"
 	"time"
-
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
-	"github.com/twn39/taskmq/internal/logger"
-	internalredis "github.com/twn39/taskmq/internal/redis"
-	"github.com/twn39/taskmq/internal/taskmq"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 	"go.uber.org/zap"
+	"github.com/twn39/taskmq/internal/logger"
+	"github.com/twn39/taskmq/internal/taskmq"
+	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
+	"github.com/twn39/taskmq/internal/taskmq/codec"
+	"github.com/twn39/taskmq/internal/taskmq/keys"
+	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
+	internalredis "github.com/twn39/taskmq/internal/redis"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 )
 
 func TestTaskMQ_BinaryCodec(t *testing.T) {
@@ -20,30 +24,30 @@ func TestTaskMQ_BinaryCodec(t *testing.T) {
 	defer cancel()
 
 	queueName := "binary_codec_test_queue"
-	streamKey := taskmq.StreamKey(queueName)
+	streamKey := keys.StreamKey(queueName)
 
 	runChan := make(chan string, 1)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
-	var worker taskmq.Worker
+	var client mqclient.Client
+	var worker mqworker.Worker
 
-	binaryCodec := taskmq.BinaryCodec{}
+	binaryCodec := codec.BinaryCodec{}
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			func(rdb *goredis.Client) taskmq.Client {
-				return taskmq.NewClient(rdb, taskmq.WithClientCodec(binaryCodec))
+			func(rdb *goredis.Client) mqclient.Client {
+				return mqclient.NewClient(rdb, mqclient.WithClientCodec(binaryCodec))
 			},
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithConcurrency(2),
-					taskmq.WithCodec(binaryCodec),
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithConcurrency(2),
+					mqworker.WithCodec(binaryCodec),
 				)
-				pool.Register("task:binary-test", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("task:binary-test", func(ctx context.Context, task *taskmodel.Task) error {
 					runChan <- string(task.Payload)
 					return nil
 				})
@@ -61,7 +65,7 @@ func TestTaskMQ_BinaryCodec(t *testing.T) {
 	app.RequireStart()
 	defer app.RequireStop()
 
-	task := taskmq.NewTask("task:binary-test", []byte("binary-payload"), taskmq.TaskOptions{
+	task := taskmodel.NewTask("task:binary-test", []byte("binary-payload"), taskmodel.TaskOptions{
 		Queue: queueName,
 	})
 

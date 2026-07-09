@@ -5,15 +5,18 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
-	"github.com/twn39/taskmq/internal/logger"
-	internalredis "github.com/twn39/taskmq/internal/redis"
-	"github.com/twn39/taskmq/internal/taskmq"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 	"go.uber.org/zap"
+	"github.com/twn39/taskmq/internal/logger"
+	"github.com/twn39/taskmq/internal/taskmq"
+	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
+	"github.com/twn39/taskmq/internal/taskmq/keys"
+	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
+	internalredis "github.com/twn39/taskmq/internal/redis"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 )
 
 func TestTaskMQ_BackpressureFlow(t *testing.T) {
@@ -21,28 +24,28 @@ func TestTaskMQ_BackpressureFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "backpressure_test_queue"
-	streamKey := taskmq.StreamKey(queueName)
+	streamKey := keys.StreamKey(queueName)
 
 	var runCount int64
 	var retryCount int64
 	doneChan := make(chan bool, 2)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
-	var worker taskmq.Worker
+	var client mqclient.Client
+	var worker mqworker.Worker
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithConcurrency(1),
-					taskmq.WithExecutionPoolSize(1),
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithConcurrency(1),
+					mqworker.WithExecutionPoolSize(1),
 				)
-				pool.Register("task:slow", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("task:slow", func(ctx context.Context, task *taskmodel.Task) error {
 					atomic.AddInt64(&runCount, 1)
 					if task.Retry > 0 {
 						atomic.AddInt64(&retryCount, 1)
@@ -76,15 +79,15 @@ func TestTaskMQ_BackpressureFlow(t *testing.T) {
 	// Task 2 has 1 second timeout (runs for 0.1 second).
 	// Because of backpressure, Task 2 should NOT be pulled into memory while Task 1 is executing.
 	// Therefore, Task 2 will NOT time out in the queue, and both will finish successfully!
-	task1 := taskmq.NewTask("task:slow", []byte("payload 1"), taskmq.TaskOptions{
+	task1 := taskmodel.NewTask("task:slow", []byte("payload 1"), taskmodel.TaskOptions{
 		Queue:    queueName,
 		Timeout:  5 * time.Second,
-		MaxRetry: taskmq.Ptr(1),
+		MaxRetry: taskmodel.Ptr(1),
 	})
-	task2 := taskmq.NewTask("task:slow", []byte("payload 2"), taskmq.TaskOptions{
+	task2 := taskmodel.NewTask("task:slow", []byte("payload 2"), taskmodel.TaskOptions{
 		Queue:    queueName,
 		Timeout:  1 * time.Second,
-		MaxRetry: taskmq.Ptr(1),
+		MaxRetry: taskmodel.Ptr(1),
 	})
 
 	err = client.Enqueue(ctx, task1)

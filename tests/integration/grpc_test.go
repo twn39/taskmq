@@ -4,19 +4,23 @@ import (
 	"context"
 	"testing"
 	"time"
-
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
-	taskmqv1 "github.com/twn39/taskmq/api/proto/taskmq/v1"
-	"github.com/twn39/taskmq/internal/config"
-	"github.com/twn39/taskmq/internal/logger"
-	internalredis "github.com/twn39/taskmq/internal/redis"
-	"github.com/twn39/taskmq/internal/taskmq"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 	"go.uber.org/zap"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
+	"github.com/twn39/taskmq/internal/config"
+	"github.com/twn39/taskmq/internal/logger"
+	"github.com/twn39/taskmq/internal/taskmq"
+	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
+	"github.com/twn39/taskmq/internal/taskmq/grpcserver"
+	"github.com/twn39/taskmq/internal/taskmq/keys"
+	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
+	internalredis "github.com/twn39/taskmq/internal/redis"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
+	taskmqv1 "github.com/twn39/taskmq/api/proto/taskmq/v1"
 )
 
 func TestTaskMQ_GRPCFlow(t *testing.T) {
@@ -24,27 +28,29 @@ func TestTaskMQ_GRPCFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "grpc_test_queue"
-	streamKey := taskmq.StreamKey(queueName)
+	streamKey := keys.StreamKey(queueName)
 
 	runChan := make(chan string, 1)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
-	var worker taskmq.Worker
+	var client mqclient.Client
+	var worker mqworker.Worker
 	var cfg *config.Config
 
 	app := fxtest.New(t,
+		mqclient.ProvideISP,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			taskmq.NewGRPCServer,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithConcurrency(2),
+			mqclient.NewClient,
+			func(c mqclient.Client) grpcserver.API { return c },
+			grpcserver.NewGRPCServer,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithConcurrency(2),
 				)
-				pool.Register("task:grpc-test", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("task:grpc-test", func(ctx context.Context, task *taskmodel.Task) error {
 					runChan <- string(task.Payload)
 					return nil
 				})

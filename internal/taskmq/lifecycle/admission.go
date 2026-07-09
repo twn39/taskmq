@@ -1,0 +1,140 @@
+package lifecycle
+
+import (
+	"context"
+	"fmt"
+
+	"github.com/redis/go-redis/v9"
+)
+
+// forcePromoteMemberLua atomically moves one delayed member onto the stream with hard/MAXLEN checks.
+// KEYS[1]=delayed KEYS[2]=stream
+// ARGV[1]=member ARGV[2]=hardLimit (0=off) ARGV[3]=streamMaxLen (0=off)
+// Returns: 1=ok, 0=member missing, -2=queue full (member left in delayed).
+const forcePromoteMemberLua = `
+local delayed = KEYS[1]
+local stream = KEYS[2]
+local member = ARGV[1]
+local hard = tonumber(ARGV[2]) or 0
+local maxlen = tonumber(ARGV[3]) or 0
+if hard > 0 then
+  local n = redis.call('XLEN', stream)
+  if n >= hard then
+    return -2
+  end
+end
+local removed = redis.call('ZREM', delayed, member)
+if removed == 0 then
+  return 0
+end
+if maxlen > 0 then
+  redis.call('XADD', stream, 'MAXLEN', '~', maxlen, '*', 'task', member)
+else
+  redis.call('XADD', stream, '*', 'task', member)
+end
+return 1
+`
+
+// ForcePromoteMemberCmd is used by admin "run scheduled now" paths.
+var ForcePromoteMemberCmd = redis.NewScript(forcePromoteMemberLua)
+
+// XAddTask writes a serialized task onto a stream with hard limit + optional MAXLEN.
+// When l is nil, limits are treated as disabled (unbounded XADD via script with hard=0,maxlen=0).
+func (l *Lifecycle) XAddTask(ctx context.Context, rdb *redis.Client, stream string, payload []byte) error {
+	hard, maxlen := int64(0), int64(0)
+	var metrics *LifecycleMetrics
+	if l != nil {
+		hard = l.cfg.EnqueueHardLimit
+		maxlen = l.cfg.StreamMaxLen
+		metrics = l.metrics
+	}
+	res, err := EnqueueStreamCmd.Run(ctx, rdb, []string{stream}, hard, maxlen, payload).Result()
+	if err != nil {
+		return err
+	}
+	return MapEnqueueScriptResult(res, metrics, false)
+}
+
+// ZAddDelayed inserts into the delayed ZSET applying DelayedMaxCount + overflow policy.
+// Client-facing path: honors configured DelayedOverflow (default reject).
+func (l *Lifecycle) ZAddDelayed(ctx context.Context, rdb *redis.Client, delayedKey string, score int64, payload []byte) error {
+	return l.zAddDelayed(ctx, rdb, delayedKey, score, payload, false)
+}
+
+// ZAddDelayedSystem is for in-flight requeues (retry, rate-limit defer, cron reschedule).
+// When DelayedMaxCount is set it always uses drop_farthest so work already ACKed/removed
+// from the stream is never rejected (would otherwise lose tasks).
+func (l *Lifecycle) ZAddDelayedSystem(ctx context.Context, rdb *redis.Client, delayedKey string, score int64, payload []byte) error {
+	return l.zAddDelayed(ctx, rdb, delayedKey, score, payload, true)
+}
+
+func (l *Lifecycle) zAddDelayed(ctx context.Context, rdb *redis.Client, delayedKey string, score int64, payload []byte, system bool) error {
+	maxCount := int64(0)
+	overflow := 0
+	var metrics *LifecycleMetrics
+	if l != nil {
+		maxCount = l.cfg.DelayedMaxCount
+		metrics = l.metrics
+		if system && maxCount > 0 {
+			// System requeues must not reject: force drop_farthest under capacity pressure.
+			overflow = 1
+		} else {
+			overflow = l.OverflowArg()
+		}
+	}
+	res, err := EnqueueDelayedWithLimitCmd.Run(ctx, rdb, []string{delayedKey}, score, payload, maxCount, overflow).Result()
+	if err != nil {
+		return err
+	}
+	return MapEnqueueScriptResult(res, metrics, true)
+}
+
+// ForcePromoteMember moves one delayed member to the stream under hard/MAXLEN admission.
+// Returns ErrQueueFull if the stream is at hard limit (member remains delayed).
+// Returns a not-found style error when the member is already gone.
+func (l *Lifecycle) ForcePromoteMember(ctx context.Context, rdb *redis.Client, delayedKey, streamKey, member string) error {
+	hard, maxlen := int64(0), int64(0)
+	var metrics *LifecycleMetrics
+	if l != nil {
+		hard = l.cfg.EnqueueHardLimit
+		maxlen = l.cfg.StreamMaxLen
+		metrics = l.metrics
+	}
+	res, err := ForcePromoteMemberCmd.Run(ctx, rdb, []string{delayedKey, streamKey}, member, hard, maxlen).Result()
+	if err != nil {
+		return err
+	}
+	val, ok := res.(int64)
+	if !ok {
+		return fmt.Errorf("taskmq: unexpected force-promote result type %T", res)
+	}
+	switch val {
+	case 1:
+		return nil
+	case 0:
+		return ErrMemberGone
+	case enqueueQueueFull:
+		if metrics != nil {
+			metrics.EnqueueRejectedTotal.Add(1)
+		}
+		return ErrQueueFull
+	default:
+		return fmt.Errorf("taskmq: force-promote returned %d", val)
+	}
+}
+
+// DelayedLimits returns (maxCount, overflowArg) for Lua scripts that embed delayed capacity checks.
+func (l *Lifecycle) DelayedLimits() (maxCount int64, overflow int) {
+	if l == nil {
+		return 0, 0
+	}
+	return l.cfg.DelayedMaxCount, l.OverflowArg()
+}
+
+// StreamLimits returns (hardLimit, streamMaxLen) for promote/XADD scripts.
+func (l *Lifecycle) StreamLimits() (hard, maxlen int64) {
+	if l == nil {
+		return 0, 0
+	}
+	return l.cfg.EnqueueHardLimit, l.cfg.StreamMaxLen
+}

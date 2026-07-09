@@ -9,20 +9,28 @@ import (
 
 	"github.com/labstack/echo/v5"
 	"github.com/redis/go-redis/v9"
-	"github.com/twn39/taskmq/internal/taskmq"
+	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
+	mqkeys "github.com/twn39/taskmq/internal/taskmq/keys"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 	"go.uber.org/zap"
 )
 
+// AdminHandler serves HTTP admin APIs using ISP-narrow client ports.
 type AdminHandler struct {
 	rdb    *redis.Client
-	client taskmq.Client
+	admin  mqclient.AdminClient
+	cron   mqclient.CronClient
+	enq    mqclient.EnqueueClient
 	logger *zap.Logger
 }
 
-func NewAdminHandler(rdb *redis.Client, client taskmq.Client, logger *zap.Logger) *AdminHandler {
+// NewAdminHandler wires admin, cron, and enqueue ports (projected from client.Client via Fx).
+func NewAdminHandler(rdb *redis.Client, admin mqclient.AdminClient, cron mqclient.CronClient, enq mqclient.EnqueueClient, logger *zap.Logger) *AdminHandler {
 	return &AdminHandler{
 		rdb:    rdb,
-		client: client,
+		admin:  admin,
+		cron:   cron,
+		enq:    enq,
 		logger: logger,
 	}
 }
@@ -65,10 +73,10 @@ func (h *AdminHandler) GetStats(c *echo.Context) error {
 
 	stats := []QueueStat{}
 	for q := range queuesMap {
-		pausedKey := taskmq.PausedKey(q)
-		streamKey := taskmq.StreamKey(q)
-		delayedKey := taskmq.DelayedKey(q)
-		dlqKey := taskmq.DLQKey(q)
+		pausedKey := mqkeys.PausedKey(q)
+		streamKey := mqkeys.StreamKey(q)
+		delayedKey := mqkeys.DelayedKey(q)
+		dlqKey := mqkeys.DLQKey(q)
 
 		isPaused, err := h.rdb.Exists(ctx, pausedKey).Result()
 		status := "Active"
@@ -99,7 +107,7 @@ func (h *AdminHandler) PauseQueue(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue parameter"})
 	}
 
-	if err := h.client.Pause(ctx, queue); err != nil {
+	if err := h.admin.Pause(ctx, queue); err != nil {
 		h.logger.Error("Failed to pause queue", zap.String("queue", queue), zap.Error(err))
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
@@ -114,7 +122,7 @@ func (h *AdminHandler) ResumeQueue(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue parameter"})
 	}
 
-	if err := h.client.Resume(ctx, queue); err != nil {
+	if err := h.admin.Resume(ctx, queue); err != nil {
 		h.logger.Error("Failed to resume queue", zap.String("queue", queue), zap.Error(err))
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
@@ -137,7 +145,7 @@ func (h *AdminHandler) ListDLQ(c *echo.Context) error {
 		}
 	}
 
-	tasks, err := h.client.ListDeadLetters(ctx, queue, limit)
+	tasks, err := h.admin.ListDeadLetters(ctx, queue, limit)
 	if err != nil {
 		h.logger.Error("Failed to list dead letters", zap.String("queue", queue), zap.Error(err))
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -157,7 +165,7 @@ func (h *AdminHandler) RetryDLQ(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue or id parameter"})
 	}
 
-	if err := h.client.RetryDeadLetter(ctx, queue, id); err != nil {
+	if err := h.admin.RetryDeadLetter(ctx, queue, id); err != nil {
 		h.logger.Error("Failed to retry dead letter", zap.String("queue", queue), zap.String("id", id), zap.Error(err))
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
@@ -173,7 +181,7 @@ func (h *AdminHandler) DeleteDLQ(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue or id parameter"})
 	}
 
-	if err := h.client.DeleteDeadLetter(ctx, queue, id); err != nil {
+	if err := h.admin.DeleteDeadLetter(ctx, queue, id); err != nil {
 		h.logger.Error("Failed to delete dead letter", zap.String("queue", queue), zap.String("id", id), zap.Error(err))
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
@@ -202,15 +210,15 @@ func (h *AdminHandler) EnqueueTest(c *echo.Context) error {
 		req.Name = "task:test"
 	}
 
-	task := taskmq.NewTask(req.Name, []byte(req.Payload), taskmq.TaskOptions{
+	task := taskmodel.NewTask(req.Name, []byte(req.Payload), taskmodel.TaskOptions{
 		Queue: req.Queue,
 	})
 
 	var err error
 	if req.DelaySec > 0 {
-		err = h.client.EnqueueIn(ctx, task, time.Duration(req.DelaySec)*time.Second)
+		err = h.enq.EnqueueIn(ctx, task, time.Duration(req.DelaySec)*time.Second)
 	} else {
-		err = h.client.Enqueue(ctx, task)
+		err = h.enq.Enqueue(ctx, task)
 	}
 
 	if err != nil {
@@ -239,7 +247,7 @@ func (h *AdminHandler) ListScheduled(c *echo.Context) error {
 		}
 	}
 
-	tasks, err := h.client.ListScheduledTasks(ctx, queue, limit)
+	tasks, err := h.admin.ListScheduledTasks(ctx, queue, limit)
 	if err != nil {
 		h.logger.Error("Failed to list scheduled tasks", zap.String("queue", queue), zap.Error(err))
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -259,7 +267,7 @@ func (h *AdminHandler) RunScheduled(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue or id parameter"})
 	}
 
-	if err := h.client.RunScheduledTask(ctx, queue, id); err != nil {
+	if err := h.admin.RunScheduledTask(ctx, queue, id); err != nil {
 		h.logger.Error("Failed to run scheduled task", zap.String("queue", queue), zap.String("id", id), zap.Error(err))
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
@@ -275,7 +283,7 @@ func (h *AdminHandler) DeleteScheduled(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue or id parameter"})
 	}
 
-	if err := h.client.DeleteScheduledTask(ctx, queue, id); err != nil {
+	if err := h.admin.DeleteScheduledTask(ctx, queue, id); err != nil {
 		h.logger.Error("Failed to delete scheduled task", zap.String("queue", queue), zap.String("id", id), zap.Error(err))
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
@@ -290,7 +298,7 @@ func (h *AdminHandler) ListCron(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue parameter"})
 	}
 
-	jobs, err := h.client.ListCronJobs(ctx, queue)
+	jobs, err := h.cron.ListCronJobs(ctx, queue)
 	if err != nil {
 		h.logger.Error("Failed to list cron jobs", zap.String("queue", queue), zap.Error(err))
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -310,7 +318,7 @@ func (h *AdminHandler) RunCron(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue or job_name parameter"})
 	}
 
-	if err := h.client.RunCronJob(ctx, queue, jobName); err != nil {
+	if err := h.cron.RunCronJob(ctx, queue, jobName); err != nil {
 		h.logger.Error("Failed to trigger cron job", zap.String("queue", queue), zap.String("jobName", jobName), zap.Error(err))
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
@@ -326,7 +334,7 @@ func (h *AdminHandler) DeleteCron(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue or job_name parameter"})
 	}
 
-	if err := h.client.DeleteCronJob(ctx, queue, jobName); err != nil {
+	if err := h.cron.DeleteCronJob(ctx, queue, jobName); err != nil {
 		h.logger.Error("Failed to delete cron job", zap.String("queue", queue), zap.String("jobName", jobName), zap.Error(err))
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
@@ -341,7 +349,7 @@ func (h *AdminHandler) RetryAllDLQ(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue parameter"})
 	}
 
-	count, err := h.client.RetryAllDeadLetters(ctx, queue)
+	count, err := h.admin.RetryAllDeadLetters(ctx, queue)
 	if err != nil {
 		h.logger.Error("Failed to retry all DLQ tasks", zap.String("queue", queue), zap.Error(err))
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -360,7 +368,7 @@ func (h *AdminHandler) PurgeAllDLQ(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue parameter"})
 	}
 
-	count, err := h.client.PurgeAllDeadLetters(ctx, queue)
+	count, err := h.admin.PurgeAllDeadLetters(ctx, queue)
 	if err != nil {
 		h.logger.Error("Failed to purge all DLQ tasks", zap.String("queue", queue), zap.Error(err))
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -387,7 +395,7 @@ func (h *AdminHandler) ListActive(c *echo.Context) error {
 		}
 	}
 
-	tasks, err := h.client.ListActiveTasks(ctx, queue, limit)
+	tasks, err := h.admin.ListActiveTasks(ctx, queue, limit)
 	if err != nil {
 		h.logger.Error("Failed to list active tasks", zap.String("queue", queue), zap.Error(err))
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
@@ -407,11 +415,10 @@ func (h *AdminHandler) DeleteActive(c *echo.Context) error {
 		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue or id parameter"})
 	}
 
-	if err := h.client.DeleteActiveTask(ctx, queue, id); err != nil {
+	if err := h.admin.DeleteActiveTask(ctx, queue, id); err != nil {
 		h.logger.Error("Failed to delete active task", zap.String("queue", queue), zap.String("id", id), zap.Error(err))
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
 	}
 
 	return c.JSON(http.StatusOK, map[string]string{"message": fmt.Sprintf("Active task '%s' successfully deleted/cancelled", id)})
 }
-

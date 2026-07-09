@@ -6,16 +6,19 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"github.com/twn39/taskmq/internal/logger"
-	internalredis "github.com/twn39/taskmq/internal/redis"
-	"github.com/twn39/taskmq/internal/taskmq"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 	"go.uber.org/zap"
+	"github.com/twn39/taskmq/internal/logger"
+	"github.com/twn39/taskmq/internal/taskmq"
+	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
+	"github.com/twn39/taskmq/internal/taskmq/keys"
+	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
+	internalredis "github.com/twn39/taskmq/internal/redis"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 )
 
 func TestTaskMQ_RetryFlow(t *testing.T) {
@@ -23,28 +26,28 @@ func TestTaskMQ_RetryFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "retry_test_queue"
-	streamKey := taskmq.StreamKey(queueName)
-	delayedKey := taskmq.DelayedKey(queueName)
+	streamKey := keys.StreamKey(queueName)
+	delayedKey := keys.DelayedKey(queueName)
 
 	var execCount int64
 	doneChan := make(chan bool, 1)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithGroup("retry-group"),
-					taskmq.WithConsumer("retry-consumer"),
-					taskmq.WithConcurrency(1),
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithGroup("retry-group"),
+					mqworker.WithConsumer("retry-consumer"),
+					mqworker.WithConcurrency(1),
 				)
-				pool.Register("task:fail", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("task:fail", func(ctx context.Context, task *taskmodel.Task) error {
 					current := atomic.AddInt64(&execCount, 1)
 					if current >= 3 {
 						doneChan <- true
@@ -65,9 +68,9 @@ func TestTaskMQ_RetryFlow(t *testing.T) {
 	defer app.RequireStop()
 
 	// Enqueue a task that allows 3 retries (MaxRetry = 3)
-	task := taskmq.NewTask("task:fail", []byte("fail payload"), taskmq.TaskOptions{
+	task := taskmodel.NewTask("task:fail", []byte("fail payload"), taskmodel.TaskOptions{
 		Queue:    queueName,
-		MaxRetry: taskmq.Ptr(3),
+		MaxRetry: taskmodel.Ptr(3),
 	})
 
 	err := client.Enqueue(ctx, task)
@@ -94,24 +97,24 @@ func TestTaskMQ_UnregisteredHandlerRetryAndDLQ(t *testing.T) {
 	defer cancel()
 
 	queueName := "unregistered_retry_test_queue"
-	streamKey := taskmq.StreamKey(queueName)
-	delayedKey := taskmq.DelayedKey(queueName)
-	dlqKey := taskmq.DLQKey(queueName)
+	streamKey := keys.StreamKey(queueName)
+	delayedKey := keys.DelayedKey(queueName)
+	dlqKey := keys.DLQKey(queueName)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithGroup("unregistered-group"),
-					taskmq.WithConsumer("unregistered-consumer"),
-					taskmq.WithConcurrency(1),
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithGroup("unregistered-group"),
+					mqworker.WithConsumer("unregistered-consumer"),
+					mqworker.WithConcurrency(1),
 				)
 				// Do NOT register any handlers
 				return pool
@@ -128,16 +131,16 @@ func TestTaskMQ_UnregisteredHandlerRetryAndDLQ(t *testing.T) {
 	defer app.RequireStop()
 
 	// Enqueue a task with MaxRetry = 2
-	task := taskmq.NewTask("task:some_unregistered_job", []byte("data"), taskmq.TaskOptions{
+	task := taskmodel.NewTask("task:some_unregistered_job", []byte("data"), taskmodel.TaskOptions{
 		Queue:    queueName,
-		MaxRetry: taskmq.Ptr(2),
+		MaxRetry: taskmodel.Ptr(2),
 	})
 
 	err := client.Enqueue(ctx, task)
 	assert.NoError(t, err)
 
 	// Poll DLQ until the task appears (since it should run out of retries and move to DLQ)
-	var dlqTasks []*taskmq.Task
+	var dlqTasks []*taskmodel.Task
 	for i := 0; i < 20; i++ {
 		dlqTasks, err = client.ListDeadLetters(ctx, queueName, 10)
 		if err == nil && len(dlqTasks) > 0 {
@@ -161,24 +164,24 @@ func TestTaskMQ_CorruptedPayloadDiscard(t *testing.T) {
 	defer cancel()
 
 	queueName := "corrupted_payload_test_queue"
-	streamKey := taskmq.StreamKey(queueName)
+	streamKey := keys.StreamKey(queueName)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithGroup("corrupted-group"),
-					taskmq.WithConsumer("corrupted-consumer"),
-					taskmq.WithConcurrency(1),
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithGroup("corrupted-group"),
+					mqworker.WithConsumer("corrupted-consumer"),
+					mqworker.WithConcurrency(1),
 				)
-				pool.Register("task:dummy", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("task:dummy", func(ctx context.Context, task *taskmodel.Task) error {
 					return nil
 				})
 				return pool

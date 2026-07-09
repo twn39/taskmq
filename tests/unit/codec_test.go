@@ -3,14 +3,14 @@ package unit
 import (
 	"testing"
 	"time"
-
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
-	"github.com/twn39/taskmq/internal/taskmq"
+	"github.com/twn39/taskmq/internal/taskmq/codec"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 )
 
 func TestCodecs(t *testing.T) {
-	task := &taskmq.Task{
+	task := &taskmodel.Task{
 		ID:          "test-id-123",
 		Queue:       "my-priority-queue",
 		Name:        "task:send:email",
@@ -27,10 +27,10 @@ func TestCodecs(t *testing.T) {
 
 	codecs := []struct {
 		name  string
-		codec taskmq.Codec
+		codec codec.Codec
 	}{
-		{"JSONCodec", taskmq.JSONCodec{}},
-		{"BinaryCodec", taskmq.BinaryCodec{}},
+		{"JSONCodec", codec.JSONCodec{}},
+		{"BinaryCodec", codec.BinaryCodec{}},
 	}
 
 	for _, tc := range codecs {
@@ -39,7 +39,7 @@ func TestCodecs(t *testing.T) {
 			assert.NoError(t, err)
 			assert.NotEmpty(t, data)
 
-			var decoded taskmq.Task
+			var decoded taskmodel.Task
 			err = tc.codec.Unmarshal(data, &decoded)
 			assert.NoError(t, err)
 
@@ -54,8 +54,8 @@ func TestCodecs(t *testing.T) {
 }
 
 func TestBinaryCodec_ErrorCases(t *testing.T) {
-	codec := taskmq.BinaryCodec{}
-	var decoded taskmq.Task
+	codec := codec.BinaryCodec{}
+	var decoded taskmodel.Task
 
 	// Too short data
 	err := codec.Unmarshal([]byte{1}, &decoded)

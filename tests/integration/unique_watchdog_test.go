@@ -5,15 +5,18 @@ import (
 	"errors"
 	"testing"
 	"time"
-
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
-	"github.com/twn39/taskmq/internal/logger"
-	internalredis "github.com/twn39/taskmq/internal/redis"
-	"github.com/twn39/taskmq/internal/taskmq"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 	"go.uber.org/zap"
+	"github.com/twn39/taskmq/internal/logger"
+	"github.com/twn39/taskmq/internal/taskmq"
+	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
+	"github.com/twn39/taskmq/internal/taskmq/keys"
+	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
+	internalredis "github.com/twn39/taskmq/internal/redis"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 )
 
 func TestTaskMQ_UniqueScope_UntilStart(t *testing.T) {
@@ -21,28 +24,28 @@ func TestTaskMQ_UniqueScope_UntilStart(t *testing.T) {
 	defer cancel()
 
 	queueName := "unq_start_queue"
-	streamKey := taskmq.StreamKey(queueName)
-	uniqueLockKey := taskmq.UniqueKey(queueName, "start-key")
+	streamKey := keys.StreamKey(queueName)
+	uniqueLockKey := keys.UniqueKey(queueName, "start-key")
 
 	startedChan := make(chan bool, 1)
 	handlerSleepChan := make(chan bool, 1)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithGroup("start-group"),
-					taskmq.WithConsumer("start-consumer"),
-					taskmq.WithConcurrency(1),
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithGroup("start-group"),
+					mqworker.WithConsumer("start-consumer"),
+					mqworker.WithConcurrency(1),
 				)
-				pool.Register("task:unq_start", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("task:unq_start", func(ctx context.Context, task *taskmodel.Task) error {
 					startedChan <- true
 					<-handlerSleepChan // Keep handler running
 					return nil
@@ -61,11 +64,11 @@ func TestTaskMQ_UniqueScope_UntilStart(t *testing.T) {
 	defer app.RequireStop()
 
 	// 1. Enqueue task with UniqueUntilStart
-	task1 := taskmq.NewTask("task:unq_start", []byte("1"), taskmq.TaskOptions{
+	task1 := taskmodel.NewTask("task:unq_start", []byte("1"), taskmodel.TaskOptions{
 		Queue:       queueName,
 		UniqueKey:   "start-key",
 		UniqueTTL:   5 * time.Second,
-		UniqueScope: taskmq.UniqueUntilStart,
+		UniqueScope: taskmodel.UniqueUntilStart,
 	})
 	err := client.Enqueue(ctx, task1)
 	assert.NoError(t, err)
@@ -79,11 +82,11 @@ func TestTaskMQ_UniqueScope_UntilStart(t *testing.T) {
 
 	// 2. Try to enqueue task 2 with the same key while task 1 is still running.
 	// It should succeed because UniqueUntilStart releases the lock immediately when handler starts!
-	task2 := taskmq.NewTask("task:unq_start", []byte("2"), taskmq.TaskOptions{
+	task2 := taskmodel.NewTask("task:unq_start", []byte("2"), taskmodel.TaskOptions{
 		Queue:       queueName,
 		UniqueKey:   "start-key",
 		UniqueTTL:   5 * time.Second,
-		UniqueScope: taskmq.UniqueUntilStart,
+		UniqueScope: taskmodel.UniqueUntilStart,
 	})
 	err = client.Enqueue(ctx, task2)
 	assert.NoError(t, err, "Should allow enqueuing duplicates once task 1 starts executing under UniqueUntilStart")
@@ -97,29 +100,29 @@ func TestTaskMQ_UniqueScope_UntilSuccess(t *testing.T) {
 	defer cancel()
 
 	queueName := "unq_success_queue"
-	streamKey := taskmq.StreamKey(queueName)
-	dlqKey := taskmq.DLQKey(queueName)
-	dlqIndexKey := taskmq.DLQIndexKey(queueName)
-	uniqueLockKey := taskmq.UniqueKey(queueName, "success-key")
+	streamKey := keys.StreamKey(queueName)
+	dlqKey := keys.DLQKey(queueName)
+	dlqIndexKey := keys.DLQIndexKey(queueName)
+	uniqueLockKey := keys.UniqueKey(queueName, "success-key")
 
 	runChan := make(chan error, 5)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithGroup("success-group"),
-					taskmq.WithConsumer("success-consumer"),
-					taskmq.WithConcurrency(1),
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithGroup("success-group"),
+					mqworker.WithConsumer("success-consumer"),
+					mqworker.WithConcurrency(1),
 				)
-				pool.Register("task:unq_success", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("task:unq_success", func(ctx context.Context, task *taskmodel.Task) error {
 					if string(task.Payload) == "fail" {
 						runChan <- errors.New("fail")
 						return errors.New("fail")
@@ -141,13 +144,13 @@ func TestTaskMQ_UniqueScope_UntilSuccess(t *testing.T) {
 	defer app.RequireStop()
 
 	// 1. Enqueue unique task that fails, with UniqueUntilSuccess.
-	// Set MaxRetry: taskmq.Ptr(0) directly in TaskOptions so task1 goes directly to DLQ on failure with no retries.
-	task1 := taskmq.NewTask("task:unq_success", []byte("fail"), taskmq.TaskOptions{
+	// Set MaxRetry: taskmodel.Ptr(0) directly in TaskOptions so task1 goes directly to DLQ on failure with no retries.
+	task1 := taskmodel.NewTask("task:unq_success", []byte("fail"), taskmodel.TaskOptions{
 		Queue:       queueName,
-		MaxRetry:    taskmq.Ptr(0),
+		MaxRetry:    taskmodel.Ptr(0),
 		UniqueKey:   "success-key",
 		UniqueTTL:   10 * time.Second,
-		UniqueScope: taskmq.UniqueUntilSuccess,
+		UniqueScope: taskmodel.UniqueUntilSuccess,
 	})
 	err := client.Enqueue(ctx, task1)
 	assert.NoError(t, err)
@@ -165,11 +168,11 @@ func TestTaskMQ_UniqueScope_UntilSuccess(t *testing.T) {
 
 	// 2. Try to enqueue task 2 with the same key while task 1 is scheduled for retry.
 	// It should succeed because UniqueUntilSuccess releases the lock immediately on execution failure!
-	task2 := taskmq.NewTask("task:unq_success", []byte("success"), taskmq.TaskOptions{
+	task2 := taskmodel.NewTask("task:unq_success", []byte("success"), taskmodel.TaskOptions{
 		Queue:       queueName,
 		UniqueKey:   "success-key",
 		UniqueTTL:   10 * time.Second,
-		UniqueScope: taskmq.UniqueUntilSuccess,
+		UniqueScope: taskmodel.UniqueUntilSuccess,
 	})
 	err = client.Enqueue(ctx, task2)
 	assert.NoError(t, err, "Should allow enqueuing duplicate once task 1 failed and lock released under UniqueUntilSuccess")
@@ -188,28 +191,28 @@ func TestTaskMQ_Unique_WatchdogRenewal(t *testing.T) {
 	defer cancel()
 
 	queueName := "unq_watchdog_queue"
-	streamKey := taskmq.StreamKey(queueName)
-	uniqueLockKey := taskmq.UniqueKey(queueName, "watchdog-key")
+	streamKey := keys.StreamKey(queueName)
+	uniqueLockKey := keys.UniqueKey(queueName, "watchdog-key")
 
 	startedChan := make(chan bool, 1)
 	handlerSleepChan := make(chan bool, 1)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithGroup("watchdog-group"),
-					taskmq.WithConsumer("watchdog-consumer"),
-					taskmq.WithConcurrency(1),
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithGroup("watchdog-group"),
+					mqworker.WithConsumer("watchdog-consumer"),
+					mqworker.WithConcurrency(1),
 				)
-				pool.Register("task:unq_watchdog", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("task:unq_watchdog", func(ctx context.Context, task *taskmodel.Task) error {
 					startedChan <- true
 					<-handlerSleepChan // Keep handler running to test watchdog
 					return nil
@@ -228,11 +231,11 @@ func TestTaskMQ_Unique_WatchdogRenewal(t *testing.T) {
 	defer app.RequireStop()
 
 	// 1. Enqueue unique task with a very short TTL (1.5 seconds)
-	task1 := taskmq.NewTask("task:unq_watchdog", []byte("watchdog"), taskmq.TaskOptions{
+	task1 := taskmodel.NewTask("task:unq_watchdog", []byte("watchdog"), taskmodel.TaskOptions{
 		Queue:       queueName,
 		UniqueKey:   "watchdog-key",
 		UniqueTTL:   1500 * time.Millisecond,
-		UniqueScope: taskmq.UniqueUntilSucceeded,
+		UniqueScope: taskmodel.UniqueUntilSucceeded,
 	})
 	err := client.Enqueue(ctx, task1)
 	assert.NoError(t, err)

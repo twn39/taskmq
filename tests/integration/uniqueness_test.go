@@ -4,15 +4,19 @@ import (
 	"context"
 	"testing"
 	"time"
-
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
-	"github.com/twn39/taskmq/internal/logger"
-	internalredis "github.com/twn39/taskmq/internal/redis"
-	"github.com/twn39/taskmq/internal/taskmq"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 	"go.uber.org/zap"
+	"github.com/twn39/taskmq/internal/logger"
+	"github.com/twn39/taskmq/internal/taskmq"
+	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
+	"github.com/twn39/taskmq/internal/taskmq/keys"
+	"github.com/twn39/taskmq/internal/taskmq/lifecycle"
+	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
+	internalredis "github.com/twn39/taskmq/internal/redis"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 )
 
 func TestTaskMQ_UniquenessFlow(t *testing.T) {
@@ -20,28 +24,28 @@ func TestTaskMQ_UniquenessFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "unique_test_queue"
-	streamKey := taskmq.StreamKey(queueName)
-	uniqueLockKey := taskmq.UniqueKey(queueName, "my-unique-key")
+	streamKey := keys.StreamKey(queueName)
+	uniqueLockKey := keys.UniqueKey(queueName, "my-unique-key")
 
 	runChan := make(chan bool, 1)
 	blockChan := make(chan struct{})
 
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithGroup("unique-group"),
-					taskmq.WithConsumer("unique-consumer"),
-					taskmq.WithConcurrency(1),
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithGroup("unique-group"),
+					mqworker.WithConsumer("unique-consumer"),
+					mqworker.WithConcurrency(1),
 				)
-				pool.Register("task:unique", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("task:unique", func(ctx context.Context, task *taskmodel.Task) error {
 					<-blockChan
 					runChan <- true
 					return nil
@@ -60,7 +64,7 @@ func TestTaskMQ_UniquenessFlow(t *testing.T) {
 	defer app.RequireStop()
 
 	// 1. Enqueue unique task 1
-	task1 := taskmq.NewTask("task:unique", []byte("data 1"), taskmq.TaskOptions{
+	task1 := taskmodel.NewTask("task:unique", []byte("data 1"), taskmodel.TaskOptions{
 		Queue:     queueName,
 		UniqueKey: "my-unique-key",
 		UniqueTTL: 5 * time.Second,
@@ -69,13 +73,13 @@ func TestTaskMQ_UniquenessFlow(t *testing.T) {
 	assert.NoError(t, err)
 
 	// 2. Try enqueuing unique task 2 (with same unique key)
-	task2 := taskmq.NewTask("task:unique", []byte("data 2"), taskmq.TaskOptions{
+	task2 := taskmodel.NewTask("task:unique", []byte("data 2"), taskmodel.TaskOptions{
 		Queue:     queueName,
 		UniqueKey: "my-unique-key",
 		UniqueTTL: 5 * time.Second,
 	})
 	err = client.Enqueue(ctx, task2)
-	assert.ErrorIs(t, err, taskmq.ErrDuplicateTask, "Should return ErrDuplicateTask on duplicates")
+	assert.ErrorIs(t, err, lifecycle.ErrDuplicateTask, "Should return ErrDuplicateTask on duplicates")
 
 	// Allow task 1 to finish
 	close(blockChan)

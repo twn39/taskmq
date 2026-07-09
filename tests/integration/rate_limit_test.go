@@ -6,22 +6,26 @@ import (
 	"sync"
 	"testing"
 	"time"
-
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
-	"github.com/twn39/taskmq/internal/config"
-	"github.com/twn39/taskmq/internal/logger"
-	internalredis "github.com/twn39/taskmq/internal/redis"
-	"github.com/twn39/taskmq/internal/taskmq"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
+	"github.com/twn39/taskmq/internal/config"
+	"github.com/twn39/taskmq/internal/logger"
+	"github.com/twn39/taskmq/internal/taskmq"
+	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
+	"github.com/twn39/taskmq/internal/taskmq/codec"
+	"github.com/twn39/taskmq/internal/taskmq/keys"
+	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
+	internalredis "github.com/twn39/taskmq/internal/redis"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 )
 
 func TestTaskMQ_GCRARateLimiting(t *testing.T) {
 	ctx := context.Background()
 	var rdb *redis.Client
-	var client taskmq.Client
-	var worker taskmq.Worker
+	var client mqclient.Client
+	var worker mqworker.Worker
 
 	qName := "gcra_rate_limit_queue"
 
@@ -42,8 +46,8 @@ func TestTaskMQ_GCRARateLimiting(t *testing.T) {
 			},
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func() taskmq.Codec { return taskmq.JSONCodec{} },
+			mqclient.NewClient,
+			func() codec.Codec { return codec.JSONCodec{} },
 			taskmq.ProvideWorkers,
 		),
 		fx.Invoke(taskmq.RegisterWorkerPoolLifecycle),
@@ -51,21 +55,21 @@ func TestTaskMQ_GCRARateLimiting(t *testing.T) {
 	)
 
 	// Clean up Redis keys
-	rdb.Del(ctx, taskmq.StreamKey(qName), taskmq.DelayedKey(qName), taskmq.RateLimitKey(qName, ""))
-	defer rdb.Del(ctx, taskmq.StreamKey(qName), taskmq.DelayedKey(qName), taskmq.RateLimitKey(qName, ""))
+	rdb.Del(ctx, keys.StreamKey(qName), keys.DelayedKey(qName), mqworker.RateLimitKey(qName, ""))
+	defer rdb.Del(ctx, keys.StreamKey(qName), keys.DelayedKey(qName), mqworker.RateLimitKey(qName, ""))
 
 	// Pre-create consumer group with "0" cursor so we can read pre-existing messages
-	_ = rdb.XGroupCreateMkStream(ctx, taskmq.StreamKey(qName), "taskmq-group-"+qName, "0").Err()
+	_ = rdb.XGroupCreateMkStream(ctx, keys.StreamKey(qName), "taskmq-group-"+qName, "0").Err()
 
 	var mu sync.Mutex
 	executionTimes := make([]time.Time, 0)
 	doneChan := make(chan struct{})
 
 	// Register task handler
-	mqWorker, ok := worker.(taskmq.MultiQueueWorker)
+	mqWorker, ok := worker.(mqworker.MultiQueueWorker)
 	assert.True(t, ok)
 
-	mqWorker.Queue(qName).Register("task:rate_limit:test", func(ctx context.Context, task *taskmq.Task) error {
+	mqWorker.Queue(qName).Register("task:rate_limit:test", func(ctx context.Context, task *taskmodel.Task) error {
 		mu.Lock()
 		executionTimes = append(executionTimes, time.Now())
 		count := len(executionTimes)
@@ -84,7 +88,7 @@ func TestTaskMQ_GCRARateLimiting(t *testing.T) {
 	// Enqueue 10 tasks
 	startTime := time.Now()
 	for i := 0; i < 10; i++ {
-		err := client.Enqueue(ctx, &taskmq.Task{
+		err := client.Enqueue(ctx, &taskmodel.Task{
 			Queue: qName,
 			Name:  "task:rate_limit:test",
 		})
@@ -114,8 +118,8 @@ func TestTaskMQ_GCRARateLimiting(t *testing.T) {
 func TestTaskMQ_GroupRateLimiting(t *testing.T) {
 	ctx := context.Background()
 	var rdb *redis.Client
-	var client taskmq.Client
-	var worker taskmq.Worker
+	var client mqclient.Client
+	var worker mqworker.Worker
 
 	qName := "group_rate_limit_queue"
 
@@ -137,8 +141,8 @@ func TestTaskMQ_GroupRateLimiting(t *testing.T) {
 			},
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func() taskmq.Codec { return taskmq.JSONCodec{} },
+			mqclient.NewClient,
+			func() codec.Codec { return codec.JSONCodec{} },
 			taskmq.ProvideWorkers,
 		),
 		fx.Invoke(taskmq.RegisterWorkerPoolLifecycle),
@@ -146,21 +150,21 @@ func TestTaskMQ_GroupRateLimiting(t *testing.T) {
 	)
 
 	// Clean up Redis keys
-	rdb.Del(ctx, taskmq.StreamKey(qName), taskmq.DelayedKey(qName), taskmq.RateLimitKey(qName, "tenant-A"), taskmq.RateLimitKey(qName, "tenant-B"))
-	defer rdb.Del(ctx, taskmq.StreamKey(qName), taskmq.DelayedKey(qName), taskmq.RateLimitKey(qName, "tenant-A"), taskmq.RateLimitKey(qName, "tenant-B"))
+	rdb.Del(ctx, keys.StreamKey(qName), keys.DelayedKey(qName), mqworker.RateLimitKey(qName, "tenant-A"), mqworker.RateLimitKey(qName, "tenant-B"))
+	defer rdb.Del(ctx, keys.StreamKey(qName), keys.DelayedKey(qName), mqworker.RateLimitKey(qName, "tenant-A"), mqworker.RateLimitKey(qName, "tenant-B"))
 
 	// Pre-create consumer group with "0" cursor so we can read pre-existing messages
-	_ = rdb.XGroupCreateMkStream(ctx, taskmq.StreamKey(qName), "taskmq-group-"+qName, "0").Err()
+	_ = rdb.XGroupCreateMkStream(ctx, keys.StreamKey(qName), "taskmq-group-"+qName, "0").Err()
 
 	var mu sync.Mutex
 	executionTimes := make(map[string][]time.Time)
 	doneChan := make(chan struct{})
 
 	// Register task handler
-	mqWorker, ok := worker.(taskmq.MultiQueueWorker)
+	mqWorker, ok := worker.(mqworker.MultiQueueWorker)
 	assert.True(t, ok)
 
-	mqWorker.Queue(qName).Register("task:group_limit:test", func(ctx context.Context, task *taskmq.Task) error {
+	mqWorker.Queue(qName).Register("task:group_limit:test", func(ctx context.Context, task *taskmodel.Task) error {
 		var payload map[string]interface{}
 		_ = json.Unmarshal(task.Payload, &payload)
 		tenantID := payload["tenantId"].(string)
@@ -187,7 +191,7 @@ func TestTaskMQ_GroupRateLimiting(t *testing.T) {
 	for _, tenant := range []string{"tenant-A", "tenant-B"} {
 		payloadBytes, _ := json.Marshal(map[string]string{"tenantId": tenant})
 		for i := 0; i < 2; i++ {
-			err := client.Enqueue(ctx, &taskmq.Task{
+			err := client.Enqueue(ctx, &taskmodel.Task{
 				Queue:   qName,
 				Name:    "task:group_limit:test",
 				Payload: payloadBytes,
@@ -218,8 +222,8 @@ func TestTaskMQ_GroupRateLimiting(t *testing.T) {
 func TestTaskMQ_PriorityQueueRateLimiting(t *testing.T) {
 	ctx := context.Background()
 	var rdb *redis.Client
-	var client taskmq.Client
-	var worker taskmq.Worker
+	var client mqclient.Client
+	var worker mqworker.Worker
 
 	qLow := "pq_rl_low"
 	qCritical := "pq_rl_critical"
@@ -249,8 +253,8 @@ func TestTaskMQ_PriorityQueueRateLimiting(t *testing.T) {
 			},
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func() taskmq.Codec { return taskmq.JSONCodec{} },
+			mqclient.NewClient,
+			func() codec.Codec { return codec.JSONCodec{} },
 			taskmq.ProvideWorkers,
 		),
 		fx.Invoke(taskmq.RegisterWorkerPoolLifecycle),
@@ -258,23 +262,23 @@ func TestTaskMQ_PriorityQueueRateLimiting(t *testing.T) {
 	)
 
 	// Clean up Redis keys
-	rdb.Del(ctx, taskmq.StreamKey(qLow), taskmq.StreamKey(qCritical), taskmq.RateLimitKey(qCritical, ""))
-	defer rdb.Del(ctx, taskmq.StreamKey(qLow), taskmq.StreamKey(qCritical), taskmq.RateLimitKey(qCritical, ""))
+	rdb.Del(ctx, keys.StreamKey(qLow), keys.StreamKey(qCritical), mqworker.RateLimitKey(qCritical, ""))
+	defer rdb.Del(ctx, keys.StreamKey(qLow), keys.StreamKey(qCritical), mqworker.RateLimitKey(qCritical, ""))
 
 	// Pre-create consumer groups with "0" cursor so we can read pre-existing messages
-	_ = rdb.XGroupCreateMkStream(ctx, taskmq.StreamKey(qLow), "taskmq-priority-group", "0").Err()
-	_ = rdb.XGroupCreateMkStream(ctx, taskmq.StreamKey(qCritical), "taskmq-priority-group", "0").Err()
+	_ = rdb.XGroupCreateMkStream(ctx, keys.StreamKey(qLow), "taskmq-priority-group", "0").Err()
+	_ = rdb.XGroupCreateMkStream(ctx, keys.StreamKey(qCritical), "taskmq-priority-group", "0").Err()
 
 	var mu sync.Mutex
 	executedQueues := make([]string, 0)
 	doneChan := make(chan struct{})
 
 	// Register task handlers
-	mqWorker, ok := worker.(taskmq.MultiQueueWorker)
+	mqWorker, ok := worker.(mqworker.MultiQueueWorker)
 	assert.True(t, ok)
 
-	handler := func(q string) taskmq.HandlerFunc {
-		return func(ctx context.Context, task *taskmq.Task) error {
+	handler := func(q string) mqworker.HandlerFunc {
+		return func(ctx context.Context, task *taskmodel.Task) error {
 			mu.Lock()
 			executedQueues = append(executedQueues, q)
 			totalCount := len(executedQueues)
@@ -294,18 +298,18 @@ func TestTaskMQ_PriorityQueueRateLimiting(t *testing.T) {
 	// - 1st critical task runs immediately.
 	// - 2nd critical task hits the 3s rate limit and gets deferred.
 	// - The worker pool skips the rate-limited critical queue and immediately executes the 2 low priority tasks!
-	err := client.Enqueue(ctx, &taskmq.Task{Queue: qCritical, Name: "task:pq_rl:critical"})
+	err := client.Enqueue(ctx, &taskmodel.Task{Queue: qCritical, Name: "task:pq_rl:critical"})
 	assert.NoError(t, err)
-	err = client.Enqueue(ctx, &taskmq.Task{Queue: qCritical, Name: "task:pq_rl:critical"})
+	err = client.Enqueue(ctx, &taskmodel.Task{Queue: qCritical, Name: "task:pq_rl:critical"})
 	assert.NoError(t, err)
 
 	for i := 0; i < 2; i++ {
-		err := client.Enqueue(ctx, &taskmq.Task{Queue: qLow, Name: "task:pq_rl:low"})
+		err := client.Enqueue(ctx, &taskmodel.Task{Queue: qLow, Name: "task:pq_rl:low"})
 		assert.NoError(t, err)
 	}
 
-	lenLow, _ := rdb.XLen(ctx, taskmq.StreamKey(qLow)).Result()
-	lenCrit, _ := rdb.XLen(ctx, taskmq.StreamKey(qCritical)).Result()
+	lenLow, _ := rdb.XLen(ctx, keys.StreamKey(qLow)).Result()
+	lenCrit, _ := rdb.XLen(ctx, keys.StreamKey(qCritical)).Result()
 	t.Logf("=== BEFORE START: low_len=%d, critical_len=%d ===", lenLow, lenCrit)
 
 	// Start App
@@ -335,8 +339,8 @@ func TestTaskMQ_PriorityQueueRateLimiting(t *testing.T) {
 func TestTaskMQ_RateLimitDeferralAtomicity(t *testing.T) {
 	ctx := context.Background()
 	var rdb *redis.Client
-	var client taskmq.Client
-	var worker taskmq.Worker
+	var client mqclient.Client
+	var worker mqworker.Worker
 
 	qName := "atomicity_rate_limit_queue"
 
@@ -358,8 +362,8 @@ func TestTaskMQ_RateLimitDeferralAtomicity(t *testing.T) {
 			},
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func() taskmq.Codec { return taskmq.JSONCodec{} },
+			mqclient.NewClient,
+			func() codec.Codec { return codec.JSONCodec{} },
 			taskmq.ProvideWorkers,
 		),
 		fx.Invoke(taskmq.RegisterWorkerPoolLifecycle),
@@ -367,20 +371,20 @@ func TestTaskMQ_RateLimitDeferralAtomicity(t *testing.T) {
 	)
 
 	// Clean up Redis keys
-	rdb.Del(ctx, taskmq.StreamKey(qName), taskmq.DelayedKey(qName), taskmq.RateLimitKey(qName, "tenant-A"))
-	defer rdb.Del(ctx, taskmq.StreamKey(qName), taskmq.DelayedKey(qName), taskmq.RateLimitKey(qName, "tenant-A"))
+	rdb.Del(ctx, keys.StreamKey(qName), keys.DelayedKey(qName), mqworker.RateLimitKey(qName, "tenant-A"))
+	defer rdb.Del(ctx, keys.StreamKey(qName), keys.DelayedKey(qName), mqworker.RateLimitKey(qName, "tenant-A"))
 
 	// Pre-create consumer group
-	_ = rdb.XGroupCreateMkStream(ctx, taskmq.StreamKey(qName), "taskmq-group-"+qName, "0").Err()
+	_ = rdb.XGroupCreateMkStream(ctx, keys.StreamKey(qName), "taskmq-group-"+qName, "0").Err()
 
 	var mu sync.Mutex
 	executionCount := 0
 	firstTaskDone := make(chan struct{})
 
-	mqWorker, ok := worker.(taskmq.MultiQueueWorker)
+	mqWorker, ok := worker.(mqworker.MultiQueueWorker)
 	assert.True(t, ok)
 
-	mqWorker.Queue(qName).Register("task:atomicity:test", func(ctx context.Context, task *taskmq.Task) error {
+	mqWorker.Queue(qName).Register("task:atomicity:test", func(ctx context.Context, task *taskmodel.Task) error {
 		mu.Lock()
 		executionCount++
 		count := executionCount
@@ -398,7 +402,7 @@ func TestTaskMQ_RateLimitDeferralAtomicity(t *testing.T) {
 	payloadBytes, _ := json.Marshal(map[string]string{"tenantId": "tenant-A"})
 
 	// 1. Enqueue first task (should execute immediately)
-	err := client.Enqueue(ctx, &taskmq.Task{
+	err := client.Enqueue(ctx, &taskmodel.Task{
 		Queue:   qName,
 		Name:    "task:atomicity:test",
 		Payload: payloadBytes,
@@ -413,7 +417,7 @@ func TestTaskMQ_RateLimitDeferralAtomicity(t *testing.T) {
 	}
 
 	// 2. Enqueue second task (should hit rate limit and get deferred immediately)
-	err = client.Enqueue(ctx, &taskmq.Task{
+	err = client.Enqueue(ctx, &taskmodel.Task{
 		Queue:   qName,
 		Name:    "task:atomicity:test",
 		Payload: payloadBytes,
@@ -426,11 +430,11 @@ func TestTaskMQ_RateLimitDeferralAtomicity(t *testing.T) {
 	// b) Be acknowledged (PEL size = 0)
 	// c) Be placed in the Delayed ZSET (ZSET size = 1)
 	assert.Eventually(t, func() bool {
-		streamLen, _ := rdb.XLen(ctx, taskmq.StreamKey(qName)).Result()
-		zsetSize, _ := rdb.ZCard(ctx, taskmq.DelayedKey(qName)).Result()
+		streamLen, _ := rdb.XLen(ctx, keys.StreamKey(qName)).Result()
+		zsetSize, _ := rdb.ZCard(ctx, keys.DelayedKey(qName)).Result()
 
 		// Check PEL size
-		pendingInfo, _ := rdb.XPending(ctx, taskmq.StreamKey(qName), "taskmq-group-"+qName).Result()
+		pendingInfo, _ := rdb.XPending(ctx, keys.StreamKey(qName), "taskmq-group-"+qName).Result()
 		pelSize := 0
 		if pendingInfo != nil {
 			pelSize = int(pendingInfo.Count)

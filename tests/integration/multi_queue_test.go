@@ -4,15 +4,19 @@ import (
 	"context"
 	"testing"
 	"time"
-
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
-	"github.com/twn39/taskmq/internal/config"
-	"github.com/twn39/taskmq/internal/logger"
-	internalredis "github.com/twn39/taskmq/internal/redis"
-	"github.com/twn39/taskmq/internal/taskmq"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
+	"github.com/twn39/taskmq/internal/config"
+	"github.com/twn39/taskmq/internal/logger"
+	"github.com/twn39/taskmq/internal/taskmq"
+	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
+	"github.com/twn39/taskmq/internal/taskmq/codec"
+	"github.com/twn39/taskmq/internal/taskmq/keys"
+	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
+	internalredis "github.com/twn39/taskmq/internal/redis"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 )
 
 func TestTaskMQ_MultiQueue(t *testing.T) {
@@ -26,8 +30,8 @@ func TestTaskMQ_MultiQueue(t *testing.T) {
 	run2 := make(chan string, 1)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
-	var worker taskmq.Worker
+	var client mqclient.Client
+	var worker mqworker.Worker
 
 	app := fxtest.New(t,
 		fx.Provide(
@@ -41,8 +45,8 @@ func TestTaskMQ_MultiQueue(t *testing.T) {
 			},
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func() taskmq.Codec { return taskmq.JSONCodec{} }, // Provide Codec explicitly
+			mqclient.NewClient,
+			func() codec.Codec { return codec.JSONCodec{} }, // Provide Codec explicitly
 			taskmq.ProvideWorkers,
 		),
 		fx.Invoke(taskmq.RegisterWorkerPoolLifecycle),
@@ -50,19 +54,19 @@ func TestTaskMQ_MultiQueue(t *testing.T) {
 	)
 
 	// Clean up Redis
-	_ = rdb.Del(ctx, taskmq.StreamKey(q1)).Err()
-	_ = rdb.Del(ctx, taskmq.StreamKey(q2)).Err()
+	_ = rdb.Del(ctx, keys.StreamKey(q1)).Err()
+	_ = rdb.Del(ctx, keys.StreamKey(q2)).Err()
 
 	// Assert the returned worker is a MultiQueueWorker
-	mqWorker, ok := worker.(taskmq.MultiQueueWorker)
+	mqWorker, ok := worker.(mqworker.MultiQueueWorker)
 	assert.True(t, ok, "Worker should implement MultiQueueWorker")
 
 	// Register handlers on specific queues
-	mqWorker.Queue(q1).Register("task:q1", func(ctx context.Context, task *taskmq.Task) error {
+	mqWorker.Queue(q1).Register("task:q1", func(ctx context.Context, task *taskmodel.Task) error {
 		run1 <- string(task.Payload)
 		return nil
 	})
-	mqWorker.Queue(q2).Register("task:q2", func(ctx context.Context, task *taskmq.Task) error {
+	mqWorker.Queue(q2).Register("task:q2", func(ctx context.Context, task *taskmodel.Task) error {
 		run2 <- string(task.Payload)
 		return nil
 	})
@@ -71,11 +75,11 @@ func TestTaskMQ_MultiQueue(t *testing.T) {
 	defer app.RequireStop()
 
 	// Enqueue tasks to different queues
-	t1 := taskmq.NewTask("task:q1", []byte("payload-1"), taskmq.TaskOptions{Queue: q1})
+	t1 := taskmodel.NewTask("task:q1", []byte("payload-1"), taskmodel.TaskOptions{Queue: q1})
 	err := client.Enqueue(ctx, t1)
 	assert.NoError(t, err)
 
-	t2 := taskmq.NewTask("task:q2", []byte("payload-2"), taskmq.TaskOptions{Queue: q2})
+	t2 := taskmodel.NewTask("task:q2", []byte("payload-2"), taskmodel.TaskOptions{Queue: q2})
 	err = client.Enqueue(ctx, t2)
 	assert.NoError(t, err)
 

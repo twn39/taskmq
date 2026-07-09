@@ -9,14 +9,16 @@ import (
 	"strings"
 	"testing"
 	"time"
-
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
-	"github.com/twn39/taskmq/internal/logger"
-	internalredis "github.com/twn39/taskmq/internal/redis"
-	"github.com/twn39/taskmq/internal/taskmq"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
+	"github.com/twn39/taskmq/internal/logger"
+	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
+	"github.com/twn39/taskmq/internal/taskmq/codec"
+	"github.com/twn39/taskmq/internal/taskmq/keys"
+	internalredis "github.com/twn39/taskmq/internal/redis"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 )
 
 func TestTaskMQ_CLI_Operations(t *testing.T) {
@@ -24,21 +26,21 @@ func TestTaskMQ_CLI_Operations(t *testing.T) {
 	defer cancel()
 
 	queueName := "cli_integration_test_queue"
-	streamKey := taskmq.StreamKey(queueName)
-	pausedKey := taskmq.PausedKey(queueName)
-	delayedKey := taskmq.DelayedKey(queueName)
-	dlqKey := taskmq.DLQKey(queueName)
-	dlqIndexKey := taskmq.DLQIndexKey(queueName)
+	streamKey := keys.StreamKey(queueName)
+	pausedKey := keys.PausedKey(queueName)
+	delayedKey := keys.DelayedKey(queueName)
+	dlqKey := keys.DLQKey(queueName)
+	dlqIndexKey := keys.DLQIndexKey(queueName)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
+			mqclient.NewClient,
 		),
 		fx.Populate(&rdb, &client),
 	)
@@ -99,20 +101,20 @@ func TestTaskMQ_CLI_Operations(t *testing.T) {
 	assert.False(t, isPaused)
 
 	// 4. Populate some tasks for statistics
-	task1 := taskmq.NewTask("task:cli_test", []byte("1"), taskmq.TaskOptions{Queue: queueName})
+	task1 := taskmodel.NewTask("task:cli_test", []byte("1"), taskmodel.TaskOptions{Queue: queueName})
 	err = client.Enqueue(ctx, task1)
 	assert.NoError(t, err)
 
-	task2 := taskmq.NewTask("task:cli_test", []byte("2"), taskmq.TaskOptions{Queue: queueName})
+	task2 := taskmodel.NewTask("task:cli_test", []byte("2"), taskmodel.TaskOptions{Queue: queueName})
 	err = client.EnqueueIn(ctx, task2, 5*time.Second)
 	assert.NoError(t, err)
 
 	// Put a mock dead letter task
-	deadTask := taskmq.NewTask("task:cli_test", []byte("dead"), taskmq.TaskOptions{Queue: queueName})
+	deadTask := taskmodel.NewTask("task:cli_test", []byte("dead"), taskmodel.TaskOptions{Queue: queueName})
 	deadTask.ID = "test-dead-task-id"
 	deadTask.Retry = 3
 	deadTask.LastError = "connection failure"
-	serializedDead, _ := taskmq.JSONCodec{}.Marshal(deadTask)
+	serializedDead, _ := codec.JSONCodec{}.Marshal(deadTask)
 	err = rdb.ZAdd(ctx, dlqKey, goredis.Z{Score: float64(time.Now().UnixMilli()), Member: deadTask.ID}).Err()
 	assert.NoError(t, err)
 	err = rdb.HSet(ctx, dlqIndexKey, deadTask.ID, serializedDead).Err()

@@ -6,15 +6,18 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
-
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
-	"github.com/twn39/taskmq/internal/logger"
-	internalredis "github.com/twn39/taskmq/internal/redis"
-	"github.com/twn39/taskmq/internal/taskmq"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 	"go.uber.org/zap"
+	"github.com/twn39/taskmq/internal/logger"
+	"github.com/twn39/taskmq/internal/taskmq"
+	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
+	"github.com/twn39/taskmq/internal/taskmq/keys"
+	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
+	internalredis "github.com/twn39/taskmq/internal/redis"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 )
 
 func TestTaskMQ_WorkerPool_ParentContextCancellation(t *testing.T) {
@@ -23,21 +26,21 @@ func TestTaskMQ_WorkerPool_ParentContextCancellation(t *testing.T) {
 	queueName := "parent_ctx_cancel_test_queue"
 
 	var rdb *goredis.Client
-	var client taskmq.Client
-	var worker taskmq.Worker
+	var client mqclient.Client
+	var worker mqworker.Worker
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithConcurrency(1),
-					taskmq.WithContext(ctx),
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithConcurrency(1),
+					mqworker.WithContext(ctx),
 				)
-				pool.Register("task:test", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("task:test", func(ctx context.Context, task *taskmodel.Task) error {
 					return nil
 				})
 				return pool
@@ -48,7 +51,7 @@ func TestTaskMQ_WorkerPool_ParentContextCancellation(t *testing.T) {
 	)
 
 	// Clean up Redis
-	rdb.Del(ctx, taskmq.StreamKey(queueName))
+	rdb.Del(ctx, keys.StreamKey(queueName))
 
 	app.RequireStart()
 
@@ -59,7 +62,7 @@ func TestTaskMQ_WorkerPool_ParentContextCancellation(t *testing.T) {
 	time.Sleep(1500 * time.Millisecond)
 
 	// Enqueue a task
-	task := taskmq.NewTask("task:test", []byte("payload"), taskmq.TaskOptions{
+	task := taskmodel.NewTask("task:test", []byte("payload"), taskmodel.TaskOptions{
 		Queue: queueName,
 	})
 	err := client.Enqueue(context.Background(), task)
@@ -69,7 +72,7 @@ func TestTaskMQ_WorkerPool_ParentContextCancellation(t *testing.T) {
 	time.Sleep(1 * time.Second)
 
 	// Verify task is still in stream and not acknowledged (meaning it wasn't processed)
-	pending, err := rdb.XPending(context.Background(), taskmq.StreamKey(queueName), "taskmq-group").Result()
+	pending, err := rdb.XPending(context.Background(), keys.StreamKey(queueName), "taskmq-group").Result()
 	assert.NoError(t, err)
 	assert.Equal(t, int64(0), pending.Count, "Task should not even be read/claimed (pending count should be 0 in group since group didn't pull)")
 
@@ -80,8 +83,8 @@ func TestTaskMQ_WorkerPool_GracefulShutdownDeadline(t *testing.T) {
 	queueName := "graceful_shutdown_deadline_test_queue"
 
 	var rdb *goredis.Client
-	var client taskmq.Client
-	var worker taskmq.Worker
+	var client mqclient.Client
+	var worker mqworker.Worker
 
 	var taskCancelled int32
 
@@ -90,12 +93,12 @@ func TestTaskMQ_WorkerPool_GracefulShutdownDeadline(t *testing.T) {
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithConcurrency(1),
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithConcurrency(1),
 				)
-				pool.Register("task:long", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("task:long", func(ctx context.Context, task *taskmodel.Task) error {
 					fmt.Printf("DEBUG: task:long handler started\n")
 					select {
 					case <-time.After(5 * time.Second):
@@ -115,12 +118,12 @@ func TestTaskMQ_WorkerPool_GracefulShutdownDeadline(t *testing.T) {
 	)
 
 	// Clean up Redis
-	rdb.Del(context.Background(), taskmq.StreamKey(queueName))
+	rdb.Del(context.Background(), keys.StreamKey(queueName))
 
 	app.RequireStart()
 
 	// Enqueue the long task
-	task := taskmq.NewTask("task:long", []byte("payload"), taskmq.TaskOptions{
+	task := taskmodel.NewTask("task:long", []byte("payload"), taskmodel.TaskOptions{
 		Queue: queueName,
 	})
 	err := client.Enqueue(context.Background(), task)

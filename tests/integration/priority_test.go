@@ -6,15 +6,19 @@ import (
 	"sync"
 	"testing"
 	"time"
-
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
-	"github.com/twn39/taskmq/internal/config"
-	"github.com/twn39/taskmq/internal/logger"
-	internalredis "github.com/twn39/taskmq/internal/redis"
-	"github.com/twn39/taskmq/internal/taskmq"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
+	"github.com/twn39/taskmq/internal/config"
+	"github.com/twn39/taskmq/internal/logger"
+	"github.com/twn39/taskmq/internal/taskmq"
+	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
+	"github.com/twn39/taskmq/internal/taskmq/codec"
+	"github.com/twn39/taskmq/internal/taskmq/keys"
+	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
+	internalredis "github.com/twn39/taskmq/internal/redis"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 )
 
 func TestTaskMQ_StrictPriorityFlow(t *testing.T) {
@@ -29,8 +33,8 @@ func TestTaskMQ_StrictPriorityFlow(t *testing.T) {
 	doneChan := make(chan struct{})
 
 	var rdb *goredis.Client
-	var client taskmq.Client
-	var worker taskmq.Worker
+	var client mqclient.Client
+	var worker mqworker.Worker
 
 	app := fxtest.New(t,
 		fx.Provide(
@@ -46,8 +50,8 @@ func TestTaskMQ_StrictPriorityFlow(t *testing.T) {
 			},
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func() taskmq.Codec { return taskmq.JSONCodec{} },
+			mqclient.NewClient,
+			func() codec.Codec { return codec.JSONCodec{} },
 			taskmq.ProvideWorkers,
 		),
 		fx.Invoke(taskmq.RegisterWorkerPoolLifecycle),
@@ -55,21 +59,21 @@ func TestTaskMQ_StrictPriorityFlow(t *testing.T) {
 	)
 
 	// Clean up Redis
-	errDel := rdb.Del(ctx, taskmq.StreamKey(qLow), taskmq.StreamKey(qCritical)).Err()
+	errDel := rdb.Del(ctx, keys.StreamKey(qLow), keys.StreamKey(qCritical)).Err()
 	t.Logf("Del err: %v", errDel)
-	defer rdb.Del(ctx, taskmq.StreamKey(qLow), taskmq.StreamKey(qCritical))
+	defer rdb.Del(ctx, keys.StreamKey(qLow), keys.StreamKey(qCritical))
 
 	// Pre-create consumer groups with "0" cursor so we can read pre-existing messages
-	errGroupLow := rdb.XGroupCreateMkStream(ctx, taskmq.StreamKey(qLow), "taskmq-priority-group", "0").Err()
-	errGroupCrit := rdb.XGroupCreateMkStream(ctx, taskmq.StreamKey(qCritical), "taskmq-priority-group", "0").Err()
+	errGroupLow := rdb.XGroupCreateMkStream(ctx, keys.StreamKey(qLow), "taskmq-priority-group", "0").Err()
+	errGroupCrit := rdb.XGroupCreateMkStream(ctx, keys.StreamKey(qCritical), "taskmq-priority-group", "0").Err()
 	t.Logf("XGroupCreateMkStream qLow err: %v, qCritical err: %v", errGroupLow, errGroupCrit)
 
 	// Register handlers
-	mqWorker, ok := worker.(taskmq.MultiQueueWorker)
+	mqWorker, ok := worker.(mqworker.MultiQueueWorker)
 	assert.True(t, ok)
 
-	handler := func(queueName string) taskmq.HandlerFunc {
-		return func(ctx context.Context, task *taskmq.Task) error {
+	handler := func(queueName string) mqworker.HandlerFunc {
+		return func(ctx context.Context, task *taskmodel.Task) error {
 			t.Logf("HANDLER RUNNING: queueName=%s, taskName=%s, taskID=%s", queueName, task.Name, task.ID)
 			mu.Lock()
 			executionOrder = append(executionOrder, queueName)
@@ -88,19 +92,19 @@ func TestTaskMQ_StrictPriorityFlow(t *testing.T) {
 
 	// Enqueue 5 low priority tasks first, then 5 critical priority tasks
 	for i := 0; i < 5; i++ {
-		tLow := taskmq.NewTask("task:test:low", []byte(fmt.Sprintf("low-%d", i)), taskmq.TaskOptions{Queue: qLow})
+		tLow := taskmodel.NewTask("task:test:low", []byte(fmt.Sprintf("low-%d", i)), taskmodel.TaskOptions{Queue: qLow})
 		err := client.Enqueue(ctx, tLow)
 		assert.NoError(t, err)
 	}
 
 	for i := 0; i < 5; i++ {
-		tCritical := taskmq.NewTask("task:test:critical", []byte(fmt.Sprintf("critical-%d", i)), taskmq.TaskOptions{Queue: qCritical})
+		tCritical := taskmodel.NewTask("task:test:critical", []byte(fmt.Sprintf("critical-%d", i)), taskmodel.TaskOptions{Queue: qCritical})
 		err := client.Enqueue(ctx, tCritical)
 		assert.NoError(t, err)
 	}
 
-	lenLow, errLow := rdb.XLen(ctx, taskmq.StreamKey(qLow)).Result()
-	lenCrit, errCrit := rdb.XLen(ctx, taskmq.StreamKey(qCritical)).Result()
+	lenLow, errLow := rdb.XLen(ctx, keys.StreamKey(qLow)).Result()
+	lenCrit, errCrit := rdb.XLen(ctx, keys.StreamKey(qCritical)).Result()
 	t.Logf("XLEN before start: low=%d (err: %v), critical=%d (err: %v)", lenLow, errLow, lenCrit, errCrit)
 
 	// Now start the worker pool
@@ -138,8 +142,8 @@ func TestTaskMQ_WeightedPriorityFlow(t *testing.T) {
 	doneChan := make(chan struct{})
 
 	var rdb *goredis.Client
-	var client taskmq.Client
-	var worker taskmq.Worker
+	var client mqclient.Client
+	var worker mqworker.Worker
 
 	app := fxtest.New(t,
 		fx.Provide(
@@ -155,8 +159,8 @@ func TestTaskMQ_WeightedPriorityFlow(t *testing.T) {
 			},
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func() taskmq.Codec { return taskmq.JSONCodec{} },
+			mqclient.NewClient,
+			func() codec.Codec { return codec.JSONCodec{} },
 			taskmq.ProvideWorkers,
 		),
 		fx.Invoke(taskmq.RegisterWorkerPoolLifecycle),
@@ -164,19 +168,19 @@ func TestTaskMQ_WeightedPriorityFlow(t *testing.T) {
 	)
 
 	// Clean up Redis
-	_ = rdb.Del(ctx, taskmq.StreamKey(qLow), taskmq.StreamKey(qCritical)).Err()
-	defer rdb.Del(ctx, taskmq.StreamKey(qLow), taskmq.StreamKey(qCritical))
+	_ = rdb.Del(ctx, keys.StreamKey(qLow), keys.StreamKey(qCritical)).Err()
+	defer rdb.Del(ctx, keys.StreamKey(qLow), keys.StreamKey(qCritical))
 
 	// Pre-create consumer groups with "0" cursor so we can read pre-existing messages
-	_ = rdb.XGroupCreateMkStream(ctx, taskmq.StreamKey(qLow), "taskmq-priority-group", "0").Err()
-	_ = rdb.XGroupCreateMkStream(ctx, taskmq.StreamKey(qCritical), "taskmq-priority-group", "0").Err()
+	_ = rdb.XGroupCreateMkStream(ctx, keys.StreamKey(qLow), "taskmq-priority-group", "0").Err()
+	_ = rdb.XGroupCreateMkStream(ctx, keys.StreamKey(qCritical), "taskmq-priority-group", "0").Err()
 
 	// Register handlers
-	mqWorker, ok := worker.(taskmq.MultiQueueWorker)
+	mqWorker, ok := worker.(mqworker.MultiQueueWorker)
 	assert.True(t, ok)
 
-	handler := func(queueName string) taskmq.HandlerFunc {
-		return func(ctx context.Context, task *taskmq.Task) error {
+	handler := func(queueName string) mqworker.HandlerFunc {
+		return func(ctx context.Context, task *taskmodel.Task) error {
 			mu.Lock()
 			executionOrder = append(executionOrder, queueName)
 			orderLen := len(executionOrder)
@@ -197,11 +201,11 @@ func TestTaskMQ_WeightedPriorityFlow(t *testing.T) {
 
 	// Enqueue 5 low weighted tasks and 5 critical weighted tasks
 	for i := 0; i < 5; i++ {
-		tLow := taskmq.NewTask("task:weighted:low", []byte(fmt.Sprintf("low-%d", i)), taskmq.TaskOptions{Queue: qLow})
+		tLow := taskmodel.NewTask("task:weighted:low", []byte(fmt.Sprintf("low-%d", i)), taskmodel.TaskOptions{Queue: qLow})
 		err := client.Enqueue(ctx, tLow)
 		assert.NoError(t, err)
 
-		tCritical := taskmq.NewTask("task:weighted:critical", []byte(fmt.Sprintf("critical-%d", i)), taskmq.TaskOptions{Queue: qCritical})
+		tCritical := taskmodel.NewTask("task:weighted:critical", []byte(fmt.Sprintf("critical-%d", i)), taskmodel.TaskOptions{Queue: qCritical})
 		err = client.Enqueue(ctx, tCritical)
 		assert.NoError(t, err)
 	}

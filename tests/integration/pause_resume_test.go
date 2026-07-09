@@ -4,15 +4,18 @@ import (
 	"context"
 	"testing"
 	"time"
-
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
-	"github.com/twn39/taskmq/internal/logger"
-	internalredis "github.com/twn39/taskmq/internal/redis"
-	"github.com/twn39/taskmq/internal/taskmq"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 	"go.uber.org/zap"
+	"github.com/twn39/taskmq/internal/logger"
+	"github.com/twn39/taskmq/internal/taskmq"
+	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
+	"github.com/twn39/taskmq/internal/taskmq/keys"
+	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
+	internalredis "github.com/twn39/taskmq/internal/redis"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 )
 
 func TestTaskMQ_PauseResume_SingleQueue(t *testing.T) {
@@ -20,28 +23,28 @@ func TestTaskMQ_PauseResume_SingleQueue(t *testing.T) {
 	defer cancel()
 
 	queueName := "pause_test_queue"
-	streamKey := taskmq.StreamKey(queueName)
-	pausedKey := taskmq.PausedKey(queueName)
+	streamKey := keys.StreamKey(queueName)
+	pausedKey := keys.PausedKey(queueName)
 
 	runChan := make(chan string, 10)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
-	var worker taskmq.Worker
+	var client mqclient.Client
+	var worker mqworker.Worker
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithGroup("pause-group"),
-					taskmq.WithConsumer("pause-consumer"),
-					taskmq.WithConcurrency(2),
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithGroup("pause-group"),
+					mqworker.WithConsumer("pause-consumer"),
+					mqworker.WithConcurrency(2),
 				)
-				pool.Register("task:pause_resume", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("task:pause_resume", func(ctx context.Context, task *taskmodel.Task) error {
 					runChan <- string(task.Payload)
 					return nil
 				})
@@ -60,7 +63,7 @@ func TestTaskMQ_PauseResume_SingleQueue(t *testing.T) {
 	defer app.RequireStop()
 
 	// Wait for control subscriber to be ready
-	controlChannel := taskmq.ControlChannel(queueName)
+	controlChannel := keys.ControlChannel(queueName)
 	for {
 		select {
 		case <-ctx.Done():
@@ -76,7 +79,7 @@ func TestTaskMQ_PauseResume_SingleQueue(t *testing.T) {
 ready:
 
 	// Case 1: Active queue - Task 1 should be processed immediately
-	task1 := taskmq.NewTask("task:pause_resume", []byte("task1"), taskmq.TaskOptions{Queue: queueName})
+	task1 := taskmodel.NewTask("task:pause_resume", []byte("task1"), taskmodel.TaskOptions{Queue: queueName})
 	err := client.Enqueue(ctx, task1)
 	assert.NoError(t, err)
 
@@ -102,7 +105,7 @@ ready:
 	// Allow some time for subscriber to receive state change and worker to unblock from XReadGroup and detect the pause state
 	time.Sleep(1500 * time.Millisecond)
 
-	task2 := taskmq.NewTask("task:pause_resume", []byte("task2"), taskmq.TaskOptions{Queue: queueName})
+	task2 := taskmodel.NewTask("task:pause_resume", []byte("task2"), taskmodel.TaskOptions{Queue: queueName})
 	err = client.Enqueue(ctx, task2)
 	assert.NoError(t, err)
 
@@ -138,34 +141,34 @@ func TestTaskMQ_PauseResume_MultiQueuePriority(t *testing.T) {
 	queueActive := "priority_active_queue"
 	queuePaused := "priority_paused_queue"
 
-	streamActive := taskmq.StreamKey(queueActive)
-	streamPaused := taskmq.StreamKey(queuePaused)
-	pausedKey := taskmq.PausedKey(queuePaused)
+	streamActive := keys.StreamKey(queueActive)
+	streamPaused := keys.StreamKey(queuePaused)
+	pausedKey := keys.PausedKey(queuePaused)
 
 	runChan := make(chan string, 10)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
-	var worker taskmq.Worker
+	var client mqclient.Client
+	var worker mqworker.Worker
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pw := taskmq.NewPriorityWorker(rdb, logger,
-					taskmq.WithGroup("priority-group"),
-					taskmq.WithConsumer("priority-consumer"),
-					taskmq.WithConcurrency(2),
-					taskmq.WithPriorityStrategy("strict"),
-					taskmq.WithPriorityQueues([]taskmq.QueuePriority{
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pw := mqworker.NewPriorityWorker(rdb, logger,
+					mqworker.WithGroup("priority-group"),
+					mqworker.WithConsumer("priority-consumer"),
+					mqworker.WithConcurrency(2),
+					mqworker.WithPriorityStrategy("strict"),
+					mqworker.WithPriorityQueues([]mqworker.QueuePriority{
 						{Name: queueActive, Weight: 10},
 						{Name: queuePaused, Weight: 5},
 					}),
 				)
-				pw.Register("task:priority_test", func(ctx context.Context, task *taskmq.Task) error {
+				pw.Register("task:priority_test", func(ctx context.Context, task *taskmodel.Task) error {
 					runChan <- string(task.Payload)
 					return nil
 				})
@@ -176,11 +179,11 @@ func TestTaskMQ_PauseResume_MultiQueuePriority(t *testing.T) {
 		fx.Populate(&rdb, &client, &worker),
 	)
 
-	rdb.Del(ctx, streamActive, streamPaused, pausedKey, taskmq.PausedKey(queueActive))
-	defer rdb.Del(ctx, streamActive, streamPaused, pausedKey, taskmq.PausedKey(queueActive))
+	rdb.Del(ctx, streamActive, streamPaused, pausedKey, keys.PausedKey(queueActive))
+	defer rdb.Del(ctx, streamActive, streamPaused, pausedKey, keys.PausedKey(queueActive))
 
 	// Create client temporarily to pause the queue before starting the worker pool
-	tempClient := taskmq.NewClient(rdb)
+	tempClient := mqclient.NewClient(rdb)
 	err := tempClient.Pause(ctx, queuePaused)
 	assert.NoError(t, err)
 
@@ -188,12 +191,12 @@ func TestTaskMQ_PauseResume_MultiQueuePriority(t *testing.T) {
 	defer app.RequireStop()
 
 	// Enqueue to paused queue
-	taskPaused := taskmq.NewTask("task:priority_test", []byte("paused_task"), taskmq.TaskOptions{Queue: queuePaused})
+	taskPaused := taskmodel.NewTask("task:priority_test", []byte("paused_task"), taskmodel.TaskOptions{Queue: queuePaused})
 	err = client.Enqueue(ctx, taskPaused)
 	assert.NoError(t, err)
 
 	// Enqueue to active queue
-	taskActive := taskmq.NewTask("task:priority_test", []byte("active_task"), taskmq.TaskOptions{Queue: queueActive})
+	taskActive := taskmodel.NewTask("task:priority_test", []byte("active_task"), taskmodel.TaskOptions{Queue: queueActive})
 	err = client.Enqueue(ctx, taskActive)
 	assert.NoError(t, err)
 
@@ -231,27 +234,27 @@ func TestTaskMQ_PauseBlockedWorker(t *testing.T) {
 	defer cancel()
 
 	queueName := "pause_blocked_test_queue"
-	streamKey := taskmq.StreamKey(queueName)
-	pausedKey := taskmq.PausedKey(queueName)
+	streamKey := keys.StreamKey(queueName)
+	pausedKey := keys.PausedKey(queueName)
 
 	runChan := make(chan string, 1)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
+	var client mqclient.Client
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithGroup("pause-blocked-group"),
-					taskmq.WithConsumer("pause-blocked-consumer"),
-					taskmq.WithConcurrency(1),
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithGroup("pause-blocked-group"),
+					mqworker.WithConsumer("pause-blocked-consumer"),
+					mqworker.WithConcurrency(1),
 				)
-				pool.Register("task:pause_blocked_test", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("task:pause_blocked_test", func(ctx context.Context, task *taskmodel.Task) error {
 					runChan <- string(task.Payload)
 					return nil
 				})
@@ -281,7 +284,7 @@ func TestTaskMQ_PauseBlockedWorker(t *testing.T) {
 	time.Sleep(1500 * time.Millisecond)
 
 	// Now enqueue a task.
-	task := taskmq.NewTask("task:pause_blocked_test", []byte("delayed_payload"), taskmq.TaskOptions{Queue: queueName})
+	task := taskmodel.NewTask("task:pause_blocked_test", []byte("delayed_payload"), taskmodel.TaskOptions{Queue: queueName})
 	err = client.Enqueue(ctx, task)
 	assert.NoError(t, err)
 

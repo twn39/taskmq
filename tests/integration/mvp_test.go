@@ -5,15 +5,18 @@ import (
 	"encoding/json"
 	"testing"
 	"time"
-
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
-	"github.com/twn39/taskmq/internal/logger"
-	internalredis "github.com/twn39/taskmq/internal/redis"
-	"github.com/twn39/taskmq/internal/taskmq"
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxtest"
 	"go.uber.org/zap"
+	"github.com/twn39/taskmq/internal/logger"
+	"github.com/twn39/taskmq/internal/taskmq"
+	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
+	"github.com/twn39/taskmq/internal/taskmq/keys"
+	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
+	internalredis "github.com/twn39/taskmq/internal/redis"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 )
 
 // 1. Existing MVP flow test
@@ -22,7 +25,7 @@ func TestTaskMQ_MVPFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "mvp_test_queue"
-	streamKey := taskmq.StreamKey(queueName)
+	streamKey := keys.StreamKey(queueName)
 
 	type WelcomeEmail struct {
 		Email string `json:"email"`
@@ -32,22 +35,22 @@ func TestTaskMQ_MVPFlow(t *testing.T) {
 	runChan := make(chan *WelcomeEmail, 1)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
-	var worker taskmq.Worker
+	var client mqclient.Client
+	var worker mqworker.Worker
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			taskmq.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithGroup("test-group"),
-					taskmq.WithConsumer("test-consumer"),
-					taskmq.WithConcurrency(2),
+			mqclient.NewClient,
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithGroup("test-group"),
+					mqworker.WithConsumer("test-consumer"),
+					mqworker.WithConcurrency(2),
 				)
-				pool.Register("email:welcome", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("email:welcome", func(ctx context.Context, task *taskmodel.Task) error {
 					var email WelcomeEmail
 					if err := json.Unmarshal(task.Payload, &email); err != nil {
 						return err
@@ -75,7 +78,7 @@ func TestTaskMQ_MVPFlow(t *testing.T) {
 	payloadBytes, err := json.Marshal(emailData)
 	assert.NoError(t, err)
 
-	task := taskmq.NewTask("email:welcome", payloadBytes, taskmq.TaskOptions{
+	task := taskmodel.NewTask("email:welcome", payloadBytes, taskmodel.TaskOptions{
 		Queue: queueName,
 	})
 
@@ -102,28 +105,28 @@ func TestTaskMQ_SyncExecution(t *testing.T) {
 	defer cancel()
 
 	queueName := "sync_exec_test_queue"
-	streamKey := taskmq.StreamKey(queueName)
+	streamKey := keys.StreamKey(queueName)
 
 	runChan := make(chan string, 1)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
-	var worker taskmq.Worker
+	var client mqclient.Client
+	var worker mqworker.Worker
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			func(rdb *goredis.Client) taskmq.Client {
-				return taskmq.NewClient(rdb)
+			func(rdb *goredis.Client) mqclient.Client {
+				return mqclient.NewClient(rdb)
 			},
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithConcurrency(2),
-					taskmq.WithSyncExecution(true),
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithConcurrency(2),
+					mqworker.WithSyncExecution(true),
 				)
-				pool.Register("task:sync-exec-test", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("task:sync-exec-test", func(ctx context.Context, task *taskmodel.Task) error {
 					runChan <- string(task.Payload)
 					return nil
 				})
@@ -141,7 +144,7 @@ func TestTaskMQ_SyncExecution(t *testing.T) {
 	app.RequireStart()
 	defer app.RequireStop()
 
-	task := taskmq.NewTask("task:sync-exec-test", []byte("sync-exec-payload"), taskmq.TaskOptions{
+	task := taskmodel.NewTask("task:sync-exec-test", []byte("sync-exec-payload"), taskmodel.TaskOptions{
 		Queue: queueName,
 	})
 
@@ -161,27 +164,27 @@ func TestTaskMQ_ExecutionPoolPanicRecovery(t *testing.T) {
 	defer cancel()
 
 	queueName := "pool_panic_test_queue"
-	streamKey := taskmq.StreamKey(queueName)
-	dlqKey := taskmq.DLQKey(queueName)
-	dlqIndexKey := taskmq.DLQIndexKey(queueName)
+	streamKey := keys.StreamKey(queueName)
+	dlqKey := keys.DLQKey(queueName)
+	dlqIndexKey := keys.DLQIndexKey(queueName)
 
 	var rdb *goredis.Client
-	var client taskmq.Client
-	var worker taskmq.Worker
+	var client mqclient.Client
+	var worker mqworker.Worker
 
 	app := fxtest.New(t,
 		fx.Provide(
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			func(rdb *goredis.Client) taskmq.Client {
-				return taskmq.NewClient(rdb)
+			func(rdb *goredis.Client) mqclient.Client {
+				return mqclient.NewClient(rdb)
 			},
-			func(rdb *goredis.Client, logger *zap.Logger) taskmq.Worker {
-				pool := taskmq.NewWorkerPool(rdb, logger, queueName,
-					taskmq.WithConcurrency(2),
+			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
+					mqworker.WithConcurrency(2),
 				)
-				pool.Register("task:panic-test", func(ctx context.Context, task *taskmq.Task) error {
+				pool.Register("task:panic-test", func(ctx context.Context, task *taskmodel.Task) error {
 					panic("something went terribly wrong")
 				})
 				return pool
@@ -198,9 +201,9 @@ func TestTaskMQ_ExecutionPoolPanicRecovery(t *testing.T) {
 	app.RequireStart()
 	defer app.RequireStop()
 
-	task := taskmq.NewTask("task:panic-test", []byte("panic-payload"), taskmq.TaskOptions{
+	task := taskmodel.NewTask("task:panic-test", []byte("panic-payload"), taskmodel.TaskOptions{
 		Queue:    queueName,
-		MaxRetry: taskmq.Ptr(1), // Fail immediately to DLQ
+		MaxRetry: taskmodel.Ptr(1), // Fail immediately to DLQ
 	})
 
 	err := client.Enqueue(ctx, task)
