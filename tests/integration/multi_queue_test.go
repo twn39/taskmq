@@ -45,7 +45,8 @@ func TestTaskMQ_MultiQueue(t *testing.T) {
 			},
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			mqclient.NewClient,
+			ProvideSharedLifecycle,
+			ProvideClientWithLifecycle,
 			func() codec.Codec { return codec.JSONCodec{} }, // Provide Codec explicitly
 			taskmq.ProvideWorkers,
 		),
@@ -54,8 +55,8 @@ func TestTaskMQ_MultiQueue(t *testing.T) {
 	)
 
 	// Clean up Redis
-	_ = rdb.Del(ctx, keys.StreamKey(q1)).Err()
-	_ = rdb.Del(ctx, keys.StreamKey(q2)).Err()
+	_ = rdb.Del(ctx, keys.KeysFor(q1).Stream()).Err()
+	_ = rdb.Del(ctx, keys.KeysFor(q2).Stream()).Err()
 
 	// Assert the returned worker is a MultiQueueWorker
 	mqWorker, ok := worker.(mqworker.MultiQueueWorker)

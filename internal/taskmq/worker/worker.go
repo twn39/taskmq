@@ -251,11 +251,10 @@ func (w *workerPool) ProcessMessage(ctx context.Context, msg redis.XMessage) {
 	w.processMessage(ctx, keys.KeysFor(w.queue).Stream(), msg)
 }
 
+// RateLimitKey returns the Redis key used for GCRA rate limiting.
+// Prefer keys.KeysFor(queue).RateLimit(groupKey) in new code.
 func RateLimitKey(queue string, groupKey string) string {
-	if groupKey != "" {
-		return fmt.Sprintf("taskmq:{%s}:rate_limit:%s", queue, groupKey)
-	}
-	return fmt.Sprintf("taskmq:{%s}:rate_limit", queue)
+	return keys.KeysFor(queue).RateLimit(groupKey)
 }
 
 func shuffleQueues(queues []QueuePriority) []string {

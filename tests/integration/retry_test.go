@@ -26,8 +26,8 @@ func TestTaskMQ_RetryFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "retry_test_queue"
-	streamKey := keys.StreamKey(queueName)
-	delayedKey := keys.DelayedKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
+	delayedKey := keys.KeysFor(queueName).Delayed()
 
 	var execCount int64
 	doneChan := make(chan bool, 1)
@@ -97,9 +97,9 @@ func TestTaskMQ_UnregisteredHandlerRetryAndDLQ(t *testing.T) {
 	defer cancel()
 
 	queueName := "unregistered_retry_test_queue"
-	streamKey := keys.StreamKey(queueName)
-	delayedKey := keys.DelayedKey(queueName)
-	dlqKey := keys.DLQKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
+	delayedKey := keys.KeysFor(queueName).Delayed()
+	dlqKey := keys.KeysFor(queueName).DLQ()
 
 	var rdb *goredis.Client
 	var client mqclient.Client
@@ -164,7 +164,7 @@ func TestTaskMQ_CorruptedPayloadDiscard(t *testing.T) {
 	defer cancel()
 
 	queueName := "corrupted_payload_test_queue"
-	streamKey := keys.StreamKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
 
 	var rdb *goredis.Client
 	var client mqclient.Client

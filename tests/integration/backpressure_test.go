@@ -24,7 +24,7 @@ func TestTaskMQ_BackpressureFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "backpressure_test_queue"
-	streamKey := keys.StreamKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
 
 	var runCount int64
 	var retryCount int64

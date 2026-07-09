@@ -3,10 +3,10 @@ package worker
 import (
 	"context"
 	"errors"
-	"fmt"
 	"testing"
 	"time"
 
+	"github.com/twn39/taskmq/internal/taskmq/keys"
 	"github.com/twn39/taskmq/internal/taskmq/policy"
 	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 
@@ -177,7 +177,7 @@ func TestTaskMQ_ProcessMessage_TableDriven(t *testing.T) {
 
 			// Set pre-execution cancellation key in Redis if requested
 			if tt.cancelledPreExec {
-				cancelledKey := fmt.Sprintf("taskmq:{%s}:cancelled:%s", tt.task.Queue, tt.task.ID)
+				cancelledKey := keys.KeysFor(tt.task.Queue).Cancelled(tt.task.ID)
 				err := rdb.Set(context.Background(), cancelledKey, "1", 0).Err()
 				if err != nil {
 					t.Fatalf("failed to set pre-execution cancellation key: %v", err)

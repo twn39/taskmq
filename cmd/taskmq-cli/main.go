@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"os"
 	"strconv"
-	"strings"
 	"text/tabwriter"
 	"time"
 
@@ -247,7 +246,7 @@ func main() {
 
 func handleStats(ctx context.Context, rdb *redis.Client) {
 	// Scan Redis to dynamically discover queues
-	keys, err := rdb.Keys(ctx, "taskmq:{*}:queue").Result()
+	redisKeys, err := rdb.Keys(ctx, mqkeys.StreamScanPattern()).Result()
 	if err != nil {
 		fmt.Printf("Error: Failed to scan Redis for queues: %v\n", err)
 		os.Exit(1)
@@ -255,12 +254,8 @@ func handleStats(ctx context.Context, rdb *redis.Client) {
 
 	// Extract unique queue names
 	queuesMap := make(map[string]bool)
-	for _, key := range keys {
-		// key is in format: taskmq:{myqueue}:queue
-		start := len("taskmq:{")
-		end := strings.Index(key, "}:queue")
-		if start < len(key) && end > start {
-			queueName := key[start:end]
+	for _, key := range redisKeys {
+		if queueName, ok := mqkeys.ParseQueueFromStreamKey(key); ok {
 			queuesMap[queueName] = true
 		}
 	}
@@ -274,26 +269,23 @@ func handleStats(ctx context.Context, rdb *redis.Client) {
 	fmt.Fprintln(w, "QUEUE NAME\tSTATUS\tACTIVE (STREAM)\tSCHEDULED (ZSET)\tDEAD LETTER (DLQ)")
 
 	for q := range queuesMap {
-		pausedKey := mqkeys.PausedKey(q)
-		streamKey := mqkeys.StreamKey(q)
-		delayedKey := mqkeys.DelayedKey(q)
-		dlqKey := mqkeys.DLQKey(q)
+		qk := mqkeys.KeysFor(q)
 
 		// 1. Get Pause State
-		isPaused, err := rdb.Exists(ctx, pausedKey).Result()
+		isPaused, err := rdb.Exists(ctx, qk.Paused()).Result()
 		status := "Active"
 		if err == nil && isPaused > 0 {
 			status = "Paused"
 		}
 
 		// 2. Get Active Count
-		activeCount, _ := rdb.XLen(ctx, streamKey).Result()
+		activeCount, _ := rdb.XLen(ctx, qk.Stream()).Result()
 
 		// 3. Get Scheduled Count
-		scheduledCount, _ := rdb.ZCard(ctx, delayedKey).Result()
+		scheduledCount, _ := rdb.ZCard(ctx, qk.Delayed()).Result()
 
 		// 4. Get DLQ Count
-		dlqCount, _ := rdb.ZCard(ctx, dlqKey).Result()
+		dlqCount, _ := rdb.ZCard(ctx, qk.DLQ()).Result()
 
 		fmt.Fprintf(w, "%s\t%s\t%d\t%d\t%d\n", q, status, activeCount, scheduledCount, dlqCount)
 	}

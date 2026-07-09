@@ -65,9 +65,9 @@ func TestTaskMQ_CronFlow(t *testing.T) {
 
 	// Clean up Redis before test
 	err := rdb.Del(ctx,
-		keys.StreamKey(queueName),
-		keys.DelayedKey(queueName),
-		keys.CronConfigsKey(queueName),
+		keys.KeysFor(queueName).Stream(),
+		keys.KeysFor(queueName).Delayed(),
+		keys.KeysFor(queueName).CronConfigs(),
 	).Err()
 	assert.NoError(t, err)
 
@@ -92,7 +92,7 @@ func TestTaskMQ_CronFlow(t *testing.T) {
 
 	// Now verify Self-Healing:
 	// 1. Corrupt/Delete the ZSET entry representing the next scheduled run
-	delayedKey := keys.DelayedKey(queueName)
+	delayedKey := keys.KeysFor(queueName).Delayed()
 	err = rdb.Del(ctx, delayedKey).Err()
 	assert.NoError(t, err)
 
@@ -172,9 +172,9 @@ func TestTaskMQ_CronSelfHealing_CustomConfig(t *testing.T) {
 
 	// Clean up Redis before test
 	err := rdb.Del(ctx,
-		keys.StreamKey(queueName),
-		keys.DelayedKey(queueName),
-		keys.CronConfigsKey(queueName),
+		keys.KeysFor(queueName).Stream(),
+		keys.KeysFor(queueName).Delayed(),
+		keys.KeysFor(queueName).CronConfigs(),
 	).Err()
 	assert.NoError(t, err)
 
@@ -198,7 +198,7 @@ func TestTaskMQ_CronSelfHealing_CustomConfig(t *testing.T) {
 	}
 
 	// Corrupt/Delete the ZSET entry to simulate broken chain
-	delayedKey := keys.DelayedKey(queueName)
+	delayedKey := keys.KeysFor(queueName).Delayed()
 	err = rdb.Del(ctx, delayedKey).Err()
 	assert.NoError(t, err)
 
@@ -265,9 +265,9 @@ func TestTaskMQ_CronSelfHealing_Pagination_ExceededLimit(t *testing.T) {
 
 	// Clean up Redis before test
 	err := rdb.Del(ctx,
-		keys.StreamKey(queueName),
-		keys.DelayedKey(queueName),
-		keys.CronConfigsKey(queueName),
+		keys.KeysFor(queueName).Stream(),
+		keys.KeysFor(queueName).Delayed(),
+		keys.KeysFor(queueName).CronConfigs(),
 	).Err()
 	assert.NoError(t, err)
 
@@ -280,7 +280,7 @@ func TestTaskMQ_CronSelfHealing_Pagination_ExceededLimit(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Fetch the registered cron task from ZSET to find its score
-	delayedKey := keys.DelayedKey(queueName)
+	delayedKey := keys.KeysFor(queueName).Delayed()
 	members, err := rdb.ZRangeWithScores(ctx, delayedKey, 0, -1).Result()
 	assert.NoError(t, err)
 	assert.Len(t, members, 1)
@@ -355,9 +355,9 @@ func TestTaskMQ_CronSelfHealing_Pagination_WithinLimit(t *testing.T) {
 
 	// Clean up Redis before test
 	err := rdb.Del(ctx,
-		keys.StreamKey(queueName),
-		keys.DelayedKey(queueName),
-		keys.CronConfigsKey(queueName),
+		keys.KeysFor(queueName).Stream(),
+		keys.KeysFor(queueName).Delayed(),
+		keys.KeysFor(queueName).CronConfigs(),
 	).Err()
 	assert.NoError(t, err)
 
@@ -370,7 +370,7 @@ func TestTaskMQ_CronSelfHealing_Pagination_WithinLimit(t *testing.T) {
 	assert.NoError(t, err)
 
 	// Fetch the registered cron task from ZSET to find its score
-	delayedKey := keys.DelayedKey(queueName)
+	delayedKey := keys.KeysFor(queueName).Delayed()
 	members, err := rdb.ZRangeWithScores(ctx, delayedKey, 0, -1).Result()
 	assert.NoError(t, err)
 	assert.Len(t, members, 1)
@@ -448,9 +448,9 @@ func TestTaskMQ_CronOverwrite(t *testing.T) {
 
 	// Clean up Redis before test
 	err := rdb.Del(ctx,
-		keys.StreamKey(queueName),
-		keys.DelayedKey(queueName),
-		keys.CronConfigsKey(queueName),
+		keys.KeysFor(queueName).Stream(),
+		keys.KeysFor(queueName).Delayed(),
+		keys.KeysFor(queueName).CronConfigs(),
 	).Err()
 	assert.NoError(t, err)
 

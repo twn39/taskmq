@@ -24,8 +24,8 @@ func TestTaskMQ_UniqueScope_UntilStart(t *testing.T) {
 	defer cancel()
 
 	queueName := "unq_start_queue"
-	streamKey := keys.StreamKey(queueName)
-	uniqueLockKey := keys.UniqueKey(queueName, "start-key")
+	streamKey := keys.KeysFor(queueName).Stream()
+	uniqueLockKey := keys.KeysFor(queueName).Unique("start-key")
 
 	startedChan := make(chan bool, 1)
 	handlerSleepChan := make(chan bool, 1)
@@ -100,10 +100,10 @@ func TestTaskMQ_UniqueScope_UntilSuccess(t *testing.T) {
 	defer cancel()
 
 	queueName := "unq_success_queue"
-	streamKey := keys.StreamKey(queueName)
-	dlqKey := keys.DLQKey(queueName)
-	dlqIndexKey := keys.DLQIndexKey(queueName)
-	uniqueLockKey := keys.UniqueKey(queueName, "success-key")
+	streamKey := keys.KeysFor(queueName).Stream()
+	dlqKey := keys.KeysFor(queueName).DLQ()
+	dlqIndexKey := keys.KeysFor(queueName).DLQIndex()
+	uniqueLockKey := keys.KeysFor(queueName).Unique("success-key")
 
 	runChan := make(chan error, 5)
 
@@ -191,8 +191,8 @@ func TestTaskMQ_Unique_WatchdogRenewal(t *testing.T) {
 	defer cancel()
 
 	queueName := "unq_watchdog_queue"
-	streamKey := keys.StreamKey(queueName)
-	uniqueLockKey := keys.UniqueKey(queueName, "watchdog-key")
+	streamKey := keys.KeysFor(queueName).Stream()
+	uniqueLockKey := keys.KeysFor(queueName).Unique("watchdog-key")
 
 	startedChan := make(chan bool, 1)
 	handlerSleepChan := make(chan bool, 1)

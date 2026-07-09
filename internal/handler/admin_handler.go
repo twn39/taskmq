@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
-	"strings"
 	"time"
 
 	"github.com/labstack/echo/v5"
@@ -52,18 +51,15 @@ type QueueStat struct {
 func (h *AdminHandler) GetStats(c *echo.Context) error {
 	ctx := c.Request().Context()
 
-	keys, err := h.rdb.Keys(ctx, "taskmq:{*}:queue").Result()
+	redisKeys, err := h.rdb.Keys(ctx, mqkeys.StreamScanPattern()).Result()
 	if err != nil {
 		h.logger.Error("Failed to scan Redis for queues", zap.Error(err))
 		return c.JSON(http.StatusInternalServerError, map[string]string{"error": "Failed to scan queues"})
 	}
 
 	queuesMap := make(map[string]bool)
-	for _, key := range keys {
-		start := len("taskmq:{")
-		end := strings.Index(key, "}:queue")
-		if start < len(key) && end > start {
-			queueName := key[start:end]
+	for _, key := range redisKeys {
+		if queueName, ok := mqkeys.ParseQueueFromStreamKey(key); ok {
 			queuesMap[queueName] = true
 		}
 	}
@@ -73,20 +69,17 @@ func (h *AdminHandler) GetStats(c *echo.Context) error {
 
 	stats := []QueueStat{}
 	for q := range queuesMap {
-		pausedKey := mqkeys.PausedKey(q)
-		streamKey := mqkeys.StreamKey(q)
-		delayedKey := mqkeys.DelayedKey(q)
-		dlqKey := mqkeys.DLQKey(q)
+		qk := mqkeys.KeysFor(q)
 
-		isPaused, err := h.rdb.Exists(ctx, pausedKey).Result()
+		isPaused, err := h.rdb.Exists(ctx, qk.Paused()).Result()
 		status := "Active"
 		if err == nil && isPaused > 0 {
 			status = "Paused"
 		}
 
-		activeCount, _ := h.rdb.XLen(ctx, streamKey).Result()
-		scheduledCount, _ := h.rdb.ZCard(ctx, delayedKey).Result()
-		dlqCount, _ := h.rdb.ZCard(ctx, dlqKey).Result()
+		activeCount, _ := h.rdb.XLen(ctx, qk.Stream()).Result()
+		scheduledCount, _ := h.rdb.ZCard(ctx, qk.Delayed()).Result()
+		dlqCount, _ := h.rdb.ZCard(ctx, qk.DLQ()).Result()
 
 		stats = append(stats, QueueStat{
 			Name:       q,

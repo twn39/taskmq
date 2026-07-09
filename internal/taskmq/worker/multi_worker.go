@@ -157,7 +157,7 @@ func NewPriorityWorker(rdb *redis.Client, logger *zap.Logger, opts ...PriorityWo
 		if j, ok := jan.(runner.PELRecoveryJanitor); ok {
 			name := qName
 			j.RegisterProcessor(func(ctx context.Context, msg redis.XMessage) {
-				pw.processMessage(ctx, keys.StreamKey(name), msg)
+				pw.processMessage(ctx, keys.KeysFor(name).Stream(), msg)
 			})
 		}
 	}
@@ -167,7 +167,7 @@ func NewPriorityWorker(rdb *redis.Client, logger *zap.Logger, opts ...PriorityWo
 
 func (pw *priorityWorker) Start(ctx context.Context) error {
 	for _, q := range pw.queues {
-		streamKey := keys.StreamKey(q.Name)
+		streamKey := keys.KeysFor(q.Name).Stream()
 		err := pw.rdb.XGroupCreateMkStream(ctx, streamKey, pw.group, "$").Err()
 		if err != nil && err.Error() != "BUSYGROUP Consumer Group name already exists" {
 			return fmt.Errorf("failed to create consumer group for queue %s: %w", q.Name, err)
@@ -252,7 +252,7 @@ func (pw *priorityWorker) worker(workerIndex int) {
 					continue
 				}
 				allQueuesPaused = false
-				streamKey := keys.StreamKey(qName)
+				streamKey := keys.KeysFor(qName).Stream()
 
 				streams, err := pw.rdb.XReadGroup(pw.consumerCtx, &redis.XReadGroupArgs{
 					Group:    pw.group,

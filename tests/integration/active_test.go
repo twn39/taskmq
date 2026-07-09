@@ -25,7 +25,7 @@ func TestTaskMQ_ActiveInspector_ListTasks(t *testing.T) {
 	defer cancel()
 
 	queueName := "active_list_test_queue"
-	streamKey := keys.StreamKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
 
 	var rdb *goredis.Client
 	var client mqclient.Client
@@ -40,8 +40,8 @@ func TestTaskMQ_ActiveInspector_ListTasks(t *testing.T) {
 		fx.Populate(&rdb, &client),
 	)
 
-	rdb.Del(ctx, streamKey, keys.PausedKey(queueName))
-	defer rdb.Del(ctx, streamKey, keys.PausedKey(queueName))
+	rdb.Del(ctx, streamKey, keys.KeysFor(queueName).Paused())
+	defer rdb.Del(ctx, streamKey, keys.KeysFor(queueName).Paused())
 
 	app.RequireStart()
 	defer app.RequireStop()
@@ -77,7 +77,7 @@ func TestTaskMQ_ActiveInspector_DeletePending(t *testing.T) {
 	defer cancel()
 
 	queueName := "active_delete_test_queue"
-	streamKey := keys.StreamKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
 
 	var rdb *goredis.Client
 	var client mqclient.Client
@@ -92,9 +92,9 @@ func TestTaskMQ_ActiveInspector_DeletePending(t *testing.T) {
 		fx.Populate(&rdb, &client),
 	)
 
-	uniqueKey := keys.UniqueKey(queueName, "unique_lock_active_inspector")
-	rdb.Del(ctx, streamKey, uniqueKey, keys.PausedKey(queueName))
-	defer rdb.Del(ctx, streamKey, uniqueKey, keys.PausedKey(queueName))
+	uniqueKey := keys.KeysFor(queueName).Unique("unique_lock_active_inspector")
+	rdb.Del(ctx, streamKey, uniqueKey, keys.KeysFor(queueName).Paused())
+	defer rdb.Del(ctx, streamKey, uniqueKey, keys.KeysFor(queueName).Paused())
 
 	app.RequireStart()
 	defer app.RequireStop()
@@ -138,7 +138,7 @@ func TestTaskMQ_ActiveInspector_DeleteProcessingAndCancel(t *testing.T) {
 	defer cancel()
 
 	queueName := "active_del_proc_test_queue"
-	streamKey := keys.StreamKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
 
 	startedChan := make(chan string, 1)
 	resultChan := make(chan error, 1)
@@ -176,9 +176,9 @@ func TestTaskMQ_ActiveInspector_DeleteProcessingAndCancel(t *testing.T) {
 		fx.Populate(&rdb, &client),
 	)
 
-	cancelKey := "taskmq:{" + queueName + "}:cancelled:test-active-cancel-id"
-	rdb.Del(ctx, streamKey, keys.PausedKey(queueName), cancelKey)
-	defer rdb.Del(ctx, streamKey, keys.PausedKey(queueName), cancelKey)
+	cancelKey := keys.KeysFor(queueName).Cancelled("test-active-cancel-id")
+	rdb.Del(ctx, streamKey, keys.KeysFor(queueName).Paused(), cancelKey)
+	defer rdb.Del(ctx, streamKey, keys.KeysFor(queueName).Paused(), cancelKey)
 
 	app.RequireStart()
 

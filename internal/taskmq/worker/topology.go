@@ -2,6 +2,7 @@ package worker
 
 import (
 	"context"
+	"fmt"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/twn39/taskmq/internal/config"
@@ -10,15 +11,21 @@ import (
 	"go.uber.org/zap"
 )
 
-// BuildWorkerTopology constructs a Worker from config using default lifecycle settings.
+// BuildWorkerTopology constructs a Worker using DefaultLifecycleConfig.
+// The Lifecycle is not shared with any separately constructed Client.
+// Prefer BuildWorkerTopologyWithLifecycle with the Fx-provided shared instance in production.
 func BuildWorkerTopology(rdb *redis.Client, logger *zap.Logger, cfg *config.Config, c codec.Codec, rootCtx context.Context) (Worker, error) {
 	lc := lifecycle.NewLifecycle(lifecycle.DefaultLifecycleConfig())
 	return BuildWorkerTopologyWithLifecycle(rdb, logger, cfg, c, rootCtx, lc)
 }
 
 // BuildWorkerTopologyWithLifecycle reuses a shared Lifecycle instance
-// (so client and workers share metrics / policy).
+// so client and workers share admission policy and process-local metrics.
+// lc must not be nil (WithLifecycle rejects nil).
 func BuildWorkerTopologyWithLifecycle(rdb *redis.Client, logger *zap.Logger, cfg *config.Config, c codec.Codec, rootCtx context.Context, lc *lifecycle.Lifecycle) (Worker, error) {
+	if lc == nil {
+		return nil, fmt.Errorf("lifecycle must not be nil")
+	}
 	workers := make(map[string]Worker)
 
 	queues := cfg.TaskMQ.Queues

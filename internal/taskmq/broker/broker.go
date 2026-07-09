@@ -179,9 +179,7 @@ var (
 )
 
 func (b *redisBroker) dlqMaxCount() int64 {
-	if b.lifecycle == nil {
-		return 1000 // preserve historical default
-	}
+	// nil-safe Config() returns DefaultLifecycleConfig (DLQMaxCount=1000).
 	return b.lifecycle.Config().DLQMaxCount
 }
 
@@ -218,9 +216,7 @@ func (b *redisBroker) MoveToDLQ(ctx context.Context, t *task.Task, streamKey, ms
 }
 
 func (b *redisBroker) delayedMaxCount() int64 {
-	if b.lifecycle == nil {
-		return 0
-	}
+	// nil-safe Config() returns DefaultLifecycleConfig (DelayedMaxCount=0 = off).
 	return b.lifecycle.Config().DelayedMaxCount
 }
 

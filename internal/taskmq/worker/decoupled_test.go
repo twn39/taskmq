@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/twn39/taskmq/internal/taskmq/keys"
 	"github.com/twn39/taskmq/internal/taskmq/policy"
 	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 
@@ -209,7 +210,7 @@ func TestPriorityWorker_DecoupledAbstractionAndFailureHandling(t *testing.T) {
 		taskBytes := []byte(`{"id":"t-4","queue":"high","name":"test-task","retry":2,"max_retry":3}`)
 		msg.Values["payload"] = taskBytes
 
-		pw.processMessage(context.Background(), "taskmq:{high}:queue", msg)
+		pw.processMessage(context.Background(), keys.KeysFor("high").Stream(), msg)
 
 		mb.mu.Lock()
 		if mb.moveToDLQCnt != 1 {

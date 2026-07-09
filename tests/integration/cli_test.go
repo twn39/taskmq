@@ -26,11 +26,11 @@ func TestTaskMQ_CLI_Operations(t *testing.T) {
 	defer cancel()
 
 	queueName := "cli_integration_test_queue"
-	streamKey := keys.StreamKey(queueName)
-	pausedKey := keys.PausedKey(queueName)
-	delayedKey := keys.DelayedKey(queueName)
-	dlqKey := keys.DLQKey(queueName)
-	dlqIndexKey := keys.DLQIndexKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
+	pausedKey := keys.KeysFor(queueName).Paused()
+	delayedKey := keys.KeysFor(queueName).Delayed()
+	dlqKey := keys.KeysFor(queueName).DLQ()
+	dlqIndexKey := keys.KeysFor(queueName).DLQIndex()
 
 	var rdb *goredis.Client
 	var client mqclient.Client

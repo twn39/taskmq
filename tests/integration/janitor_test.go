@@ -24,7 +24,7 @@ func TestTaskMQ_JanitorRecoveryFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "janitor_test_queue"
-	streamKey := keys.StreamKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
 
 	var runCount int64
 	doneChan := make(chan bool, 1)
@@ -89,7 +89,7 @@ func TestTaskMQ_PoisonPillRecovery(t *testing.T) {
 	defer cancel()
 
 	queueName := "poison_test_queue"
-	streamKey := keys.StreamKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
 
 	var rdb *goredis.Client
 	var client mqclient.Client
@@ -109,12 +109,12 @@ func TestTaskMQ_PoisonPillRecovery(t *testing.T) {
 
 	// Clear previous data
 	rdb.Del(ctx, streamKey)
-	rdb.Del(ctx, keys.DLQKey(queueName))
-	rdb.Del(ctx, keys.DLQIndexKey(queueName))
+	rdb.Del(ctx, keys.KeysFor(queueName).DLQ())
+	rdb.Del(ctx, keys.KeysFor(queueName).DLQIndex())
 	defer func() {
 		rdb.Del(ctx, streamKey)
-		rdb.Del(ctx, keys.DLQKey(queueName))
-		rdb.Del(ctx, keys.DLQIndexKey(queueName))
+		rdb.Del(ctx, keys.KeysFor(queueName).DLQ())
+		rdb.Del(ctx, keys.KeysFor(queueName).DLQIndex())
 	}()
 
 	// Block channel to simulate crash/hang

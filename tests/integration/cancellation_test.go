@@ -24,7 +24,7 @@ func TestTaskMQ_TaskCancellationFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "cancel_test_queue"
-	streamKey := keys.StreamKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
 	taskID := "test-running-cancel-id"
 
 	startedChan := make(chan string, 1)
@@ -64,7 +64,7 @@ func TestTaskMQ_TaskCancellationFlow(t *testing.T) {
 		fx.Populate(&rdb, &client),
 	)
 
-	cancelKey := "taskmq:{" + queueName + "}:cancelled:" + taskID
+	cancelKey := keys.KeysFor(queueName).Cancelled(taskID)
 	rdb.Del(ctx, streamKey, cancelKey)
 	defer rdb.Del(ctx, streamKey, cancelKey)
 
@@ -106,7 +106,7 @@ func TestTaskMQ_TaskCancellationBeforeRun(t *testing.T) {
 	defer cancel()
 
 	queueName := "cancel_before_run_queue"
-	streamKey := keys.StreamKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
 	taskID := "test-before-cancel-id"
 
 	var mu sync.Mutex
@@ -140,7 +140,7 @@ func TestTaskMQ_TaskCancellationBeforeRun(t *testing.T) {
 		fx.Populate(&rdb, &client),
 	)
 
-	cancelKey := "taskmq:{" + queueName + "}:cancelled:" + taskID
+	cancelKey := keys.KeysFor(queueName).Cancelled(taskID)
 	rdb.Del(ctx, streamKey, cancelKey)
 	defer rdb.Del(ctx, streamKey, cancelKey)
 

@@ -28,9 +28,9 @@ func TestTaskMQ_DLQFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "dlq_test_queue"
-	streamKey := keys.StreamKey(queueName)
-	dlqKey := keys.DLQKey(queueName)
-	dlqIndexKey := keys.DLQIndexKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
+	dlqKey := keys.KeysFor(queueName).DLQ()
+	dlqIndexKey := keys.KeysFor(queueName).DLQIndex()
 
 	runChan := make(chan error, 2)
 	var attempt int64
@@ -167,8 +167,8 @@ func TestTaskMQ_DLQIndexCapacityProtection(t *testing.T) {
 	defer cancel()
 
 	queueName := "dlq_cap_test_queue"
-	dlqKey := keys.DLQKey(queueName)
-	dlqIndexKey := keys.DLQIndexKey(queueName)
+	dlqKey := keys.KeysFor(queueName).DLQ()
+	dlqIndexKey := keys.KeysFor(queueName).DLQIndex()
 
 	var rdb *goredis.Client
 	var client mqclient.Client
@@ -229,8 +229,8 @@ func TestTaskMQ_DLQIndexCapacityProtection_Binary(t *testing.T) {
 	defer cancel()
 
 	queueName := "dlq_cap_test_queue_bin"
-	dlqKey := keys.DLQKey(queueName)
-	dlqIndexKey := keys.DLQIndexKey(queueName)
+	dlqKey := keys.KeysFor(queueName).DLQ()
+	dlqIndexKey := keys.KeysFor(queueName).DLQIndex()
 
 	var rdb *goredis.Client
 	var client mqclient.Client

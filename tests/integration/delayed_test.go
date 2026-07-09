@@ -24,8 +24,8 @@ func TestTaskMQ_DelayedFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "delayed_test_queue"
-	streamKey := keys.StreamKey(queueName)
-	delayedKey := keys.DelayedKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
+	delayedKey := keys.KeysFor(queueName).Delayed()
 
 	runChan := make(chan time.Time, 1)
 
@@ -85,8 +85,8 @@ func TestTaskMQ_TimeoutCancellationFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "timeout_test_queue"
-	streamKey := keys.StreamKey(queueName)
-	delayedKey := keys.DelayedKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
+	delayedKey := keys.KeysFor(queueName).Delayed()
 
 	var execCount int64
 
@@ -159,8 +159,8 @@ func TestTaskMQ_DelayedSchedulerWakeup(t *testing.T) {
 	defer cancel()
 
 	queueName := "wakeup_test_queue"
-	streamKey := keys.StreamKey(queueName)
-	delayedKey := keys.DelayedKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
+	delayedKey := keys.KeysFor(queueName).Delayed()
 
 	runChan := make(chan time.Time, 1)
 

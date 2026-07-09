@@ -24,8 +24,8 @@ func TestTaskMQ_UniquenessFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "unique_test_queue"
-	streamKey := keys.StreamKey(queueName)
-	uniqueLockKey := keys.UniqueKey(queueName, "my-unique-key")
+	streamKey := keys.KeysFor(queueName).Stream()
+	uniqueLockKey := keys.KeysFor(queueName).Unique("my-unique-key")
 
 	runChan := make(chan bool, 1)
 	blockChan := make(chan struct{})

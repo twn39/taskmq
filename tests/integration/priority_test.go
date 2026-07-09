@@ -50,7 +50,8 @@ func TestTaskMQ_StrictPriorityFlow(t *testing.T) {
 			},
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			mqclient.NewClient,
+			ProvideSharedLifecycle,
+			ProvideClientWithLifecycle,
 			func() codec.Codec { return codec.JSONCodec{} },
 			taskmq.ProvideWorkers,
 		),
@@ -59,13 +60,13 @@ func TestTaskMQ_StrictPriorityFlow(t *testing.T) {
 	)
 
 	// Clean up Redis
-	errDel := rdb.Del(ctx, keys.StreamKey(qLow), keys.StreamKey(qCritical)).Err()
+	errDel := rdb.Del(ctx, keys.KeysFor(qLow).Stream(), keys.KeysFor(qCritical).Stream()).Err()
 	t.Logf("Del err: %v", errDel)
-	defer rdb.Del(ctx, keys.StreamKey(qLow), keys.StreamKey(qCritical))
+	defer rdb.Del(ctx, keys.KeysFor(qLow).Stream(), keys.KeysFor(qCritical).Stream())
 
 	// Pre-create consumer groups with "0" cursor so we can read pre-existing messages
-	errGroupLow := rdb.XGroupCreateMkStream(ctx, keys.StreamKey(qLow), "taskmq-priority-group", "0").Err()
-	errGroupCrit := rdb.XGroupCreateMkStream(ctx, keys.StreamKey(qCritical), "taskmq-priority-group", "0").Err()
+	errGroupLow := rdb.XGroupCreateMkStream(ctx, keys.KeysFor(qLow).Stream(), "taskmq-priority-group", "0").Err()
+	errGroupCrit := rdb.XGroupCreateMkStream(ctx, keys.KeysFor(qCritical).Stream(), "taskmq-priority-group", "0").Err()
 	t.Logf("XGroupCreateMkStream qLow err: %v, qCritical err: %v", errGroupLow, errGroupCrit)
 
 	// Register handlers
@@ -103,8 +104,8 @@ func TestTaskMQ_StrictPriorityFlow(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	lenLow, errLow := rdb.XLen(ctx, keys.StreamKey(qLow)).Result()
-	lenCrit, errCrit := rdb.XLen(ctx, keys.StreamKey(qCritical)).Result()
+	lenLow, errLow := rdb.XLen(ctx, keys.KeysFor(qLow).Stream()).Result()
+	lenCrit, errCrit := rdb.XLen(ctx, keys.KeysFor(qCritical).Stream()).Result()
 	t.Logf("XLEN before start: low=%d (err: %v), critical=%d (err: %v)", lenLow, errLow, lenCrit, errCrit)
 
 	// Now start the worker pool
@@ -159,7 +160,8 @@ func TestTaskMQ_WeightedPriorityFlow(t *testing.T) {
 			},
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			mqclient.NewClient,
+			ProvideSharedLifecycle,
+			ProvideClientWithLifecycle,
 			func() codec.Codec { return codec.JSONCodec{} },
 			taskmq.ProvideWorkers,
 		),
@@ -168,12 +170,12 @@ func TestTaskMQ_WeightedPriorityFlow(t *testing.T) {
 	)
 
 	// Clean up Redis
-	_ = rdb.Del(ctx, keys.StreamKey(qLow), keys.StreamKey(qCritical)).Err()
-	defer rdb.Del(ctx, keys.StreamKey(qLow), keys.StreamKey(qCritical))
+	_ = rdb.Del(ctx, keys.KeysFor(qLow).Stream(), keys.KeysFor(qCritical).Stream()).Err()
+	defer rdb.Del(ctx, keys.KeysFor(qLow).Stream(), keys.KeysFor(qCritical).Stream())
 
 	// Pre-create consumer groups with "0" cursor so we can read pre-existing messages
-	_ = rdb.XGroupCreateMkStream(ctx, keys.StreamKey(qLow), "taskmq-priority-group", "0").Err()
-	_ = rdb.XGroupCreateMkStream(ctx, keys.StreamKey(qCritical), "taskmq-priority-group", "0").Err()
+	_ = rdb.XGroupCreateMkStream(ctx, keys.KeysFor(qLow).Stream(), "taskmq-priority-group", "0").Err()
+	_ = rdb.XGroupCreateMkStream(ctx, keys.KeysFor(qCritical).Stream(), "taskmq-priority-group", "0").Err()
 
 	// Register handlers
 	mqWorker, ok := worker.(mqworker.MultiQueueWorker)

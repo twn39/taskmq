@@ -181,9 +181,9 @@ func (j *RetentionJanitor) safeTrimThreshold(ctx context.Context, stream string)
 }
 
 func (j *RetentionJanitor) purgeDLQByAge(ctx context.Context, maxAge time.Duration) (int64, error) {
-	keys := keys.KeysFor(j.queue)
-	dlqKey := keys.DLQ()
-	indexKey := keys.DLQIndex()
+	qk := keys.KeysFor(j.queue)
+	dlqKey := qk.DLQ()
+	indexKey := qk.DLQIndex()
 	cutoff := time.Now().Add(-maxAge).UnixMilli()
 
 	const batch = 100

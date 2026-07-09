@@ -140,8 +140,8 @@ func TestAdminDashboard(t *testing.T) {
 	t.Run("DLQ Management APIs", func(t *testing.T) {
 		// Mock a DLQ task in Redis
 		queueName := "test-admin-queue"
-		dlqKey := keys.DLQKey(queueName)
-		dlqIndexKey := keys.DLQIndexKey(queueName)
+		dlqKey := keys.KeysFor(queueName).DLQ()
+		dlqIndexKey := keys.KeysFor(queueName).DLQIndex()
 
 		deadTask := taskmodel.NewTask("task:failed-test", []byte("bad-data"), taskmodel.TaskOptions{Queue: queueName})
 		deadTask.ID = "test-dead-id"
@@ -188,8 +188,8 @@ func TestAdminDashboard(t *testing.T) {
 
 	t.Run("DLQ Bulk Operations Management APIs", func(t *testing.T) {
 		queueName := "test-admin-queue"
-		dlqKey := keys.DLQKey(queueName)
-		dlqIndexKey := keys.DLQIndexKey(queueName)
+		dlqKey := keys.KeysFor(queueName).DLQ()
+		dlqIndexKey := keys.KeysFor(queueName).DLQIndex()
 
 		rdb.Del(ctx, dlqKey, dlqIndexKey)
 		defer rdb.Del(ctx, dlqKey, dlqIndexKey)
@@ -257,7 +257,7 @@ func TestAdminDashboard(t *testing.T) {
 
 	t.Run("Scheduled Tasks Management APIs", func(t *testing.T) {
 		queueName := "test-admin-queue"
-		delayedKey := keys.DelayedKey(queueName)
+		delayedKey := keys.KeysFor(queueName).Delayed()
 
 		rdb.Del(ctx, delayedKey)
 		defer rdb.Del(ctx, delayedKey)
@@ -314,8 +314,8 @@ func TestAdminDashboard(t *testing.T) {
 
 	t.Run("Cron Schedules Management APIs", func(t *testing.T) {
 		queueName := "test-admin-queue"
-		configsKey := keys.CronConfigsKey(queueName)
-		delayedKey := keys.DelayedKey(queueName)
+		configsKey := keys.KeysFor(queueName).CronConfigs()
+		delayedKey := keys.KeysFor(queueName).Delayed()
 
 		rdb.Del(ctx, configsKey, delayedKey)
 		defer rdb.Del(ctx, configsKey, delayedKey)

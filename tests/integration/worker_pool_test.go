@@ -51,7 +51,7 @@ func TestTaskMQ_WorkerPool_ParentContextCancellation(t *testing.T) {
 	)
 
 	// Clean up Redis
-	rdb.Del(ctx, keys.StreamKey(queueName))
+	rdb.Del(ctx, keys.KeysFor(queueName).Stream())
 
 	app.RequireStart()
 
@@ -72,7 +72,7 @@ func TestTaskMQ_WorkerPool_ParentContextCancellation(t *testing.T) {
 	time.Sleep(1 * time.Second)
 
 	// Verify task is still in stream and not acknowledged (meaning it wasn't processed)
-	pending, err := rdb.XPending(context.Background(), keys.StreamKey(queueName), "taskmq-group").Result()
+	pending, err := rdb.XPending(context.Background(), keys.KeysFor(queueName).Stream(), "taskmq-group").Result()
 	assert.NoError(t, err)
 	assert.Equal(t, int64(0), pending.Count, "Task should not even be read/claimed (pending count should be 0 in group since group didn't pull)")
 
@@ -118,7 +118,7 @@ func TestTaskMQ_WorkerPool_GracefulShutdownDeadline(t *testing.T) {
 	)
 
 	// Clean up Redis
-	rdb.Del(context.Background(), keys.StreamKey(queueName))
+	rdb.Del(context.Background(), keys.KeysFor(queueName).Stream())
 
 	app.RequireStart()
 

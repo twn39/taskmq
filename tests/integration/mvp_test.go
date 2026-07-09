@@ -25,7 +25,7 @@ func TestTaskMQ_MVPFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "mvp_test_queue"
-	streamKey := keys.StreamKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
 
 	type WelcomeEmail struct {
 		Email string `json:"email"`
@@ -105,7 +105,7 @@ func TestTaskMQ_SyncExecution(t *testing.T) {
 	defer cancel()
 
 	queueName := "sync_exec_test_queue"
-	streamKey := keys.StreamKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
 
 	runChan := make(chan string, 1)
 
@@ -164,9 +164,9 @@ func TestTaskMQ_ExecutionPoolPanicRecovery(t *testing.T) {
 	defer cancel()
 
 	queueName := "pool_panic_test_queue"
-	streamKey := keys.StreamKey(queueName)
-	dlqKey := keys.DLQKey(queueName)
-	dlqIndexKey := keys.DLQIndexKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
+	dlqKey := keys.KeysFor(queueName).DLQ()
+	dlqIndexKey := keys.KeysFor(queueName).DLQIndex()
 
 	var rdb *goredis.Client
 	var client mqclient.Client

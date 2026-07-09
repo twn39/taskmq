@@ -25,8 +25,8 @@ func TestTaskMQ_AtomicUniqueEnqueue(t *testing.T) {
 	defer cancel()
 
 	queueName := "atomic_enqueue_queue"
-	streamKey := keys.StreamKey(queueName)
-	uniqueLockKey := keys.UniqueKey(queueName, "atomic-key")
+	streamKey := keys.KeysFor(queueName).Stream()
+	uniqueLockKey := keys.KeysFor(queueName).Unique("atomic-key")
 
 	var rdb *goredis.Client
 	var client mqclient.Client
@@ -93,8 +93,8 @@ func TestTaskMQ_AtomicCompleteAndRelease(t *testing.T) {
 	defer cancel()
 
 	queueName := "atomic_complete_queue"
-	streamKey := keys.StreamKey(queueName)
-	uniqueLockKey := keys.UniqueKey(queueName, "complete-key")
+	streamKey := keys.KeysFor(queueName).Stream()
+	uniqueLockKey := keys.KeysFor(queueName).Unique("complete-key")
 
 	runChan := make(chan bool, 1)
 

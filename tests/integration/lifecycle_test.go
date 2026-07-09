@@ -39,7 +39,7 @@ func TestTaskMQ_Lifecycle_EnqueueHardLimit(t *testing.T) {
 	defer cancel()
 
 	queueName := "lifecycle_hard_limit_q"
-	streamKey := keys.StreamKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
 	// Block handlers so messages remain in the stream (PEL) and XLEN stays elevated.
 	block := make(chan struct{})
 
@@ -92,10 +92,10 @@ func TestTaskMQ_Lifecycle_EnqueueHardLimit(t *testing.T) {
 		fx.Populate(&rdb, &client, &lc),
 	)
 
-	require.NoError(t, rdb.Del(ctx, streamKey, keys.DelayedKey(queueName), keys.DLQKey(queueName)).Err())
+	require.NoError(t, rdb.Del(ctx, streamKey, keys.KeysFor(queueName).Delayed(), keys.KeysFor(queueName).DLQ()).Err())
 	defer func() {
 		close(block)
-		_ = rdb.Del(ctx, streamKey, keys.DelayedKey(queueName), keys.DLQKey(queueName))
+		_ = rdb.Del(ctx, streamKey, keys.KeysFor(queueName).Delayed(), keys.KeysFor(queueName).DLQ())
 	}()
 
 	app.RequireStart()
@@ -123,8 +123,8 @@ func TestTaskMQ_Lifecycle_DelayedPromoteBackpressure(t *testing.T) {
 	defer cancel()
 
 	queueName := "lifecycle_promote_bp_q"
-	streamKey := keys.StreamKey(queueName)
-	delayedKey := keys.DelayedKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
+	delayedKey := keys.KeysFor(queueName).Delayed()
 	block := make(chan struct{})
 
 	var rdb *goredis.Client
@@ -206,7 +206,7 @@ func TestTaskMQ_Lifecycle_DelayedMaxCountAndDelay(t *testing.T) {
 	defer cancel()
 
 	queueName := "lifecycle_delayed_cap_q"
-	delayedKey := keys.DelayedKey(queueName)
+	delayedKey := keys.KeysFor(queueName).Delayed()
 
 	var rdb *goredis.Client
 	var client mqclient.Client
@@ -270,9 +270,9 @@ func TestTaskMQ_Lifecycle_DLQMaxCountViaWorker(t *testing.T) {
 	defer cancel()
 
 	queueName := "lifecycle_dlq_cap_q"
-	streamKey := keys.StreamKey(queueName)
-	dlqKey := keys.DLQKey(queueName)
-	dlqIndexKey := keys.DLQIndexKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
+	dlqKey := keys.KeysFor(queueName).DLQ()
+	dlqIndexKey := keys.KeysFor(queueName).DLQIndex()
 
 	var rdb *goredis.Client
 	var client mqclient.Client
@@ -394,7 +394,7 @@ func TestTaskMQ_Lifecycle_MaxPayloadRejected(t *testing.T) {
 		fx.Populate(&client, &rdb),
 	)
 
-	_ = rdb.Del(ctx, keys.StreamKey(queueName))
+	_ = rdb.Del(ctx, keys.KeysFor(queueName).Stream())
 	app.RequireStart()
 	defer app.RequireStop()
 
@@ -410,7 +410,7 @@ func TestTaskMQ_Lifecycle_CancelledDelayedPurged(t *testing.T) {
 	defer cancel()
 
 	queueName := "lifecycle_cancel_delayed_q"
-	delayedKey := keys.DelayedKey(queueName)
+	delayedKey := keys.KeysFor(queueName).Delayed()
 
 	var rdb *goredis.Client
 	var client mqclient.Client
@@ -501,7 +501,7 @@ func TestTaskMQ_Lifecycle_ModuleSharedLifecycle(t *testing.T) {
 		fx.Populate(&client, &lc, &rdb),
 	)
 
-	require.NoError(t, rdb.Del(ctx, keys.StreamKey(queueName)).Err())
+	require.NoError(t, rdb.Del(ctx, keys.KeysFor(queueName).Stream()).Err())
 	app.RequireStart()
 	defer app.RequireStop()
 

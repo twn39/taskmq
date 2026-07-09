@@ -46,7 +46,8 @@ func TestTaskMQ_GCRARateLimiting(t *testing.T) {
 			},
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			mqclient.NewClient,
+			ProvideSharedLifecycle,
+			ProvideClientWithLifecycle,
 			func() codec.Codec { return codec.JSONCodec{} },
 			taskmq.ProvideWorkers,
 		),
@@ -55,11 +56,11 @@ func TestTaskMQ_GCRARateLimiting(t *testing.T) {
 	)
 
 	// Clean up Redis keys
-	rdb.Del(ctx, keys.StreamKey(qName), keys.DelayedKey(qName), mqworker.RateLimitKey(qName, ""))
-	defer rdb.Del(ctx, keys.StreamKey(qName), keys.DelayedKey(qName), mqworker.RateLimitKey(qName, ""))
+	rdb.Del(ctx, keys.KeysFor(qName).Stream(), keys.KeysFor(qName).Delayed(), mqworker.RateLimitKey(qName, ""))
+	defer rdb.Del(ctx, keys.KeysFor(qName).Stream(), keys.KeysFor(qName).Delayed(), mqworker.RateLimitKey(qName, ""))
 
 	// Pre-create consumer group with "0" cursor so we can read pre-existing messages
-	_ = rdb.XGroupCreateMkStream(ctx, keys.StreamKey(qName), "taskmq-group-"+qName, "0").Err()
+	_ = rdb.XGroupCreateMkStream(ctx, keys.KeysFor(qName).Stream(), "taskmq-group-"+qName, "0").Err()
 
 	var mu sync.Mutex
 	executionTimes := make([]time.Time, 0)
@@ -141,7 +142,8 @@ func TestTaskMQ_GroupRateLimiting(t *testing.T) {
 			},
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			mqclient.NewClient,
+			ProvideSharedLifecycle,
+			ProvideClientWithLifecycle,
 			func() codec.Codec { return codec.JSONCodec{} },
 			taskmq.ProvideWorkers,
 		),
@@ -150,11 +152,11 @@ func TestTaskMQ_GroupRateLimiting(t *testing.T) {
 	)
 
 	// Clean up Redis keys
-	rdb.Del(ctx, keys.StreamKey(qName), keys.DelayedKey(qName), mqworker.RateLimitKey(qName, "tenant-A"), mqworker.RateLimitKey(qName, "tenant-B"))
-	defer rdb.Del(ctx, keys.StreamKey(qName), keys.DelayedKey(qName), mqworker.RateLimitKey(qName, "tenant-A"), mqworker.RateLimitKey(qName, "tenant-B"))
+	rdb.Del(ctx, keys.KeysFor(qName).Stream(), keys.KeysFor(qName).Delayed(), mqworker.RateLimitKey(qName, "tenant-A"), mqworker.RateLimitKey(qName, "tenant-B"))
+	defer rdb.Del(ctx, keys.KeysFor(qName).Stream(), keys.KeysFor(qName).Delayed(), mqworker.RateLimitKey(qName, "tenant-A"), mqworker.RateLimitKey(qName, "tenant-B"))
 
 	// Pre-create consumer group with "0" cursor so we can read pre-existing messages
-	_ = rdb.XGroupCreateMkStream(ctx, keys.StreamKey(qName), "taskmq-group-"+qName, "0").Err()
+	_ = rdb.XGroupCreateMkStream(ctx, keys.KeysFor(qName).Stream(), "taskmq-group-"+qName, "0").Err()
 
 	var mu sync.Mutex
 	executionTimes := make(map[string][]time.Time)
@@ -253,7 +255,8 @@ func TestTaskMQ_PriorityQueueRateLimiting(t *testing.T) {
 			},
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			mqclient.NewClient,
+			ProvideSharedLifecycle,
+			ProvideClientWithLifecycle,
 			func() codec.Codec { return codec.JSONCodec{} },
 			taskmq.ProvideWorkers,
 		),
@@ -262,12 +265,12 @@ func TestTaskMQ_PriorityQueueRateLimiting(t *testing.T) {
 	)
 
 	// Clean up Redis keys
-	rdb.Del(ctx, keys.StreamKey(qLow), keys.StreamKey(qCritical), mqworker.RateLimitKey(qCritical, ""))
-	defer rdb.Del(ctx, keys.StreamKey(qLow), keys.StreamKey(qCritical), mqworker.RateLimitKey(qCritical, ""))
+	rdb.Del(ctx, keys.KeysFor(qLow).Stream(), keys.KeysFor(qCritical).Stream(), mqworker.RateLimitKey(qCritical, ""))
+	defer rdb.Del(ctx, keys.KeysFor(qLow).Stream(), keys.KeysFor(qCritical).Stream(), mqworker.RateLimitKey(qCritical, ""))
 
 	// Pre-create consumer groups with "0" cursor so we can read pre-existing messages
-	_ = rdb.XGroupCreateMkStream(ctx, keys.StreamKey(qLow), "taskmq-priority-group", "0").Err()
-	_ = rdb.XGroupCreateMkStream(ctx, keys.StreamKey(qCritical), "taskmq-priority-group", "0").Err()
+	_ = rdb.XGroupCreateMkStream(ctx, keys.KeysFor(qLow).Stream(), "taskmq-priority-group", "0").Err()
+	_ = rdb.XGroupCreateMkStream(ctx, keys.KeysFor(qCritical).Stream(), "taskmq-priority-group", "0").Err()
 
 	var mu sync.Mutex
 	executedQueues := make([]string, 0)
@@ -308,8 +311,8 @@ func TestTaskMQ_PriorityQueueRateLimiting(t *testing.T) {
 		assert.NoError(t, err)
 	}
 
-	lenLow, _ := rdb.XLen(ctx, keys.StreamKey(qLow)).Result()
-	lenCrit, _ := rdb.XLen(ctx, keys.StreamKey(qCritical)).Result()
+	lenLow, _ := rdb.XLen(ctx, keys.KeysFor(qLow).Stream()).Result()
+	lenCrit, _ := rdb.XLen(ctx, keys.KeysFor(qCritical).Stream()).Result()
 	t.Logf("=== BEFORE START: low_len=%d, critical_len=%d ===", lenLow, lenCrit)
 
 	// Start App
@@ -362,7 +365,8 @@ func TestTaskMQ_RateLimitDeferralAtomicity(t *testing.T) {
 			},
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			mqclient.NewClient,
+			ProvideSharedLifecycle,
+			ProvideClientWithLifecycle,
 			func() codec.Codec { return codec.JSONCodec{} },
 			taskmq.ProvideWorkers,
 		),
@@ -371,11 +375,11 @@ func TestTaskMQ_RateLimitDeferralAtomicity(t *testing.T) {
 	)
 
 	// Clean up Redis keys
-	rdb.Del(ctx, keys.StreamKey(qName), keys.DelayedKey(qName), mqworker.RateLimitKey(qName, "tenant-A"))
-	defer rdb.Del(ctx, keys.StreamKey(qName), keys.DelayedKey(qName), mqworker.RateLimitKey(qName, "tenant-A"))
+	rdb.Del(ctx, keys.KeysFor(qName).Stream(), keys.KeysFor(qName).Delayed(), mqworker.RateLimitKey(qName, "tenant-A"))
+	defer rdb.Del(ctx, keys.KeysFor(qName).Stream(), keys.KeysFor(qName).Delayed(), mqworker.RateLimitKey(qName, "tenant-A"))
 
 	// Pre-create consumer group
-	_ = rdb.XGroupCreateMkStream(ctx, keys.StreamKey(qName), "taskmq-group-"+qName, "0").Err()
+	_ = rdb.XGroupCreateMkStream(ctx, keys.KeysFor(qName).Stream(), "taskmq-group-"+qName, "0").Err()
 
 	var mu sync.Mutex
 	executionCount := 0
@@ -430,11 +434,11 @@ func TestTaskMQ_RateLimitDeferralAtomicity(t *testing.T) {
 	// b) Be acknowledged (PEL size = 0)
 	// c) Be placed in the Delayed ZSET (ZSET size = 1)
 	assert.Eventually(t, func() bool {
-		streamLen, _ := rdb.XLen(ctx, keys.StreamKey(qName)).Result()
-		zsetSize, _ := rdb.ZCard(ctx, keys.DelayedKey(qName)).Result()
+		streamLen, _ := rdb.XLen(ctx, keys.KeysFor(qName).Stream()).Result()
+		zsetSize, _ := rdb.ZCard(ctx, keys.KeysFor(qName).Delayed()).Result()
 
 		// Check PEL size
-		pendingInfo, _ := rdb.XPending(ctx, keys.StreamKey(qName), "taskmq-group-"+qName).Result()
+		pendingInfo, _ := rdb.XPending(ctx, keys.KeysFor(qName).Stream(), "taskmq-group-"+qName).Result()
 		pelSize := 0
 		if pendingInfo != nil {
 			pelSize = int(pendingInfo.Count)

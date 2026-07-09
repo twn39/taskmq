@@ -27,8 +27,9 @@ type ProvideWorkersParams struct {
 	Codec   codec.Codec
 	Cfg     *config.Config
 	RootCtx context.Context `optional:"true"`
-	// Lifecycle is optional: when omitted, ProvideWorkers builds one from config.
-	Lifecycle *lifecycle.Lifecycle `optional:"true"`
+	// Lifecycle is required and must be the same instance injected into client.Client
+	// so admission limits and process-local metrics stay consistent.
+	Lifecycle *lifecycle.Lifecycle
 }
 
 // Module is the Fx module for TaskMQ dependencies.
@@ -69,22 +70,28 @@ var Module = fx.Module("taskmq",
 )
 
 // ProvideWorkers constructs and provides a Worker for all configured queues.
+// The injected Lifecycle must be shared with client.Client (enforced by Module wiring).
 func ProvideWorkers(p ProvideWorkersParams) (worker.Worker, error) {
-	lc := p.Lifecycle
-	if lc == nil {
-		lc = lifecycle.NewLifecycle(LifecycleFromConfig(p.Cfg))
+	if p.Lifecycle == nil {
+		return nil, fmt.Errorf("taskmq: shared Lifecycle is required; use taskmq.Module or inject *lifecycle.Lifecycle")
 	}
-	return worker.BuildWorkerTopologyWithLifecycle(p.Rdb, p.Logger, p.Cfg, p.Codec, p.RootCtx, lc)
+	return worker.BuildWorkerTopologyWithLifecycle(p.Rdb, p.Logger, p.Cfg, p.Codec, p.RootCtx, p.Lifecycle)
 }
 
-// BuildWorkerTopology constructs and returns a Worker based on the configuration.
+// BuildWorkerTopology constructs workers with a Lifecycle derived from cfg.
+// The Lifecycle instance is not shared with any Client created separately.
+// Prefer BuildWorkerTopologyWithLifecycle when co-locating with a client.
 func BuildWorkerTopology(rdb *redis.Client, logger *zap.Logger, cfg *config.Config, c codec.Codec, rootCtx context.Context) (worker.Worker, error) {
 	lc := lifecycle.NewLifecycle(LifecycleFromConfig(cfg))
 	return worker.BuildWorkerTopologyWithLifecycle(rdb, logger, cfg, c, rootCtx, lc)
 }
 
-// BuildWorkerTopologyWithLifecycle reuses a shared Lifecycle instance.
+// BuildWorkerTopologyWithLifecycle reuses a shared Lifecycle instance
+// (same pointer as client.WithClientLifecycle in production).
 func BuildWorkerTopologyWithLifecycle(rdb *redis.Client, logger *zap.Logger, cfg *config.Config, c codec.Codec, rootCtx context.Context, lc *lifecycle.Lifecycle) (worker.Worker, error) {
+	if lc == nil {
+		return nil, fmt.Errorf("taskmq: Lifecycle must not be nil; use lifecycle.NewLifecycle(...)")
+	}
 	return worker.BuildWorkerTopologyWithLifecycle(rdb, logger, cfg, c, rootCtx, lc)
 }
 

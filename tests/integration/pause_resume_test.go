@@ -23,8 +23,8 @@ func TestTaskMQ_PauseResume_SingleQueue(t *testing.T) {
 	defer cancel()
 
 	queueName := "pause_test_queue"
-	streamKey := keys.StreamKey(queueName)
-	pausedKey := keys.PausedKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
+	pausedKey := keys.KeysFor(queueName).Paused()
 
 	runChan := make(chan string, 10)
 
@@ -63,7 +63,7 @@ func TestTaskMQ_PauseResume_SingleQueue(t *testing.T) {
 	defer app.RequireStop()
 
 	// Wait for control subscriber to be ready
-	controlChannel := keys.ControlChannel(queueName)
+	controlChannel := keys.KeysFor(queueName).Control()
 	for {
 		select {
 		case <-ctx.Done():
@@ -141,9 +141,9 @@ func TestTaskMQ_PauseResume_MultiQueuePriority(t *testing.T) {
 	queueActive := "priority_active_queue"
 	queuePaused := "priority_paused_queue"
 
-	streamActive := keys.StreamKey(queueActive)
-	streamPaused := keys.StreamKey(queuePaused)
-	pausedKey := keys.PausedKey(queuePaused)
+	streamActive := keys.KeysFor(queueActive).Stream()
+	streamPaused := keys.KeysFor(queuePaused).Stream()
+	pausedKey := keys.KeysFor(queuePaused).Paused()
 
 	runChan := make(chan string, 10)
 
@@ -179,8 +179,8 @@ func TestTaskMQ_PauseResume_MultiQueuePriority(t *testing.T) {
 		fx.Populate(&rdb, &client, &worker),
 	)
 
-	rdb.Del(ctx, streamActive, streamPaused, pausedKey, keys.PausedKey(queueActive))
-	defer rdb.Del(ctx, streamActive, streamPaused, pausedKey, keys.PausedKey(queueActive))
+	rdb.Del(ctx, streamActive, streamPaused, pausedKey, keys.KeysFor(queueActive).Paused())
+	defer rdb.Del(ctx, streamActive, streamPaused, pausedKey, keys.KeysFor(queueActive).Paused())
 
 	// Create client temporarily to pause the queue before starting the worker pool
 	tempClient := mqclient.NewClient(rdb)
@@ -234,8 +234,8 @@ func TestTaskMQ_PauseBlockedWorker(t *testing.T) {
 	defer cancel()
 
 	queueName := "pause_blocked_test_queue"
-	streamKey := keys.StreamKey(queueName)
-	pausedKey := keys.PausedKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
+	pausedKey := keys.KeysFor(queueName).Paused()
 
 	runChan := make(chan string, 1)
 

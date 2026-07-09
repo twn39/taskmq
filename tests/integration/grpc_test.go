@@ -28,7 +28,7 @@ func TestTaskMQ_GRPCFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := "grpc_test_queue"
-	streamKey := keys.StreamKey(queueName)
+	streamKey := keys.KeysFor(queueName).Stream()
 
 	runChan := make(chan string, 1)
 

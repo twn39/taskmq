@@ -63,9 +63,10 @@ func (m *cronManager) Run(ctx context.Context) error {
 	ticker := time.NewTicker(m.healingInterval)
 	defer ticker.Stop()
 
-	configsKey := keys.CronConfigsKey(m.queue)
-	delayedKey := keys.DelayedKey(m.queue)
-	lockKey := fmt.Sprintf("taskmq:{%s}:cron_self_healing_lock", m.queue)
+	qk := keys.KeysFor(m.queue)
+	configsKey := qk.CronConfigs()
+	delayedKey := qk.Delayed()
+	lockKey := qk.CronSelfHealingLock()
 
 	for {
 		select {

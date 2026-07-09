@@ -571,13 +571,13 @@ func TestLifecycle_PurgeDLQByAge(t *testing.T) {
 	defer cleanup()
 
 	ctx := context.Background()
-	keys := keys.KeysFor("q1")
+	qk := keys.KeysFor("q1")
 	// Old entry
-	require.NoError(t, rdb.ZAdd(ctx, keys.DLQ(), redis.Z{Score: float64(time.Now().Add(-48 * time.Hour).UnixMilli()), Member: "old"}).Err())
-	require.NoError(t, rdb.HSet(ctx, keys.DLQIndex(), "old", "payload-old").Err())
+	require.NoError(t, rdb.ZAdd(ctx, qk.DLQ(), redis.Z{Score: float64(time.Now().Add(-48 * time.Hour).UnixMilli()), Member: "old"}).Err())
+	require.NoError(t, rdb.HSet(ctx, qk.DLQIndex(), "old", "payload-old").Err())
 	// Fresh entry
-	require.NoError(t, rdb.ZAdd(ctx, keys.DLQ(), redis.Z{Score: float64(time.Now().UnixMilli()), Member: "new"}).Err())
-	require.NoError(t, rdb.HSet(ctx, keys.DLQIndex(), "new", "payload-new").Err())
+	require.NoError(t, rdb.ZAdd(ctx, qk.DLQ(), redis.Z{Score: float64(time.Now().UnixMilli()), Member: "new"}).Err())
+	require.NoError(t, rdb.HSet(ctx, qk.DLQIndex(), "new", "payload-new").Err())
 
 	lc := lifecycle.NewLifecycle(lifecycle.LifecycleConfig{DLQMaxAge: 24 * time.Hour, SafeTrimEnabled: false, DLQMaxCount: 1000})
 	j := runner.NewRetentionJanitor(rdb, zap.NewNop(), "q1", "g", codec.JSONCodec{}, lc)
@@ -585,13 +585,13 @@ func TestLifecycle_PurgeDLQByAge(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), n)
 
-	card, err := rdb.ZCard(ctx, keys.DLQ()).Result()
+	card, err := rdb.ZCard(ctx, qk.DLQ()).Result()
 	require.NoError(t, err)
 	assert.Equal(t, int64(1), card)
-	exists, err := rdb.HExists(ctx, keys.DLQIndex(), "old").Result()
+	exists, err := rdb.HExists(ctx, qk.DLQIndex(), "old").Result()
 	require.NoError(t, err)
 	assert.False(t, exists)
-	exists, err = rdb.HExists(ctx, keys.DLQIndex(), "new").Result()
+	exists, err = rdb.HExists(ctx, qk.DLQIndex(), "new").Result()
 	require.NoError(t, err)
 	assert.True(t, exists)
 }

@@ -55,10 +55,10 @@ func NewDelayedScheduler(rdb *redis.Client, logger *zap.Logger, queue string, cr
 //   - Between wakeups the scheduler sleeps adaptively (up to maxSleep), eliminating the
 //     old busy-poll pattern completely.
 func (s *delayedScheduler) Run(ctx context.Context) error {
-	keys := keys.KeysFor(s.queue)
-	delayedKey := keys.Delayed()
-	streamKey := keys.Stream()
-	wakeupChannel := keys.DelayedWakeupChannel()
+	qk := keys.KeysFor(s.queue)
+	delayedKey := qk.Delayed()
+	streamKey := qk.Stream()
+	wakeupChannel := qk.DelayedWakeupChannel()
 
 	// Lua script: atomically move ready tasks (score <= nowMs) from ZSET to Stream.
 	// ARGV[4]=streamHardLimit (0=off): if stream is full, return empty and keep delayed.
