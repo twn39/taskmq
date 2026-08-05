@@ -85,7 +85,9 @@ func TestTaskMQ_JanitorRecoveryFlow(t *testing.T) {
 }
 
 func TestTaskMQ_PoisonPillRecovery(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	// Hung handlers ignore context; Stop must not wait the production default (30s)
+	// or this test's overall deadline will expire mid-scenario.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
 	queueName := "poison_test_queue"
@@ -119,6 +121,8 @@ func TestTaskMQ_PoisonPillRecovery(t *testing.T) {
 
 	// Block channel to simulate crash/hang
 	blockChan := make(chan struct{})
+	// Short shutdown so Stop returns quickly while handlers remain hung (crash sim).
+	const crashShutdown = 200 * time.Millisecond
 
 	// 1. Start Worker Pool 1 to create the consumer group, then enqueue, consume, and stop
 	var runCount1 int64
@@ -129,6 +133,7 @@ func TestTaskMQ_PoisonPillRecovery(t *testing.T) {
 		mqworker.WithConcurrency(1),
 		mqworker.WithJanitorInterval(10*time.Second),
 		mqworker.WithJanitorMinIdleTime(10*time.Second),
+		mqworker.WithShutdownTimeout(crashShutdown),
 	)
 	w1.Register("task:poison", func(ctx context.Context, task *taskmodel.Task) error {
 		atomic.AddInt64(&runCount1, 1)
@@ -154,7 +159,7 @@ func TestTaskMQ_PoisonPillRecovery(t *testing.T) {
 		t.Fatal("Timeout waiting for worker 1 to start task")
 	}
 
-	w1.Stop(ctx) // Crash/Stop worker pool 1. Message remains in PEL for consumer-w1.
+	w1.Stop(context.Background()) // Crash/Stop worker pool 1. Message remains in PEL for consumer-w1.
 	assert.Equal(t, int64(1), atomic.LoadInt64(&runCount1))
 
 	// Wait briefly to ensure the message becomes idle for 50ms
@@ -170,6 +175,7 @@ func TestTaskMQ_PoisonPillRecovery(t *testing.T) {
 		mqworker.WithConcurrency(1),
 		mqworker.WithJanitorInterval(50*time.Millisecond),
 		mqworker.WithJanitorMinIdleTime(50*time.Millisecond),
+		mqworker.WithShutdownTimeout(crashShutdown),
 	)
 	w2.Register("task:poison", func(ctx context.Context, task *taskmodel.Task) error {
 		atomic.AddInt64(&runCount2, 1)
@@ -187,7 +193,7 @@ func TestTaskMQ_PoisonPillRecovery(t *testing.T) {
 		t.Fatal("Timeout waiting for worker 2 to reclaim task")
 	}
 
-	w2.Stop(ctx) // Crash/Stop worker pool 2. Message remains in PEL.
+	w2.Stop(context.Background()) // Crash/Stop worker pool 2. Message remains in PEL.
 	assert.Equal(t, int64(1), atomic.LoadInt64(&runCount2))
 
 	// Wait briefly to ensure the message becomes idle for 50ms again
@@ -202,6 +208,7 @@ func TestTaskMQ_PoisonPillRecovery(t *testing.T) {
 		mqworker.WithConcurrency(1),
 		mqworker.WithJanitorInterval(50*time.Millisecond),
 		mqworker.WithJanitorMinIdleTime(50*time.Millisecond),
+		mqworker.WithShutdownTimeout(crashShutdown),
 	)
 	w3.Register("task:poison", func(ctx context.Context, task *taskmodel.Task) error {
 		atomic.AddInt64(&runCount3, 1)
@@ -225,7 +232,7 @@ func TestTaskMQ_PoisonPillRecovery(t *testing.T) {
 		}
 	}
 Done:
-	w3.Stop(ctx)
+	w3.Stop(context.Background())
 
 	// Assertions
 	assert.Equal(t, int64(0), atomic.LoadInt64(&runCount3), "Handler 3 should NOT have run because task exceeded MaxRetry")

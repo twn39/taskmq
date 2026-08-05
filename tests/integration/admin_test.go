@@ -37,6 +37,7 @@ func TestAdminDashboard(t *testing.T) {
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
+			ProvideSharedLifecycle,
 			mqclient.NewClient,
 			handler.NewAdminHandler,
 			server.NewServer,

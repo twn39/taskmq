@@ -209,6 +209,6 @@ func TestTaskMQ_CLI_Operations(t *testing.T) {
 		// Test connection with override CLI flag (e.g. override invalid port should fail to connect)
 		out, runErr := runCLI("-redis-addr", "localhost:9999", "stats")
 		assert.Error(t, runErr, "Should fail with invalid port override")
-		assert.Contains(t, out, "Failed to connect to Redis")
+		assert.Contains(t, out, "failed to connect to Redis")
 	})
 }
