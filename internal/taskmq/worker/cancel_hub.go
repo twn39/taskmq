@@ -63,18 +63,29 @@ func NewCancelHub(rdb redis.UniversalClient, logger *zap.Logger) *CancelHub {
 }
 
 // StartSubscriber listens for cancel pub/sub messages and cancels matching tasks.
+// It blocks until the Redis subscription is acknowledged (or ctx is done) so a
+// subsequent Publish is not lost to a not-yet-subscribed race.
 func (h *CancelHub) StartSubscriber(ctx context.Context, wg *sync.WaitGroup, queues []string) {
 	if len(queues) == 0 {
 		return
 	}
+	channels := make([]string, len(queues))
+	for i, q := range queues {
+		channels[i] = keys.KeysFor(q).CancelChannel()
+	}
+	pubsub := h.rdb.Subscribe(ctx, channels...)
+	// Wait for subscribe confirmation before returning so Start can proceed safely.
+	if _, err := pubsub.Receive(ctx); err != nil {
+		_ = pubsub.Close()
+		if h.logger != nil && ctx.Err() == nil {
+			h.logger.Error("Cancel subscriber: failed to subscribe", zap.Error(err))
+		}
+		return
+	}
+
 	wg.Add(1)
 	go func() {
 		defer wg.Done()
-		channels := make([]string, len(queues))
-		for i, q := range queues {
-			channels[i] = keys.KeysFor(q).CancelChannel()
-		}
-		pubsub := h.rdb.Subscribe(ctx, channels...)
 		defer pubsub.Close()
 
 		ch := pubsub.Channel()
@@ -85,7 +96,7 @@ func (h *CancelHub) StartSubscriber(ctx context.Context, wg *sync.WaitGroup, que
 			case msg, ok := <-ch:
 				if !ok {
 					h.logger.Warn("Cancel subscriber: PubSub channel closed, refreshing subscription")
-					pubsub.Close()
+					_ = pubsub.Close()
 					if ctx.Err() != nil {
 						return
 					}
@@ -95,6 +106,13 @@ func (h *CancelHub) StartSubscriber(ctx context.Context, wg *sync.WaitGroup, que
 					case <-time.After(1 * time.Second): // Backoff to prevent tight spin
 					}
 					pubsub = h.rdb.Subscribe(ctx, channels...)
+					if _, err := pubsub.Receive(ctx); err != nil {
+						if ctx.Err() != nil {
+							return
+						}
+						h.logger.Error("Cancel subscriber: resubscribe failed", zap.Error(err))
+						continue
+					}
 					ch = pubsub.Channel()
 					continue
 				}

@@ -3,20 +3,20 @@ package integration
 import (
 	"context"
 	"errors"
-	"testing"
-	"time"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
-	"go.uber.org/fx"
-	"go.uber.org/fx/fxtest"
-	"go.uber.org/zap"
 	"github.com/twn39/taskmq/internal/logger"
+	internalredis "github.com/twn39/taskmq/internal/redis"
 	"github.com/twn39/taskmq/internal/taskmq"
 	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
 	"github.com/twn39/taskmq/internal/taskmq/keys"
-	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
-	internalredis "github.com/twn39/taskmq/internal/redis"
 	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
+	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
+	"go.uber.org/fx"
+	"go.uber.org/fx/fxtest"
+	"go.uber.org/zap"
+	"testing"
+	"time"
 )
 
 func TestTaskMQ_UniqueScope_UntilStart(t *testing.T) {
@@ -91,8 +91,11 @@ func TestTaskMQ_UniqueScope_UntilStart(t *testing.T) {
 	err = client.Enqueue(ctx, task2)
 	assert.NoError(t, err, "Should allow enqueuing duplicates once task 1 starts executing under UniqueUntilStart")
 
-	// Release handler sleep
-	handlerSleepChan <- true
+	// Unblock all handlers (task1 and any subsequent claim of task2). Closing avoids
+	// a hung second task blocking Fx shutdown (seen on slower CI runners).
+	close(handlerSleepChan)
+	// Brief wait so task1 can finish CompleteTask before teardown.
+	time.Sleep(200 * time.Millisecond)
 }
 
 func TestTaskMQ_UniqueScope_UntilSuccess(t *testing.T) {

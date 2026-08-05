@@ -5,7 +5,7 @@
 #
 # CI gate uses a focused linter set. Re-enable revive/gosec gradually as
 # exported docs and security findings are cleaned up.
-version: 2
+version: "2"
 
 run:
   concurrency: 4

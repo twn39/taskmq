@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"strconv"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/twn39/taskmq/internal/taskmq/broker"
@@ -184,6 +185,11 @@ func (p *MessageProcessor) executeAndSettle(ctx context.Context, streamKey, msgI
 		p.cancel.Add(task.ID, cancel)
 		defer p.cancel.Delete(task.ID)
 	}
+	// Backup to pub/sub: poll cancelled marker so mid-run CancelTask is not lost
+	// if the Publish raced the subscriber (or PubSub was briefly disconnected).
+	stopPoll := make(chan struct{})
+	defer close(stopPoll)
+	go p.pollCancelledMarker(cancellableCtx, stopPoll, task.Queue, task.ID, cancel)
 
 	c := AcquireConsumeContext(cancellableCtx, task, msgID, task.Queue, p.group, p.middlewareChain)
 	defer ReleaseConsumeContext(c)
@@ -230,5 +236,34 @@ func (p *MessageProcessor) executeAndSettle(ctx context.Context, streamKey, msgI
 			zap.String("stream_id", msgID),
 			zap.Error(err),
 		)
+	}
+}
+
+// pollCancelledMarker watches the Redis cancelled key until stop is closed or ctx ends.
+func (p *MessageProcessor) pollCancelledMarker(ctx context.Context, stop <-chan struct{}, queue, taskID string, cancel context.CancelFunc) {
+	if p.rdb == nil || cancel == nil || taskID == "" {
+		return
+	}
+	key := keys.KeysFor(queue).Cancelled(taskID)
+	// Immediate check: cancel may have been set before the handler registered.
+	if n, err := p.rdb.Exists(ctx, key).Result(); err == nil && n > 0 {
+		cancel()
+		return
+	}
+	t := time.NewTicker(100 * time.Millisecond)
+	defer t.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ctx.Done():
+			return
+		case <-t.C:
+			n, err := p.rdb.Exists(ctx, key).Result()
+			if err == nil && n > 0 {
+				cancel()
+				return
+			}
+		}
 	}
 }
