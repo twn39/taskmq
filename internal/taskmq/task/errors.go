@@ -3,7 +3,7 @@ package task
 import "errors"
 
 // Sentinel errors for handler control of retry behavior.
-// Prefer wrapping business errors: return task.SkipRetry(err) or task.Unrecoverable(err).
+// Prefer wrapping business errors: return SkipRetry(err) or Unrecoverable(err).
 var (
 	// ErrSkipRetry means do not retry; move straight to DLQ (or terminal failure).
 	// Use for permanent validation errors (e.g. bad payload).

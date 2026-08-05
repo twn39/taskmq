@@ -94,3 +94,34 @@ func TestEnqueueBulk_PayloadLimitPartial(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, int64(2), n)
 }
+
+func TestEnqueueBulk_LargeChunkedAndUnique(t *testing.T) {
+	mr, err := miniredis.Run()
+	require.NoError(t, err)
+	defer mr.Close()
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	defer rdb.Close()
+
+	c := NewClient(rdb, WithClientCodec(codec.JSONCodec{}))
+	ctx := context.Background()
+	queue := "large-bulk-q"
+
+	// 1500 tasks (exceeds maxBulkChunkSize 1000, testing chunking logic + unique keys)
+	var tasks []*taskmodel.Task
+	for i := 0; i < 1500; i++ {
+		opts := taskmodel.TaskOptions{Queue: queue, ID: fmt.Sprintf("t-%d", i)}
+		if i%2 == 0 {
+			opts.UniqueKey = fmt.Sprintf("unique-key-%d", i)
+		}
+		tasks = append(tasks, taskmodel.NewTask("job", []byte(fmt.Sprintf(`{"n":%d}`, i)), opts))
+	}
+
+	res, err := c.EnqueueBulk(ctx, tasks)
+	require.NoError(t, err)
+	require.Len(t, res.Succeeded, 1500)
+	require.Empty(t, res.FailedIndexes)
+
+	n, err := rdb.XLen(ctx, keys.KeysFor(queue).Stream()).Result()
+	require.NoError(t, err)
+	require.Equal(t, int64(1500), n)
+}

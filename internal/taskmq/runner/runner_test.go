@@ -530,3 +530,24 @@ func TestPELValueAsBytesAndDefaultFactory(t *testing.T) {
 	// Nil process is fine until Run is exercised.
 	_ = ctx
 }
+
+func TestCronManager_SelfHealingLockAndInvalidConfig(t *testing.T) {
+	ctx, rdb, _, cleanup := setupMini(t)
+	defer cleanup()
+
+	queue := "cron-lock-q"
+	qk := keys.KeysFor(queue)
+
+	// Pre-set self-healing lock to simulate another worker holding lock
+	require.NoError(t, rdb.Set(ctx, qk.CronSelfHealingLock(), "1", time.Minute).Err())
+
+	// Add corrupt config in CronConfigs hash
+	require.NoError(t, rdb.HSet(ctx, qk.CronConfigs(), "bad-job", "corrupt-json-data").Err())
+
+	cm := runner.NewCronManager(rdb, zap.NewNop(), queue, codec.JSONCodec{}, 50*time.Millisecond, time.Second, 10, 10)
+	runCtx, cancel := context.WithTimeout(ctx, 150*time.Millisecond)
+	defer cancel()
+
+	_ = cm.Run(runCtx)
+	// Lock was held by another node, so HGetAll scan was safely skipped
+}

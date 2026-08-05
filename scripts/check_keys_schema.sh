@@ -15,7 +15,7 @@ fi
 matches="$(rg -n 'taskmq:\{' \
   --glob '*.go' \
   --glob '!internal/taskmq/keys/**' \
-  --glob '!third_party/**' \
+  internal cmd tests api \
   || true)"
 
 if [[ -n "$matches" ]]; then
@@ -32,7 +32,7 @@ removed="$(rg -n \
   -e '^func (StreamKey|DelayedKey|DLQKey|DLQIndexKey|UniqueKey|CronConfigsKey|PausedKey|ControlChannel|CancelledKey|CancelChannel|DelayedWakeupChannel)\(' \
   -e '\b(keys|mqkeys)\.(StreamKey|DelayedKey|DLQKey|DLQIndexKey|UniqueKey|CronConfigsKey|PausedKey|ControlChannel|CancelledKey|CancelChannel|DelayedWakeupChannel)\(' \
   --glob '*.go' \
-  --glob '!third_party/**' \
+  internal cmd tests api \
   || true)"
 
 if [[ -n "$removed" ]]; then

@@ -1,12 +1,12 @@
 package unit
 
 import (
-	"testing"
-	"time"
 	"github.com/google/go-cmp/cmp"
 	"github.com/stretchr/testify/assert"
 	"github.com/twn39/taskmq/internal/taskmq/codec"
 	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
+	"testing"
+	"time"
 )
 
 func TestCodecs(t *testing.T) {

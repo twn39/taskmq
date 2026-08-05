@@ -59,10 +59,14 @@ func (p *MessageProcessor) Process(ctx context.Context, streamKey string, msg re
 	}
 
 	if p.meta != nil {
-		_ = p.meta.SetState(ctx, task.Queue, task.ID, meta.StateActive, "", msg.ID)
+		tCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 1*time.Second)
+		_ = p.meta.SetState(tCtx, task.Queue, task.ID, meta.StateActive, "", msg.ID)
+		cancel()
 	}
 	if p.events != nil {
-		p.events.Emit(ctx, task.Queue, events.TypeActive, task.ID, task.Name, "")
+		tCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 1*time.Second)
+		p.events.Emit(tCtx, task.Queue, events.TypeActive, task.ID, task.Name, "")
+		cancel()
 	}
 	p.executeAndSettle(ctx, streamKey, msg.ID, &task)
 }

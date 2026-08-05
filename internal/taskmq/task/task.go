@@ -22,13 +22,13 @@ const (
 
 // Task represents a unit of work to be executed asynchronously
 type Task struct {
-	ID          string      `json:"id"`
-	Queue       string      `json:"queue"`
-	Name        string      `json:"name"`
-	Payload     []byte      `json:"payload"`
-	Retry       int         `json:"retry"`
-	MaxRetry    int         `json:"max_retry"`
-	TimeoutMs   int         `json:"timeout_ms"`
+	ID        string `json:"id"`
+	Queue     string `json:"queue"`
+	Name      string `json:"name"`
+	Payload   []byte `json:"payload"`
+	Retry     int    `json:"retry"`
+	MaxRetry  int    `json:"max_retry"`
+	TimeoutMs int    `json:"timeout_ms"`
 	// DeadlineMs is an absolute unix-millisecond deadline; 0 means none.
 	// At execution, the effective deadline is min(now+TimeoutMs, DeadlineMs) when both set.
 	DeadlineMs  int64       `json:"deadline_ms,omitempty"`
@@ -46,10 +46,10 @@ type Task struct {
 
 // TaskOptions defines configurations applied when creating a task
 type TaskOptions struct {
-	ID          string
-	Queue       string
-	MaxRetry    *int
-	Timeout     time.Duration
+	ID       string
+	Queue    string
+	MaxRetry *int
+	Timeout  time.Duration
 	// Deadline is an absolute wall-clock deadline; zero means none.
 	Deadline    time.Time
 	UniqueKey   string

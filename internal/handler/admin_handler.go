@@ -95,9 +95,9 @@ func (h *AdminHandler) GetQueueMetrics(c *echo.Context) error {
 		snap, _ := store.Snapshot(ctx, q)
 		d, _ := metricsq.Depths(ctx, h.rdb, q)
 		out = append(out, map[string]interface{}{
-			"queue":   q,
+			"queue":    q,
 			"counters": snap,
-			"depths":  d,
+			"depths":   d,
 		})
 	}
 	return c.JSON(http.StatusOK, out)

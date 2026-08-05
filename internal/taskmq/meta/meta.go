@@ -24,24 +24,24 @@ const (
 
 // TaskInfo is the inspector view of a task's durable metadata.
 type TaskInfo struct {
-	ID          string    `json:"id"`
-	Queue       string    `json:"queue"`
-	Name        string    `json:"name"`
-	State       string    `json:"state"`
-	Retry       int       `json:"retry"`
-	MaxRetry    int       `json:"max_retry"`
-	LastError   string    `json:"last_error,omitempty"`
-	TimeoutMs   int       `json:"timeout_ms,omitempty"`
-	DeadlineMs  int64     `json:"deadline_ms,omitempty"`
-	UniqueKey   string    `json:"unique_key,omitempty"`
-	GroupKey    string    `json:"group_key,omitempty"`
-	StreamID    string    `json:"stream_id,omitempty"`
-	Result      []byte    `json:"result,omitempty"`
-	Progress    int       `json:"progress,omitempty"` // 0-100
-	ProgressData string   `json:"progress_data,omitempty"`
-	CreatedAt   time.Time `json:"created_at,omitempty"`
-	UpdatedAt   time.Time `json:"updated_at,omitempty"`
-	CompletedAt time.Time `json:"completed_at,omitempty"`
+	ID           string    `json:"id"`
+	Queue        string    `json:"queue"`
+	Name         string    `json:"name"`
+	State        string    `json:"state"`
+	Retry        int       `json:"retry"`
+	MaxRetry     int       `json:"max_retry"`
+	LastError    string    `json:"last_error,omitempty"`
+	TimeoutMs    int       `json:"timeout_ms,omitempty"`
+	DeadlineMs   int64     `json:"deadline_ms,omitempty"`
+	UniqueKey    string    `json:"unique_key,omitempty"`
+	GroupKey     string    `json:"group_key,omitempty"`
+	StreamID     string    `json:"stream_id,omitempty"`
+	Result       []byte    `json:"result,omitempty"`
+	Progress     int       `json:"progress,omitempty"` // 0-100
+	ProgressData string    `json:"progress_data,omitempty"`
+	CreatedAt    time.Time `json:"created_at,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at,omitempty"`
+	CompletedAt  time.Time `json:"completed_at,omitempty"`
 }
 
 // Store reads/writes per-task meta via keys.QueueKeys.Meta.
@@ -81,6 +81,35 @@ func (s *Store) Put(ctx context.Context, t *taskmodel.Task, state string) error 
 		fields["created_at"] = now
 	}
 	return s.rdb.HSet(ctx, qk.Meta(t.ID), fields).Err()
+}
+
+// PutPipelined queues Put fields into an existing Redis pipeline.
+func (s *Store) PutPipelined(ctx context.Context, pipe redis.Pipeliner, t *taskmodel.Task, state string) {
+	if s == nil || pipe == nil || t == nil || t.ID == "" {
+		return
+	}
+	now := time.Now().UnixMilli()
+	qk := keys.KeysFor(t.Queue)
+	fields := map[string]interface{}{
+		"id":          t.ID,
+		"queue":       t.Queue,
+		"name":        t.Name,
+		"state":       state,
+		"retry":       t.Retry,
+		"max_retry":   t.MaxRetry,
+		"timeout_ms":  t.TimeoutMs,
+		"deadline_ms": t.DeadlineMs,
+		"unique_key":  t.UniqueKey,
+		"group_key":   t.GroupKey,
+		"last_error":  t.LastError,
+		"updated_at":  now,
+	}
+	if !t.CreatedAt.IsZero() {
+		fields["created_at"] = t.CreatedAt.UnixMilli()
+	} else {
+		fields["created_at"] = now
+	}
+	pipe.HSet(ctx, qk.Meta(t.ID), fields)
 }
 
 // SetState updates state and optional error/stream id.

@@ -45,6 +45,9 @@ type EnqueueClient interface {
 // Enqueuer is an alias for EnqueueClient.
 type Enqueuer = EnqueueClient
 
+// Producer is an alias for EnqueueClient (lightweight enqueue-only client).
+type Producer = EnqueueClient
+
 // CronClient manages periodic job registration.
 type CronClient interface {
 	RegisterCron(ctx context.Context, jobName string, spec string, task *taskmodel.Task, opts ...TaskOption) error

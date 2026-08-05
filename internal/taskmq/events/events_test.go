@@ -205,5 +205,32 @@ func TestListRecent_DefaultCount(t *testing.T) {
 	if len(list) != 3 {
 		t.Fatalf("len=%d", len(list))
 	}
-	_ = time.Now() // keep time import if needed by future clock asserts
+}
+
+func TestEmitPipelined(t *testing.T) {
+	ctx, rdb, _, cleanup := setupEvents(t)
+	defer cleanup()
+
+	p := NewPublisher(rdb, 100)
+	queue := "q-pipe-events"
+
+	pipe := rdb.Pipeline()
+	p.EmitPipelined(ctx, pipe, queue, TypeEnqueued, "t1", "job1", "")
+	p.EmitPipelined(ctx, pipe, queue, TypeCompleted, "t1", "job1", "")
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		t.Fatalf("exec pipeline events: %v", err)
+	}
+
+	list, err := ListRecent(ctx, rdb, queue, 10)
+	if err != nil || len(list) != 2 {
+		t.Fatalf("expected 2 pipelined events, got %d (err: %v)", len(list), err)
+	}
+	if list[0].Type != TypeEnqueued || list[1].Type != TypeCompleted {
+		t.Fatalf("unexpected events sequence: %+v", list)
+	}
+
+	// Nil publisher guard
+	var nilPub *Publisher
+	nilPub.EmitPipelined(ctx, pipe, queue, TypeEnqueued, "t1", "job1", "")
 }

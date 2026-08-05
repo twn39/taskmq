@@ -1,6 +1,7 @@
 package lifecycle
 
 import (
+	"context"
 	_ "embed"
 
 	"github.com/redis/go-redis/v9"
@@ -29,3 +30,24 @@ var (
 	EnqueueUniqueDelayedLimitCmd = redis.NewScript(enqueueUniqueDelayedWithLimitScript)
 	ForcePromoteMemberCmd        = redis.NewScript(forcePromoteMemberScript)
 )
+
+// LoadScripts pre-loads all admission Lua scripts into Redis using SCRIPT LOAD.
+// Essential before executing scripts inside Redis Pipelines (rdb.Pipeline()) to prevent NOSCRIPT errors.
+func LoadScripts(ctx context.Context, rdb redis.UniversalClient) error {
+	if rdb == nil {
+		return nil
+	}
+	scripts := []*redis.Script{
+		EnqueueStreamCmd,
+		EnqueueUniqueWithLimitCmd,
+		EnqueueDelayedWithLimitCmd,
+		EnqueueUniqueDelayedLimitCmd,
+		ForcePromoteMemberCmd,
+	}
+	for _, s := range scripts {
+		if err := s.Load(ctx, rdb).Err(); err != nil {
+			return err
+		}
+	}
+	return nil
+}

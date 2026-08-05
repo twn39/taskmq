@@ -27,10 +27,10 @@ func TestMiddleware_Recovery(t *testing.T) {
 		}
 
 		c := &ConsumeContext{
-			Context:        context.Background(),
-			Task: &taskmodel.Task{ID: "t-1", Name: "panic-task"},
-			handlers:       handlers,
-			index:          -1,
+			Context:  context.Background(),
+			Task:     &taskmodel.Task{ID: "t-1", Name: "panic-task"},
+			handlers: handlers,
+			index:    -1,
 		}
 
 		err := c.Next()
@@ -67,12 +67,12 @@ func TestMiddleware_RateLimiter(t *testing.T) {
 		}
 
 		c := &ConsumeContext{
-			Context:        context.Background(),
-			Task: &taskmodel.Task{ID: "t-1", Queue: "q-1"},
-			MessageID:      "1-0",
-			Queue:          "q-1",
-			handlers:       handlers,
-			index:          -1,
+			Context:   context.Background(),
+			Task:      &taskmodel.Task{ID: "t-1", Queue: "q-1"},
+			MessageID: "1-0",
+			Queue:     "q-1",
+			handlers:  handlers,
+			index:     -1,
 		}
 
 		err := c.Next()
@@ -98,12 +98,12 @@ func TestMiddleware_RateLimiter(t *testing.T) {
 
 		runChain := func(taskID string, queue string) error {
 			c := &ConsumeContext{
-				Context:        context.Background(),
-				Task: &taskmodel.Task{ID: taskID, Queue: queue},
-				MessageID:      "2-0",
-				Queue:          queue,
-				handlers:       handlers,
-				index:          -1,
+				Context:   context.Background(),
+				Task:      &taskmodel.Task{ID: taskID, Queue: queue},
+				MessageID: "2-0",
+				Queue:     queue,
+				handlers:  handlers,
+				index:     -1,
 			}
 			return c.Next()
 		}
@@ -144,12 +144,12 @@ func TestMiddleware_RateLimiter(t *testing.T) {
 		}
 
 		c := &ConsumeContext{
-			Context:        context.Background(),
-			Task: &taskmodel.Task{ID: "t-failopen", Queue: "q-failopen"},
-			MessageID:      "99-0",
-			Queue:          "q-failopen",
-			handlers:       handlers,
-			index:          -1,
+			Context:   context.Background(),
+			Task:      &taskmodel.Task{ID: "t-failopen", Queue: "q-failopen"},
+			MessageID: "99-0",
+			Queue:     "q-failopen",
+			handlers:  handlers,
+			index:     -1,
 		}
 
 		err := c.Next()
@@ -218,12 +218,12 @@ func TestMiddleware_RateLimiter_GroupKeyLayers(t *testing.T) {
 		}
 
 		c := &ConsumeContext{
-			Context:        context.Background(),
-			Task: &taskmodel.Task{ID: "t-1", Queue: "q-1", GroupKey: "layer-1", Payload: []byte(`{"field-dynamic":"layer-3"}`)},
-			MessageID:      "1-0",
-			Queue:          "q-1",
-			handlers:       handlers,
-			index:          -1,
+			Context:   context.Background(),
+			Task:      &taskmodel.Task{ID: "t-1", Queue: "q-1", GroupKey: "layer-1", Payload: []byte(`{"field-dynamic":"layer-3"}`)},
+			MessageID: "1-0",
+			Queue:     "q-1",
+			handlers:  handlers,
+			index:     -1,
 		}
 
 		if err := c.Next(); err != nil {
@@ -249,12 +249,12 @@ func TestMiddleware_RateLimiter_GroupKeyLayers(t *testing.T) {
 		}
 
 		c := &ConsumeContext{
-			Context:        context.Background(),
-			Task: &taskmodel.Task{ID: "t-1", Queue: "q-1", GroupKey: "", Payload: []byte(`{"field-dynamic":"layer-3"}`)},
-			MessageID:      "1-0",
-			Queue:          "q-1",
-			handlers:       handlers,
-			index:          -1,
+			Context:   context.Background(),
+			Task:      &taskmodel.Task{ID: "t-1", Queue: "q-1", GroupKey: "", Payload: []byte(`{"field-dynamic":"layer-3"}`)},
+			MessageID: "1-0",
+			Queue:     "q-1",
+			handlers:  handlers,
+			index:     -1,
 		}
 
 		if err := c.Next(); err != nil {
@@ -278,12 +278,12 @@ func TestMiddleware_RateLimiter_GroupKeyLayers(t *testing.T) {
 		}
 
 		c := &ConsumeContext{
-			Context:        context.Background(),
-			Task: &taskmodel.Task{ID: "t-1", Queue: "q-1", GroupKey: "", Payload: []byte(`{"field-dynamic":"layer-3"}`)},
-			MessageID:      "1-0",
-			Queue:          "q-1",
-			handlers:       handlers,
-			index:          -1,
+			Context:   context.Background(),
+			Task:      &taskmodel.Task{ID: "t-1", Queue: "q-1", GroupKey: "", Payload: []byte(`{"field-dynamic":"layer-3"}`)},
+			MessageID: "1-0",
+			Queue:     "q-1",
+			handlers:  handlers,
+			index:     -1,
 		}
 
 		if err := c.Next(); err != nil {

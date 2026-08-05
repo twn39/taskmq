@@ -13,10 +13,10 @@ func TestExtractMessagePayload(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name    string
-		values  map[string]interface{}
-		want    string
-		wantOK  bool
+		name   string
+		values map[string]interface{}
+		want   string
+		wantOK bool
 	}{
 		{
 			name:   "task bytes preferred",
@@ -69,10 +69,10 @@ func TestApplyDeliveryCount(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name       string
-		values     map[string]interface{}
+		name        string
+		values      map[string]interface{}
 		retryBefore int
-		wantRetry  int
+		wantRetry   int
 	}{
 		{
 			name:        "no field keeps retry",

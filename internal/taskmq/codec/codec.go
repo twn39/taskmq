@@ -52,7 +52,7 @@ func (BinaryCodec) Marshal(t *task.Task) ([]byte, error) {
 	size += 2 + len(t.CronSpec)
 	size += 8 // CreatedAt (int64 Unix nano)
 	// Trailing optional fields (v2): UniqueScope, GroupKey, DeadlineMs
-	size += 4                 // UniqueScope int32
+	size += 4 // UniqueScope int32
 	size += 2 + len(t.GroupKey)
 	size += 8 // DeadlineMs int64
 

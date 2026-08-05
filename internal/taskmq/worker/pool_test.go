@@ -82,7 +82,7 @@ func TestAcquireReleaseConsumeContext(t *testing.T) {
 func TestConsumeContext_Reset(t *testing.T) {
 	c := &ConsumeContext{
 		Context:        context.Background(),
-		Task: &taskmodel.Task{ID: "task-1"},
+		Task:           &taskmodel.Task{ID: "task-1"},
 		MessageID:      "msg-1",
 		Queue:          "queue-1",
 		Group:          "group-1",

@@ -22,7 +22,8 @@ import (
 // Cluster when TASKMQ_REDIS_CLUSTER_ADDRS is set (comma-separated seed nodes).
 //
 // Local: docker compose -f docker-compose.cluster.yml up -d
-//   export TASKMQ_REDIS_CLUSTER_ADDRS=127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002
+//
+//	export TASKMQ_REDIS_CLUSTER_ADDRS=127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002
 //
 // Skipped in default CI (standalone Redis service only).
 func TestTaskMQ_ClusterHashTagSmoke(t *testing.T) {

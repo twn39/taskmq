@@ -16,11 +16,11 @@ func TestExponentialBackoff_ShouldRetry(t *testing.T) {
 	biz := errors.New("temporary")
 
 	cases := []struct {
-		name     string
-		retry    int
-		max      int
-		err      error
-		want     bool
+		name  string
+		retry int
+		max   int
+		err   error
+		want  bool
 	}{
 		{"under max", 0, 3, biz, true},
 		{"at max-1", 2, 3, biz, true},

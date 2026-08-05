@@ -70,3 +70,53 @@ func TestClient_TaskOptions(t *testing.T) {
 		assert.Contains(t, err.Error(), "task ID cannot be empty")
 	})
 }
+
+func TestNewEnqueuerAndAdminClient(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("failed to start miniredis: %v", err)
+	}
+	defer mr.Close()
+
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	defer rdb.Close()
+
+	t.Run("NewEnqueuer standalone enqueue success", func(t *testing.T) {
+		enq := NewEnqueuer(rdb)
+		assert.NotNil(t, enq)
+
+		task := taskmodel.NewTask("test:enqueuer", []byte("payload"))
+		err := enq.Enqueue(context.Background(), task)
+		assert.NoError(t, err)
+		assert.NotEmpty(t, task.ID)
+	})
+
+	t.Run("NewAdminClient standalone control success", func(t *testing.T) {
+		adm := NewAdminClient(rdb)
+		assert.NotNil(t, adm)
+
+		err := adm.Pause(context.Background(), "test-queue")
+		assert.NoError(t, err)
+
+		paused, err := adm.IsPaused(context.Background(), "test-queue")
+		assert.NoError(t, err)
+		assert.True(t, paused)
+
+		err = adm.Resume(context.Background(), "test-queue")
+		assert.NoError(t, err)
+
+		paused, err = adm.IsPaused(context.Background(), "test-queue")
+		assert.NoError(t, err)
+		assert.False(t, paused)
+	})
+
+	t.Run("NewProducer standalone enqueue success", func(t *testing.T) {
+		prod := NewProducer(rdb)
+		assert.NotNil(t, prod)
+
+		task := taskmodel.NewTask("test:producer", []byte("payload"))
+		err := prod.Enqueue(context.Background(), task)
+		assert.NoError(t, err)
+		assert.NotEmpty(t, task.ID)
+	})
+}

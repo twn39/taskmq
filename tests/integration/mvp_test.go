@@ -3,20 +3,20 @@ package integration
 import (
 	"context"
 	"encoding/json"
-	"testing"
-	"time"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
-	"go.uber.org/fx"
-	"go.uber.org/fx/fxtest"
-	"go.uber.org/zap"
 	"github.com/twn39/taskmq/internal/logger"
+	internalredis "github.com/twn39/taskmq/internal/redis"
 	"github.com/twn39/taskmq/internal/taskmq"
 	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
 	"github.com/twn39/taskmq/internal/taskmq/keys"
-	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
-	internalredis "github.com/twn39/taskmq/internal/redis"
 	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
+	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
+	"go.uber.org/fx"
+	"go.uber.org/fx/fxtest"
+	"go.uber.org/zap"
+	"testing"
+	"time"
 )
 
 // 1. Existing MVP flow test

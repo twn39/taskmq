@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/redis/go-redis/v9"
 	"github.com/twn39/taskmq/internal/taskmq/events"
 	"github.com/twn39/taskmq/internal/taskmq/keys"
 	"github.com/twn39/taskmq/internal/taskmq/lifecycle"
@@ -185,8 +186,10 @@ type bulkItem struct {
 	task *taskmodel.Task
 }
 
+const maxBulkChunkSize = 1000
+
 // EnqueueBulk enqueues many tasks efficiently.
-// Non-unique immediate tasks sharing a queue are pipelined; unique tasks fall back to single-path.
+// Immediate tasks sharing a queue (both unique and non-unique) are pipelined in micro-batches of maxBulkChunkSize.
 func (e *enqueuer) EnqueueBulk(ctx context.Context, tasks []*taskmodel.Task, opts ...BulkOption) (*BulkResult, error) {
 	bo := bulkOpts{}
 	for _, o := range opts {
@@ -200,7 +203,6 @@ func (e *enqueuer) EnqueueBulk(ctx context.Context, tasks []*taskmodel.Task, opt
 		return out, nil
 	}
 
-	var deferred []bulkItem
 	byQueue := map[string][]bulkItem{}
 
 	for i, t := range tasks {
@@ -216,10 +218,6 @@ func (e *enqueuer) EnqueueBulk(ctx context.Context, tasks []*taskmodel.Task, opt
 		if t.ID == "" {
 			t.ID = generateUUID()
 		}
-		if t.UniqueKey != "" {
-			deferred = append(deferred, bulkItem{i, t})
-			continue
-		}
 		byQueue[t.Queue] = append(byQueue[t.Queue], bulkItem{i, t})
 	}
 
@@ -227,18 +225,6 @@ func (e *enqueuer) EnqueueBulk(ctx context.Context, tasks []*taskmodel.Task, opt
 		if err := e.pipelineImmediate(ctx, queue, items, out, bo.failFast); err != nil && bo.failFast {
 			return out, err
 		}
-	}
-	for _, it := range deferred {
-		err := e.Enqueue(ctx, it.task)
-		if err != nil {
-			out.Errors[it.idx] = err
-			out.FailedIndexes = append(out.FailedIndexes, it.idx)
-			if bo.failFast {
-				return out, err
-			}
-			continue
-		}
-		out.Succeeded = append(out.Succeeded, it.task.ID)
 	}
 	if len(out.FailedIndexes) > 0 {
 		return out, fmt.Errorf("taskmq: bulk enqueue finished with %d failure(s)", len(out.FailedIndexes))
@@ -290,29 +276,73 @@ func (e *enqueuer) pipelineImmediate(ctx context.Context, queue string, items []
 		return nil
 	}
 
-	// Sequential script Run (EVALSHA with auto-load). Pipelining EVALSHA is unreliable
-	// across miniredis/cluster until scripts are warmed; batching still wins on API + meta.
-	for _, p := range prep {
-		res, err := lifecycle.EnqueueStreamCmd.Run(ctx, e.d.rdb, []string{streamKey}, hard, maxlen, p.serialized).Result()
-		if err != nil {
-			out.Errors[p.idx] = err
-			out.FailedIndexes = append(out.FailedIndexes, p.idx)
-			if failFast {
-				return err
-			}
-			continue
+	// Pre-load admission Lua scripts into Redis SHA1 cache so EVALSHA in rdb.Pipeline() succeeds without NOSCRIPT errors.
+	_ = lifecycle.LoadScripts(ctx, e.d.rdb)
+
+	// Chunk items into micro-batches of maxBulkChunkSize (1000) to balance RTT reduction and Redis thread load.
+	for chunkStart := 0; chunkStart < len(prep); chunkStart += maxBulkChunkSize {
+		chunkEnd := chunkStart + maxBulkChunkSize
+		if chunkEnd > len(prep) {
+			chunkEnd = len(prep)
 		}
-		if mapErr := lifecycle.MapEnqueueScriptResult(res, e.d.lifecycle, false); mapErr != nil {
-			out.Errors[p.idx] = mapErr
-			out.FailedIndexes = append(out.FailedIndexes, p.idx)
-			if failFast {
-				return mapErr
+		chunk := prep[chunkStart:chunkEnd]
+
+		pipe := e.d.rdb.Pipeline()
+		cmds := make([]*redis.Cmd, len(chunk))
+		for i, p := range chunk {
+			if p.task.UniqueKey != "" {
+				ttl := e.d.uniqueTTL(p.task)
+				uniqueKey := keys.KeysFor(queue).Unique(p.task.UniqueKey)
+				cmds[i] = lifecycle.EnqueueUniqueWithLimitCmd.Run(ctx, pipe,
+					[]string{uniqueKey, streamKey},
+					p.task.ID, int(ttl.Milliseconds()), p.serialized, hard, maxlen,
+				)
+			} else {
+				cmds[i] = lifecycle.EnqueueStreamCmd.Run(ctx, pipe,
+					[]string{streamKey},
+					hard, maxlen, p.serialized,
+				)
 			}
-			continue
 		}
-		_ = e.d.meta.Put(ctx, p.task, meta.StatePending)
-		e.d.events.Emit(ctx, p.task.Queue, events.TypeEnqueued, p.task.ID, p.task.Name, "")
-		out.Succeeded = append(out.Succeeded, p.task.ID)
+
+		_, _ = pipe.Exec(ctx)
+
+		var enqueued []*taskmodel.Task
+		var firstChunkErr error
+		for i, p := range chunk {
+			res, err := cmds[i].Result()
+			if err != nil {
+				out.Errors[p.idx] = err
+				out.FailedIndexes = append(out.FailedIndexes, p.idx)
+				if failFast && firstChunkErr == nil {
+					firstChunkErr = err
+				}
+				continue
+			}
+			if mapErr := lifecycle.MapEnqueueScriptResult(res, e.d.lifecycle, false); mapErr != nil {
+				out.Errors[p.idx] = mapErr
+				out.FailedIndexes = append(out.FailedIndexes, p.idx)
+				if failFast && firstChunkErr == nil {
+					firstChunkErr = mapErr
+				}
+				continue
+			}
+			enqueued = append(enqueued, p.task)
+			out.Succeeded = append(out.Succeeded, p.task.ID)
+		}
+
+		if len(enqueued) > 0 {
+			metaPipe := e.d.rdb.Pipeline()
+			for _, t := range enqueued {
+				e.d.meta.PutPipelined(ctx, metaPipe, t, meta.StatePending)
+				e.d.events.EmitPipelined(ctx, metaPipe, t.Queue, events.TypeEnqueued, t.ID, t.Name, "")
+			}
+			_, _ = metaPipe.Exec(ctx)
+		}
+
+		if firstChunkErr != nil && failFast {
+			return firstChunkErr
+		}
 	}
 	return nil
 }

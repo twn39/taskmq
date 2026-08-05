@@ -92,6 +92,29 @@ func (p *Publisher) Emit(ctx context.Context, queue, typ, taskID, name, errMsg s
 	})
 }
 
+// EmitPipelined queues an event publication into a Redis pipeline.
+func (p *Publisher) EmitPipelined(ctx context.Context, pipe redis.Pipeliner, queue, typ, taskID, name, errMsg string) {
+	if p == nil || pipe == nil || queue == "" || typ == "" {
+		return
+	}
+	values := map[string]interface{}{
+		"type":         typ,
+		"queue":        queue,
+		"task_id":      taskID,
+		"name":         name,
+		"error":        errMsg,
+		"progress":     0,
+		"data":         "",
+		"timestamp_ms": time.Now().UnixMilli(),
+	}
+	pipe.XAdd(ctx, &redis.XAddArgs{
+		Stream: keys.KeysFor(queue).Events(),
+		MaxLen: p.maxLen,
+		Approx: true,
+		Values: values,
+	})
+}
+
 // Read returns up to count events after lastID ("0-0" or "$" for only new).
 // Blocks up to block duration when block > 0.
 func Read(ctx context.Context, rdb redis.UniversalClient, queue, lastID string, count int64, block time.Duration) ([]Event, error) {

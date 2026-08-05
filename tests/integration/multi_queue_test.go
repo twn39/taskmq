@@ -2,21 +2,21 @@ package integration
 
 import (
 	"context"
-	"testing"
-	"time"
 	goredis "github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
-	"go.uber.org/fx"
-	"go.uber.org/fx/fxtest"
 	"github.com/twn39/taskmq/internal/config"
 	"github.com/twn39/taskmq/internal/logger"
+	internalredis "github.com/twn39/taskmq/internal/redis"
 	"github.com/twn39/taskmq/internal/taskmq"
 	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
 	"github.com/twn39/taskmq/internal/taskmq/codec"
 	"github.com/twn39/taskmq/internal/taskmq/keys"
-	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
-	internalredis "github.com/twn39/taskmq/internal/redis"
 	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
+	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
+	"go.uber.org/fx"
+	"go.uber.org/fx/fxtest"
+	"testing"
+	"time"
 )
 
 func TestTaskMQ_MultiQueue(t *testing.T) {

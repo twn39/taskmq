@@ -148,6 +148,14 @@ func (j *pelRecoveryJanitor) Run(ctx context.Context) error {
 		case <-ctx.Done():
 			return ctx.Err()
 		case <-ticker.C:
+			// Determine dynamic batch count based on worker concurrency (floor 10, ceiling 100)
+			claimCount := int64(j.concurrency)
+			if claimCount < 10 {
+				claimCount = 10
+			} else if claimCount > 100 {
+				claimCount = 100
+			}
+
 			// Claim stalled messages via XAutoClaim with cursor-based pagination
 			claimed, nextCursor, err := j.rdb.XAutoClaim(ctx, &redis.XAutoClaimArgs{
 				Stream:   streamKey,
@@ -155,7 +163,7 @@ func (j *pelRecoveryJanitor) Run(ctx context.Context) error {
 				Consumer: j.consumer,
 				MinIdle:  minIdleTime,
 				Start:    j.startCursor,
-				Count:    10,
+				Count:    claimCount,
 			}).Result()
 
 			if err != nil {

@@ -192,8 +192,20 @@ func (b *redisBroker) dlqMaxCount() int64 {
 	return b.lifecycle.Config().DLQMaxCount
 }
 
+// settleCtx creates a bounded (5s timeout) context that remains active even if parent context was cancelled (e.g., handler timeout/cancel),
+// ensuring task settlement (MoveToDLQ, ScheduleRetry, CompleteTask) and telemetry operations always reach Redis.
+func (b *redisBroker) settleCtx(parent context.Context) (context.Context, context.CancelFunc) {
+	if parent == nil {
+		parent = context.Background()
+	}
+	return context.WithTimeout(context.WithoutCancel(parent), 5*time.Second)
+}
+
 // MoveToDLQ moves a task from the stream to the dead-letter queue.
 func (b *redisBroker) MoveToDLQ(ctx context.Context, t *task.Task, streamKey, msgID, group string, dlqQueueName string) error {
+	sCtx, sCancel := b.settleCtx(ctx)
+	defer sCancel()
+
 	serialized, err := b.codec.Marshal(t)
 	if err != nil {
 		return err
@@ -211,7 +223,7 @@ func (b *redisBroker) MoveToDLQ(ctx context.Context, t *task.Task, streamKey, ms
 	}
 
 	maxCount := b.dlqMaxCount()
-	res, err := handleFailureCmd.Run(ctx, b.rdb, []string{dlqKey, streamKey, uniqueLockKey, dlqIndexKey},
+	res, err := handleFailureCmd.Run(sCtx, b.rdb, []string{dlqKey, streamKey, uniqueLockKey, dlqIndexKey},
 		"dlq", msgID, group, nowMs, serialized, uniqueLockVal, t.ID, maxCount).Result()
 	if err != nil {
 		return err
@@ -221,10 +233,10 @@ func (b *redisBroker) MoveToDLQ(ctx context.Context, t *task.Task, streamKey, ms
 			b.lifecycle.IncMetric("dlq_evicted_total", n)
 		}
 	}
-	_ = b.meta.MarkDLQ(ctx, t, t.LastError)
-	b.metrics.Inc(ctx, t.Queue, metricsq.FieldDLQ, 1)
-	b.metrics.Inc(ctx, t.Queue, metricsq.FieldFailed, 1)
-	b.events.Emit(ctx, t.Queue, events.TypeFailed, t.ID, t.Name, t.LastError)
+	_ = b.meta.MarkDLQ(sCtx, t, t.LastError)
+	b.metrics.Inc(sCtx, t.Queue, metricsq.FieldDLQ, 1)
+	b.metrics.Inc(sCtx, t.Queue, metricsq.FieldFailed, 1)
+	b.events.Emit(sCtx, t.Queue, events.TypeFailed, t.ID, t.Name, t.LastError)
 	return nil
 }
 
@@ -236,6 +248,9 @@ func (b *redisBroker) delayedMaxCount() int64 {
 // ScheduleRetry moves a task to the delayed set for retry.
 // When DelayedMaxCount is set, overflow uses drop_farthest (system path — never reject after XACK).
 func (b *redisBroker) ScheduleRetry(ctx context.Context, t *task.Task, streamKey, msgID, group string, runAt time.Time) error {
+	sCtx, sCancel := b.settleCtx(ctx)
+	defer sCancel()
+
 	serialized, err := b.codec.Marshal(t)
 	if err != nil {
 		return err
@@ -244,14 +259,14 @@ func (b *redisBroker) ScheduleRetry(ctx context.Context, t *task.Task, streamKey
 	delayedKey := qk.Delayed()
 	delayedMax := b.delayedMaxCount()
 	const systemDropFarthest = 1
-	_, err = handleFailureCmd.Run(ctx, b.rdb, []string{delayedKey, streamKey, "", ""},
+	_, err = handleFailureCmd.Run(sCtx, b.rdb, []string{delayedKey, streamKey, "", ""},
 		"retry", msgID, group, runAt.UnixMilli(), serialized, "", "", 0, delayedMax, systemDropFarthest).Result()
 	if err == nil {
 		// Notify the delayed scheduler so it wakes up instead of waiting up to maxSleep (10s).
-		_ = b.rdb.Publish(ctx, qk.DelayedWakeupChannel(), fmt.Sprintf("%d", runAt.UnixMilli())).Err()
-		_ = b.meta.MarkRetry(ctx, t, t.LastError)
-		b.metrics.Inc(ctx, t.Queue, metricsq.FieldRetried, 1)
-		b.events.Emit(ctx, t.Queue, events.TypeRetry, t.ID, t.Name, t.LastError)
+		_ = b.rdb.Publish(sCtx, qk.DelayedWakeupChannel(), fmt.Sprintf("%d", runAt.UnixMilli())).Err()
+		_ = b.meta.MarkRetry(sCtx, t, t.LastError)
+		b.metrics.Inc(sCtx, t.Queue, metricsq.FieldRetried, 1)
+		b.events.Emit(sCtx, t.Queue, events.TypeRetry, t.ID, t.Name, t.LastError)
 	}
 	return err
 }
@@ -259,6 +274,9 @@ func (b *redisBroker) ScheduleRetry(ctx context.Context, t *task.Task, streamKey
 // DeferRateLimitedTask requeues a rate-limited task into the delayed set.
 // When DelayedMaxCount is set, overflow uses drop_farthest (system path — never reject after XACK).
 func (b *redisBroker) DeferRateLimitedTask(ctx context.Context, msgID string, t *task.Task, group string, runAt time.Time) error {
+	sCtx, sCancel := b.settleCtx(ctx)
+	defer sCancel()
+
 	serialized, err := b.codec.Marshal(t)
 	if err != nil {
 		return err
@@ -268,14 +286,14 @@ func (b *redisBroker) DeferRateLimitedTask(ctx context.Context, msgID string, t 
 	streamKey := qk.Stream()
 	delayedMax := b.delayedMaxCount()
 	const systemDropFarthest = 1
-	_, err = deferRateLimitedTaskCmd.Run(ctx, b.rdb, []string{delayedKey, streamKey},
+	_, err = deferRateLimitedTaskCmd.Run(sCtx, b.rdb, []string{delayedKey, streamKey},
 		group, msgID, runAt.UnixMilli(), serialized, delayedMax, systemDropFarthest).Result()
 	if err == nil {
 		// Notify the delayed scheduler so it wakes up instead of waiting up to maxSleep (10s).
-		_ = b.rdb.Publish(ctx, qk.DelayedWakeupChannel(), fmt.Sprintf("%d", runAt.UnixMilli())).Err()
-		_ = b.meta.SetState(ctx, t.Queue, t.ID, meta.StateDelayed, "", msgID)
-		b.metrics.Inc(ctx, t.Queue, metricsq.FieldDeferred, 1)
-		b.events.Emit(ctx, t.Queue, events.TypeDelayed, t.ID, t.Name, "rate_limited")
+		_ = b.rdb.Publish(sCtx, qk.DelayedWakeupChannel(), fmt.Sprintf("%d", runAt.UnixMilli())).Err()
+		_ = b.meta.SetState(sCtx, t.Queue, t.ID, meta.StateDelayed, "", msgID)
+		b.metrics.Inc(sCtx, t.Queue, metricsq.FieldDeferred, 1)
+		b.events.Emit(sCtx, t.Queue, events.TypeDelayed, t.ID, t.Name, "rate_limited")
 	}
 	return err
 }
@@ -285,8 +303,10 @@ func (b *redisBroker) ReleaseUniqueLock(ctx context.Context, t *task.Task) error
 	if t.UniqueKey == "" {
 		return nil
 	}
+	sCtx, sCancel := b.settleCtx(ctx)
+	defer sCancel()
 	uniqueKey := keys.KeysFor(t.Queue).Unique(t.UniqueKey)
-	return unlockCmd.Run(ctx, b.rdb, []string{uniqueKey}, t.ID).Err()
+	return unlockCmd.Run(sCtx, b.rdb, []string{uniqueKey}, t.ID).Err()
 }
 
 // RenewUniqueLock extends the unique lock TTL if owned by the task.
@@ -302,13 +322,16 @@ func (b *redisBroker) RenewUniqueLock(ctx context.Context, t *task.Task, ttl tim
 // CompleteTask ACKs/deletes the stream message and releases the unique lock when owned.
 // When lifecycle.CompletedRetention > 0, task meta/results are retained; otherwise meta is deleted.
 func (b *redisBroker) CompleteTask(ctx context.Context, t *task.Task, streamKey, msgID, group string) error {
+	sCtx, sCancel := b.settleCtx(ctx)
+	defer sCancel()
+
 	var uniqueLockKey string
 	var uniqueLockVal string
 	if t.UniqueKey != "" {
 		uniqueLockKey = keys.KeysFor(t.Queue).Unique(t.UniqueKey)
 		uniqueLockVal = t.ID
 	}
-	_, err := completeTaskCmd.Run(ctx, b.rdb, []string{streamKey, uniqueLockKey}, msgID, group, uniqueLockVal).Result()
+	_, err := completeTaskCmd.Run(sCtx, b.rdb, []string{streamKey, uniqueLockKey}, msgID, group, uniqueLockVal).Result()
 	if err != nil {
 		return err
 	}
@@ -320,9 +343,9 @@ func (b *redisBroker) CompleteTask(ctx context.Context, t *task.Task, streamKey,
 		maxCount = cfg.CompletedMaxCount
 	}
 	result := t.Result
-	_ = b.meta.MarkCompleted(ctx, t, result, retention, maxCount)
-	b.metrics.Inc(ctx, t.Queue, metricsq.FieldCompleted, 1)
-	b.metrics.Inc(ctx, t.Queue, metricsq.FieldProcessed, 1)
-	b.events.Emit(ctx, t.Queue, events.TypeCompleted, t.ID, t.Name, "")
+	_ = b.meta.MarkCompleted(sCtx, t, result, retention, maxCount)
+	b.metrics.Inc(sCtx, t.Queue, metricsq.FieldCompleted, 1)
+	b.metrics.Inc(sCtx, t.Queue, metricsq.FieldProcessed, 1)
+	b.events.Emit(sCtx, t.Queue, events.TypeCompleted, t.ID, t.Name, "")
 	return nil
 }

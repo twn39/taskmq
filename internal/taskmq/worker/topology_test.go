@@ -1,8 +1,8 @@
 package worker
 
 import (
-	"github.com/twn39/taskmq/internal/taskmq/codec"
 	"context"
+	"github.com/twn39/taskmq/internal/taskmq/codec"
 	"testing"
 	"time"
 

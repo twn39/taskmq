@@ -5,22 +5,22 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"github.com/labstack/echo/v5"
+	goredis "github.com/redis/go-redis/v9"
+	"github.com/stretchr/testify/assert"
+	"github.com/twn39/taskmq/internal/handler"
+	"github.com/twn39/taskmq/internal/logger"
+	internalredis "github.com/twn39/taskmq/internal/redis"
+	"github.com/twn39/taskmq/internal/server"
+	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
+	"github.com/twn39/taskmq/internal/taskmq/keys"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
+	"go.uber.org/fx"
+	"go.uber.org/fx/fxtest"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
-	"github.com/labstack/echo/v5"
-	goredis "github.com/redis/go-redis/v9"
-	"github.com/stretchr/testify/assert"
-	"go.uber.org/fx"
-	"go.uber.org/fx/fxtest"
-	"github.com/twn39/taskmq/internal/handler"
-	"github.com/twn39/taskmq/internal/logger"
-	"github.com/twn39/taskmq/internal/server"
-	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
-	"github.com/twn39/taskmq/internal/taskmq/keys"
-	internalredis "github.com/twn39/taskmq/internal/redis"
-	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 )
 
 func TestAdminDashboard(t *testing.T) {
@@ -327,7 +327,7 @@ func TestAdminDashboard(t *testing.T) {
 		jobName := "test-cron-job"
 		cronSpec := "*/5 * * * * *" // every 5 seconds
 		cronTask := taskmodel.NewTask("task:cron-test", []byte("cron-payload"), taskmodel.TaskOptions{Queue: queueName})
-		
+
 		err := client.RegisterCron(ctx, jobName, cronSpec, cronTask)
 		assert.NoError(t, err)
 
