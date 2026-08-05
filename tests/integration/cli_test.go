@@ -3,36 +3,36 @@ package integration
 import (
 	"bytes"
 	"context"
+	goredis "github.com/redis/go-redis/v9"
+	"github.com/stretchr/testify/assert"
+	"github.com/twn39/taskmq/internal/logger"
+	internalredis "github.com/twn39/taskmq/internal/redis"
+	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
+	"github.com/twn39/taskmq/internal/taskmq/codec"
+	"github.com/twn39/taskmq/internal/taskmq/keys"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
+	"go.uber.org/fx"
+	"go.uber.org/fx/fxtest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-	goredis "github.com/redis/go-redis/v9"
-	"github.com/stretchr/testify/assert"
-	"go.uber.org/fx"
-	"go.uber.org/fx/fxtest"
-	"github.com/twn39/taskmq/internal/logger"
-	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
-	"github.com/twn39/taskmq/internal/taskmq/codec"
-	"github.com/twn39/taskmq/internal/taskmq/keys"
-	internalredis "github.com/twn39/taskmq/internal/redis"
-	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 )
 
 func TestTaskMQ_CLI_Operations(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	queueName := "cli_integration_test_queue"
+	queueName := UniqueQueue(t, "cli")
 	streamKey := keys.KeysFor(queueName).Stream()
 	pausedKey := keys.KeysFor(queueName).Paused()
 	delayedKey := keys.KeysFor(queueName).Delayed()
 	dlqKey := keys.KeysFor(queueName).DLQ()
 	dlqIndexKey := keys.KeysFor(queueName).DLQIndex()
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -161,7 +161,26 @@ func TestTaskMQ_CLI_Operations(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, int64(0), dlqCount, "Task should be deleted from DLQ")
 
-	// 9. Edge-case / Validation Error boundary testing
+	// 9. task scheduled / active / cancel
+	output, err = runCLI("task", "scheduled", queueName)
+	assert.NoError(t, err)
+	assert.True(t, strings.Contains(output, task2.ID) || strings.Contains(output, "task:cli_test") || strings.Contains(output, "No scheduled"),
+		"scheduled output: %s", output)
+
+	output, err = runCLI("task", "active", queueName)
+	assert.NoError(t, err)
+	assert.True(t, strings.Contains(output, task1.ID) || strings.Contains(output, "task:cli_test") || strings.Contains(output, "No active"),
+		"active output: %s", output)
+
+	output, err = runCLI("task", "cancel", queueName, task1.ID)
+	assert.NoError(t, err)
+	assert.Contains(t, output, "marked cancelled")
+	// Cancel marker key should exist.
+	n, err := rdb.Exists(ctx, keys.KeysFor(queueName).Cancelled(task1.ID)).Result()
+	assert.NoError(t, err)
+	assert.Equal(t, int64(1), n)
+
+	// 10. Edge-case / Validation Error boundary testing
 	t.Run("Boundary and Input Validation Errors", func(t *testing.T) {
 		// Test pause with no args
 		out, runErr := runCLI("pause")

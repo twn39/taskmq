@@ -23,13 +23,13 @@ func TestTaskMQ_MultiQueue(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	q1 := "multi_queue_1"
-	q2 := "multi_queue_2"
+	q1 := UniqueQueue(t, "mq1")
+	q2 := UniqueQueue(t, "mq2")
 
 	run1 := make(chan string, 1)
 	run2 := make(chan string, 1)
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 	var worker mqworker.Worker
 

@@ -23,13 +23,13 @@ func TestTaskMQ_JanitorRecoveryFlow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	queueName := "janitor_test_queue"
+	queueName := UniqueQueue(t, "janitor")
 	streamKey := keys.KeysFor(queueName).Stream()
 
 	var runCount int64
 	doneChan := make(chan bool, 1)
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -38,7 +38,7 @@ func TestTaskMQ_JanitorRecoveryFlow(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("janitor-group"),
 					mqworker.WithConsumer("janitor-consumer"),
@@ -90,10 +90,10 @@ func TestTaskMQ_PoisonPillRecovery(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	queueName := "poison_test_queue"
+	queueName := UniqueQueue(t, "poison")
 	streamKey := keys.KeysFor(queueName).Stream()
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	// Setup client and redis

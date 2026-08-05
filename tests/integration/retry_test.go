@@ -25,14 +25,14 @@ func TestTaskMQ_RetryFlow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	queueName := "retry_test_queue"
+	queueName := UniqueQueue(t, "retry")
 	streamKey := keys.KeysFor(queueName).Stream()
 	delayedKey := keys.KeysFor(queueName).Delayed()
 
 	var execCount int64
 	doneChan := make(chan bool, 1)
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -41,7 +41,7 @@ func TestTaskMQ_RetryFlow(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("retry-group"),
 					mqworker.WithConsumer("retry-consumer"),
@@ -96,12 +96,12 @@ func TestTaskMQ_UnregisteredHandlerRetryAndDLQ(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "unregistered_retry_test_queue"
+	queueName := UniqueQueue(t, "unreg_retry")
 	streamKey := keys.KeysFor(queueName).Stream()
 	delayedKey := keys.KeysFor(queueName).Delayed()
 	dlqKey := keys.KeysFor(queueName).DLQ()
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -110,7 +110,7 @@ func TestTaskMQ_UnregisteredHandlerRetryAndDLQ(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("unregistered-group"),
 					mqworker.WithConsumer("unregistered-consumer"),
@@ -163,10 +163,10 @@ func TestTaskMQ_CorruptedPayloadDiscard(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "corrupted_payload_test_queue"
+	queueName := UniqueQueue(t, "corrupt")
 	streamKey := keys.KeysFor(queueName).Stream()
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -175,7 +175,7 @@ func TestTaskMQ_CorruptedPayloadDiscard(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("corrupted-group"),
 					mqworker.WithConsumer("corrupted-consumer"),

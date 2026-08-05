@@ -79,6 +79,39 @@ func (k QueueKeys) RateLimit(groupKey string) string {
 	return fmt.Sprintf("taskmq:{%s}:rate_limit", k.queue)
 }
 
+// Meta is the per-task metadata hash (state, errors, optional result).
+// Cluster-safe under the same {queue} hash tag as other queue keys.
+func (k QueueKeys) Meta(taskID string) string {
+	return fmt.Sprintf("taskmq:{%s}:meta:%s", k.queue, taskID)
+}
+
+// Completed is a ZSET of completed task IDs scored by completion time (unix ms).
+// Used when completed_retention is enabled for TTL/count eviction.
+func (k QueueKeys) Completed() string {
+	return fmt.Sprintf("taskmq:{%s}:completed", k.queue)
+}
+
+// Metrics is a HASH of queue-level counters (processed, failed, retried, …).
+func (k QueueKeys) Metrics() string {
+	return fmt.Sprintf("taskmq:{%s}:metrics", k.queue)
+}
+
+// Heartbeat is the key for a live worker/consumer registration (TTL-refreshed).
+func (k QueueKeys) Heartbeat(consumer string) string {
+	return fmt.Sprintf("taskmq:{%s}:heartbeat:%s", k.queue, consumer)
+}
+
+// HeartbeatScanPattern matches all heartbeat keys for this queue (SCAN).
+func (k QueueKeys) HeartbeatScanPattern() string {
+	return fmt.Sprintf("taskmq:{%s}:heartbeat:*", k.queue)
+}
+
+// Events is a Redis Stream of queue lifecycle events (completed/failed/retry/…).
+// Trimmed with approximate MAXLEN by the publisher.
+func (k QueueKeys) Events() string {
+	return fmt.Sprintf("taskmq:{%s}:events", k.queue)
+}
+
 // StreamScanPattern is the Redis KEYS/SCAN pattern that matches all queue stream keys.
 func StreamScanPattern() string {
 	return "taskmq:{*}:queue"

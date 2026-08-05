@@ -24,6 +24,10 @@ type mockBroker struct {
 	releasedLock int
 	completedCnt int
 	lastDLQName  string
+	moveErr      error
+	schedErr     error
+	deferErr     error
+	completeErr  error
 }
 
 func (m *mockBroker) CompleteTask(ctx context.Context, task *taskmodel.Task, streamKey, msgID, group string) error {
@@ -33,7 +37,7 @@ func (m *mockBroker) CompleteTask(ctx context.Context, task *taskmodel.Task, str
 	if task.UniqueKey != "" {
 		m.releasedLock++
 	}
-	return nil
+	return m.completeErr
 }
 
 func (m *mockBroker) MoveToDLQ(ctx context.Context, task *taskmodel.Task, streamKey, msgID, group string, dlqQueueName string) error {
@@ -41,21 +45,21 @@ func (m *mockBroker) MoveToDLQ(ctx context.Context, task *taskmodel.Task, stream
 	defer m.mu.Unlock()
 	m.moveToDLQCnt++
 	m.lastDLQName = dlqQueueName
-	return nil
+	return m.moveErr
 }
 
 func (m *mockBroker) ScheduleRetry(ctx context.Context, task *taskmodel.Task, streamKey, msgID, group string, runAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.schedRetry++
-	return nil
+	return m.schedErr
 }
 
 func (m *mockBroker) DeferRateLimitedTask(ctx context.Context, msgID string, task *taskmodel.Task, group string, runAt time.Time) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.deferCnt++
-	return nil
+	return m.deferErr
 }
 
 func (m *mockBroker) ReleaseUniqueLock(ctx context.Context, task *taskmodel.Task) error {

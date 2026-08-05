@@ -1,0 +1,60 @@
+# TaskMQ code-coverage settings
+# Used by: ./scripts/check_coverage.sh  and  ./scripts/coverage_report.sh
+#
+# Thresholds are integer floors of `go test -cover` statement coverage (%).
+# Raise numbers only after tests land; do not lower gates without review.
+
+# go test -covermode
+mode: atomic
+
+# Per-package test timeout for gate runs
+timeout: 5m
+
+# Artifacts (gitignored)
+profile: coverage.out
+html: coverage.html
+
+# Optional overall floor across report packages (0 = disabled).
+# Computed from a merged profile of `report` packages only.
+overall_min: 0
+
+# Packages included when generating the merged cover profile / HTML report.
+# Globs are passed to `go test` (not to the gate table).
+report:
+  - ./internal/...
+  - ./tests/unit/...
+  - ./cmd/...
+
+# Paths omitted from the merged profile (substring match on file path).
+exclude:
+  - /api/proto/
+  - /third_party/
+  - .pb.go
+  - _grpc.pb.go
+  - /mock_
+  - /mocks/
+
+# Per-package minimum coverage enforced by CI (`check_coverage.sh`).
+# Keys must be import paths as printed by `go list`.
+packages:
+  github.com/twn39/taskmq/internal/taskmq/broker: 85
+  github.com/twn39/taskmq/internal/taskmq/keys: 90
+  github.com/twn39/taskmq/internal/taskmq/policy: 95
+  github.com/twn39/taskmq/internal/taskmq/lifecycle: 75
+  github.com/twn39/taskmq/internal/taskmq/ratelimit: 70
+  github.com/twn39/taskmq/internal/taskmq/runner: 58
+  github.com/twn39/taskmq/internal/taskmq/worker: 60
+  github.com/twn39/taskmq/internal/taskmq/grpcserver: 70
+  github.com/twn39/taskmq/internal/taskmq/client: 75
+  github.com/twn39/taskmq/internal/taskmq/codec: 85
+  github.com/twn39/taskmq/internal/taskmq/meta: 60
+  github.com/twn39/taskmq/internal/taskmq/metricsq: 55
+  github.com/twn39/taskmq/internal/taskmq/events: 85
+  github.com/twn39/taskmq/internal/taskmq/heartbeat: 70
+  github.com/twn39/taskmq/internal/taskmq/task: 55
+  github.com/twn39/taskmq/internal/handler: 60
+  # NewRedisClient itself is Fx-wired; unit tests cover option mapping.
+  github.com/twn39/taskmq/internal/redis: 40
+  github.com/twn39/taskmq/internal/config: 50
+  # Module is mostly Fx wiring; unit tests cover constructors + worker hooks.
+  github.com/twn39/taskmq/internal/taskmq: 35

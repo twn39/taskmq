@@ -16,9 +16,15 @@ func TestPrometheusText(t *testing.T) {
 		"enqueue_rejected_total": 3,
 		"soft_limit_hits_total":  0,
 	})
+	assert.Contains(t, text, "# HELP taskmq_lifecycle_enqueue_rejected_total")
+	assert.Contains(t, text, "# TYPE taskmq_lifecycle_enqueue_rejected_total counter")
 	assert.Contains(t, text, "taskmq_lifecycle_enqueue_rejected_total 3")
 	assert.Contains(t, text, "taskmq_lifecycle_soft_limit_hits_total 0")
-	assert.True(t, strings.HasSuffix(text, "\n") || strings.Contains(text, "\n"))
+	// Stable alphabetical order: enqueue_* before soft_*
+	ei := strings.Index(text, "taskmq_lifecycle_enqueue_rejected_total 3")
+	si := strings.Index(text, "taskmq_lifecycle_soft_limit_hits_total 0")
+	assert.True(t, ei >= 0 && si > ei, "expected sorted metric names")
+	assert.True(t, strings.HasSuffix(text, "\n"))
 }
 
 func TestMetricsSinkMirror(t *testing.T) {

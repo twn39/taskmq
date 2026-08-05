@@ -64,3 +64,57 @@ func TestStreamScanPattern(t *testing.T) {
 		t.Fatalf("unexpected pattern %q", StreamScanPattern())
 	}
 }
+
+// TestQueueKeys_HashTagAffinity documents the Redis Cluster contract: every
+// multi-key Lua path must only touch keys under the same {queue} hash tag.
+func TestQueueKeys_HashTagAffinity(t *testing.T) {
+	const q = "billing-v2"
+	tag := "{" + q + "}"
+	qk := KeysFor(q)
+	all := []string{
+		qk.Stream(),
+		qk.Delayed(),
+		qk.DLQ(),
+		qk.DLQIndex(),
+		qk.Unique("k"),
+		qk.Meta("tid"),
+		qk.Metrics(),
+		qk.Events(),
+		qk.Completed(),
+		qk.Paused(),
+		qk.CronConfigs(),
+		qk.CronSelfHealingLock(),
+		qk.Cancelled("tid"),
+		qk.CancelChannel(),
+		qk.DelayedWakeupChannel(),
+		qk.RateLimit(""),
+		qk.RateLimit("g1"),
+		qk.Heartbeat("c1"),
+	}
+	for _, k := range all {
+		if k == "" {
+			t.Fatal("empty key")
+		}
+		// Each key must contain exactly one hash tag for the queue.
+		if !containsOnce(k, tag) {
+			t.Errorf("key %q missing hash tag %q (cluster slot affinity broken)", k, tag)
+		}
+	}
+}
+
+func containsOnce(s, sub string) bool {
+	i := indexOf(s, sub)
+	if i < 0 {
+		return false
+	}
+	return indexOf(s[i+len(sub):], sub) < 0
+}
+
+func indexOf(s, sub string) int {
+	for i := 0; i+len(sub) <= len(s); i++ {
+		if s[i:i+len(sub)] == sub {
+			return i
+		}
+	}
+	return -1
+}

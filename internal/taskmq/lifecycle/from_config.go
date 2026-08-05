@@ -40,5 +40,12 @@ func FromConfig(cfg *config.Config) LifecycleConfig {
 	if lc.PurgeCancelledDelayed != nil {
 		out.PurgeCancelledDelayed = *lc.PurgeCancelledDelayed
 	}
+	// Completed retention lives on TaskMQ root config (not nested lifecycle) for discoverability.
+	if cfg.TaskMQ.CompletedRetention > 0 {
+		out.CompletedRetention = cfg.TaskMQ.CompletedRetention
+	}
+	if cfg.TaskMQ.CompletedMaxCount > 0 {
+		out.CompletedMaxCount = cfg.TaskMQ.CompletedMaxCount
+	}
 	return out
 }

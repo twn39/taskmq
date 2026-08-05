@@ -49,12 +49,12 @@ func (c *Cancelations) Cancel(id string) {
 // CancelHub owns in-memory cancel registry and Redis cancel pub/sub.
 type CancelHub struct {
 	*Cancelations
-	rdb    *redis.Client
+	rdb    redis.UniversalClient
 	logger *zap.Logger
 }
 
 // NewCancelHub creates a cancel hub with an empty registry.
-func NewCancelHub(rdb *redis.Client, logger *zap.Logger) *CancelHub {
+func NewCancelHub(rdb redis.UniversalClient, logger *zap.Logger) *CancelHub {
 	return &CancelHub{
 		Cancelations: NewCancelations(),
 		rdb:          rdb,

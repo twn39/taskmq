@@ -23,14 +23,14 @@ func TestTaskMQ_BackpressureFlow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "backpressure_test_queue"
+	queueName := UniqueQueue(t, "backpressure")
 	streamKey := keys.KeysFor(queueName).Stream()
 
 	var runCount int64
 	var retryCount int64
 	doneChan := make(chan bool, 2)
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 	var worker mqworker.Worker
 
@@ -40,7 +40,7 @@ func TestTaskMQ_BackpressureFlow(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithConcurrency(1),
 					mqworker.WithExecutionPoolSize(1),

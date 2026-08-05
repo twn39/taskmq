@@ -9,7 +9,7 @@ import (
 
 // XAddTask writes a serialized task onto a stream with hard limit + optional MAXLEN.
 // When l is nil, limits are treated as disabled (unbounded XADD via script with hard=0,maxlen=0).
-func (l *Lifecycle) XAddTask(ctx context.Context, rdb *redis.Client, stream string, payload []byte) error {
+func (l *Lifecycle) XAddTask(ctx context.Context, rdb redis.UniversalClient, stream string, payload []byte) error {
 	hard, maxlen := int64(0), int64(0)
 	if l != nil {
 		hard = l.cfg.EnqueueHardLimit
@@ -24,18 +24,18 @@ func (l *Lifecycle) XAddTask(ctx context.Context, rdb *redis.Client, stream stri
 
 // ZAddDelayed inserts into the delayed ZSET applying DelayedMaxCount + overflow policy.
 // Client-facing path: honors configured DelayedOverflow (default reject).
-func (l *Lifecycle) ZAddDelayed(ctx context.Context, rdb *redis.Client, delayedKey string, score int64, payload []byte) error {
+func (l *Lifecycle) ZAddDelayed(ctx context.Context, rdb redis.UniversalClient, delayedKey string, score int64, payload []byte) error {
 	return l.zAddDelayed(ctx, rdb, delayedKey, score, payload, false)
 }
 
 // ZAddDelayedSystem is for in-flight requeues (retry, rate-limit defer, cron reschedule).
 // When DelayedMaxCount is set it always uses drop_farthest so work already ACKed/removed
 // from the stream is never rejected (would otherwise lose tasks).
-func (l *Lifecycle) ZAddDelayedSystem(ctx context.Context, rdb *redis.Client, delayedKey string, score int64, payload []byte) error {
+func (l *Lifecycle) ZAddDelayedSystem(ctx context.Context, rdb redis.UniversalClient, delayedKey string, score int64, payload []byte) error {
 	return l.zAddDelayed(ctx, rdb, delayedKey, score, payload, true)
 }
 
-func (l *Lifecycle) zAddDelayed(ctx context.Context, rdb *redis.Client, delayedKey string, score int64, payload []byte, system bool) error {
+func (l *Lifecycle) zAddDelayed(ctx context.Context, rdb redis.UniversalClient, delayedKey string, score int64, payload []byte, system bool) error {
 	maxCount := int64(0)
 	overflow := 0
 	if l != nil {
@@ -57,7 +57,7 @@ func (l *Lifecycle) zAddDelayed(ctx context.Context, rdb *redis.Client, delayedK
 // ForcePromoteMember moves one delayed member to the stream under hard/MAXLEN admission.
 // Returns ErrQueueFull if the stream is at hard limit (member remains delayed).
 // Returns a not-found style error when the member is already gone.
-func (l *Lifecycle) ForcePromoteMember(ctx context.Context, rdb *redis.Client, delayedKey, streamKey, member string) error {
+func (l *Lifecycle) ForcePromoteMember(ctx context.Context, rdb redis.UniversalClient, delayedKey, streamKey, member string) error {
 	hard, maxlen := int64(0), int64(0)
 	if l != nil {
 		hard = l.cfg.EnqueueHardLimit

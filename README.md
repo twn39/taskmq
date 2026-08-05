@@ -1,191 +1,134 @@
 # TaskMQ
 
 [![CI](https://github.com/twn39/taskmq/actions/workflows/ci.yml/badge.svg)](https://github.com/twn39/taskmq/actions/workflows/ci.yml)
+[![Go](https://img.shields.io/badge/Go-1.23%2B-00ADD8?logo=go&logoColor=white)](https://go.dev/)
+[![Redis](https://img.shields.io/badge/Redis-Streams-DC382D?logo=redis&logoColor=white)](https://redis.io/docs/latest/develop/data-types/streams/)
 
-TaskMQ is a high-performance, distributed, Redis-backed asynchronous task queue and worker pool engine built in Go.
+**Redis Streams–backed distributed task queue for Go** — at-least-once delivery, delayed/cron jobs, GCRA rate limits, DLQ, and production-ready ops (HTTP · gRPC · CLI).
 
-It uses **Redis Streams** as the underlying transport layer to provide reliable, distributed queueing with **At-Least-Once** delivery guarantees, automatic retries, and dead letter queueing.
-
----
-
-## 🚀 Key Features
-
-* **Distributed Worker Pool**: Powered by Redis Streams (`XReadGroup`, `XACK`, `XAutoClaim`), allowing multiple worker instances to process tasks concurrently and coordinate automatically.
-* **At-Least-Once Delivery**: Built-in recovery loops automatically reclaim abandoned tasks (PEL recovery) if a worker crashes mid-task, ensuring no messages are lost.
-* **Delayed / Scheduled Tasks**: Support for enqueuing tasks to be run at a specific time or after a delay, backed by a Redis sorted set (`ZSET`) scheduler.
-* **Distributed Cron Manager**: Register cron jobs dynamically with spec parsing (`* * * * *`) and high-availability distributed locks to ensure each execution fires exactly once.
-* **GCRA Rate Limiting**: Intelligent sliding-window rate limiting using the GCRA (Generic Cell Rate Algorithm) via Redis Lua scripts, supporting both single-queue and tenant-level (group key) rate limits.
-* **Dead Letter Queue (DLQ)**: Automatically isolates failed tasks that exceed their retry limit, with APIs to list, retry, or delete dead letters.
-* **Dependency Injection**: Seamless integration with the Go ecosystem using **Uber Fx**.
-
----
-
-## 🛠️ Tech Stack
-
-* **Language**: Go 1.23+
-* **Queue Backend**: Redis (via `go-redis/v9`)
-* **API Framework**: Echo v5 (HTTP) & gRPC (Protobuf APIs)
-* **Dependency Injection**: Uber Fx
-* **Logging**: Zap
-* **Configuration**: Viper
-
----
-
-## 📐 Architecture
-
-```mermaid
-graph TD
-    Client[TaskMQ Client] -->|Enqueue / EnqueueIn| Redis[(Redis Backend)]
-    
-    subgraph TaskMQ Engine
-        Redis -->|XReadGroup| WorkerPool[Worker Pool]
-        Redis -->|ZSET Polling| Scheduler[Delayed Scheduler]
-        Redis -->|Cron Registration| CronManager[Cron Manager]
-        Redis -->|XAutoClaim / PEL Recovery| Janitor[Recovery Janitor]
-        
-        Scheduler -->|Promote to Stream| Redis
-        CronManager -->|Trigger task| Redis
-        Janitor -->|Re-claim pending tasks| Redis
-    end
-    
-    WorkerPool -->|Execute Handler| TaskHandler[Your Task Handlers]
-    WorkerPool -->|Exceeds Retries| DLQ[(Dead Letter Queue)]
+```text
+Producer ──► Client.Enqueue* ──► Redis Streams / ZSET
+                                      │
+Workers ◄── XReadGroup · middleware · settle ──► Complete / Retry / DLQ
+   ▲
+   └── PEL reclaim · delayed promote · cron heal · retention
 ```
 
 ---
 
-## 🚦 Getting Started
+## Why TaskMQ
+
+| | |
+|---|---|
+| **Reliable** | Consumer groups + PEL reclaim; unsettled broker errors stay pending for retry |
+| **Operable** | Pause/cancel/inspect via **gRPC**, **HTTP admin**, and **CLI** |
+| **Observable** | Task meta, events stream, worker heartbeats, Prometheus scrape endpoints |
+| **Cluster-ready** | Hash-tagged keys (`taskmq:{queue}:…`); standalone / cluster / sentinel |
+| **Composable** | Uber Fx module, ISP client ports, functional worker options |
+
+Feature map vs Asynq / BullMQ → [docs/COMPARISON.md](docs/COMPARISON.md)
+
+---
+
+## Features
+
+### Core queue
+
+- **Worker pools** on Redis Streams (`XReadGroup` / `XACK` / `XAutoClaim`)
+- **At-least-once** delivery with PEL recovery janitor
+- **Delayed & scheduled** tasks (ZSET + scheduler)
+- **Distributed cron** with healing locks
+- **GCRA rate limiting** (queue- and group-key scoped)
+- **Dead letter queue** — list / retry / delete
+- **Unique tasks** with TTL + scope (`UntilSucceeded` / `UntilStart` / `UntilSuccess`)
+- **SkipRetry / Unrecoverable** permanent failures; timeout + absolute deadline
+- **Bulk enqueue** (pipeline) for producers
+
+### Ops & observability
+
+- Per-task **meta** inspect (`GetTaskInfo`, HTTP, CLI, gRPC)
+- Optional **completed retention** + handler results
+- **Queue events** stream (`enqueued`, `active`, `completed`, `failed`, `stalled`, …)
+- **Worker heartbeats** for live consumer inventory
+- **Progress** reporting (meta + events)
+- **Lifecycle admission** (soft/hard stream limits, delayed caps, payload limits)
+- **Metrics**: process-local + Redis HASH depths; Prometheus text formats
+
+### Platform
+
+- **Uber Fx** DI module for server + workers
+- **Echo** admin dashboard · **gRPC** multi-language API · **CLI** ops tool
+- **Binary / JSON** codecs; Viper config + `TASKMQ_*` env overrides
+
+---
+
+## Architecture
+
+```mermaid
+flowchart LR
+  subgraph Producers
+    App[App / CLI / gRPC]
+  end
+
+  subgraph Redis
+    S[(Streams)]
+    Z[(Delayed ZSET)]
+    D[(DLQ)]
+    M[(Meta / Events / Metrics)]
+  end
+
+  subgraph Engine
+    C[Client]
+    W[Worker pool]
+    Sch[Delayed scheduler]
+    Cron[Cron manager]
+    Jan[PEL + retention janitors]
+  end
+
+  App --> C
+  C -->|XADD / ZADD| S
+  C --> Z
+  C --> M
+  S -->|XReadGroup| W
+  W -->|handlers| H[Your handlers]
+  W -->|fail| D
+  Sch -->|promote| S
+  Cron -->|enqueue| C
+  Jan -->|XAutoClaim / trim| S
+  W --> M
+```
+
+**Settlement rules** (handlers never XACK): [docs/TERMINAL_OUTCOMES.md](docs/TERMINAL_OUTCOMES.md)
+
+---
+
+## Quick start
 
 ### Prerequisites
 
-* Go 1.23 or higher
-* Redis 7.0+ (with Streams and ZSET support)
+- **Go** 1.23+
+- **Redis** 7+ (Streams + ZSET)
 
-### Installation
+### Install & run server
 
 ```bash
 git clone git@github.com:twn39/taskmq.git
 cd taskmq
 go mod tidy
+
+# Redis on localhost:6379, then:
+go run ./cmd/server
 ```
 
-### Running the Server
-
-Start the Echo HTTP and gRPC management server:
-```bash
-go run cmd/server/main.go
-```
-The server will start on the port configured in `config.yaml` (default `:8080`).
-
-### Continuous Integration
-
-GitHub Actions (`.github/workflows/ci.yml`) runs on every push and pull request:
-
-| Job | What it does |
+| Endpoint | Default |
 |---|---|
-| **Build & unit tests** | `go mod tidy` check, `go build`, key-schema guard, unit tests (`-race`) |
-| **Integration tests** | Full suite against a Redis 7 service on port `6379` |
+| HTTP + admin | `http://localhost:8080` · dashboard `/admin` |
+| gRPC | `:50051` (see `config.yaml`) |
 
-CI does **not** run `golangci-lint` (optional locally via `.golangci.yml`).
+Config: [`config.yaml`](config.yaml) · production template: [`config.prod.yaml`](config.prod.yaml)  
+Env prefix: `TASKMQ_` (e.g. `TASKMQ_SERVER_PORT=:3000`, `TASKMQ_REDIS_ADDR=…`)
 
-Locally mirror CI:
-
-```bash
-go build ./...
-./scripts/check_keys_schema.sh   # needs ripgrep (rg)
-go test ./internal/... ./tests/unit/... -race -count=1
-# with Redis running:
-go test ./tests/integration/... -count=1
-```
-
-**Ops notes:** graceful shutdown (`taskmq.shutdown_timeout`, default 30s), lifecycle limits, metrics (`GET /api/lifecycle/metrics`), and Redis Cluster caveats are documented in [docs/OPERATIONS.md](docs/OPERATIONS.md). Lua ownership: [docs/LUA_SCRIPTS.md](docs/LUA_SCRIPTS.md). Production template: [config.prod.yaml](config.prod.yaml).
-
-### 🖥️ Web Admin Dashboard
-
-TaskMQ features a built-in, fully responsive, slate-dark themed Web Admin Dashboard at `/admin`.
-
-* **Live Monitoring**: Inspect queue consumption status (Active vs. Paused) and trace live metrics (Active Streams, Scheduled ZSET tasks, and Dead-letter counts).
-* **Remediation**: Examine the details, payload, and stack trace of tasks in the Dead Letter Queue, with buttons to re-enqueue them for retry or purge them permanently.
-* **Testing Console**: Trigger dummy tasks with customizable payloads, execution delays, or mock failures directly from the web console.
-
-To access the panel, open your browser and navigate to `http://localhost:8080/admin`.
-
-### 💻 Command Line Interface (CLI)
-
-TaskMQ comes with a unified command-line management tool built using `urfave/cli/v3` to monitor and remediate queues directly from your terminal.
-
-#### Global Connection Options
-- `--redis-addr` (env override: `TASKMQ_REDIS_ADDR`): Redis address (default: `localhost:6379`).
-
-#### Command Usage
-* **View Queue Statistics**:
-  ```bash
-  go run cmd/taskmq-cli/main.go stats
-  ```
-* **Pause / Resume Queue**:
-  ```bash
-  go run cmd/taskmq-cli/main.go pause <queue_name>
-  go run cmd/taskmq-cli/main.go resume <queue_name>
-  ```
-* **Manage DLQ (Dead Letter Queue)**:
-  * List failed tasks (supports optional `--limit` count):
-    ```bash
-    go run cmd/taskmq-cli/main.go dlq list <queue_name> --limit 10
-    ```
-  * Re-enqueue a failed task for retry:
-    ```bash
-    go run cmd/taskmq-cli/main.go dlq retry <queue_name> <task_id>
-    ```
-  * Purge a failed task permanently:
-    ```bash
-    go run cmd/taskmq-cli/main.go dlq delete <queue_name> <task_id>
-    ```
-
----
-
-## 💻 Usage Example
-
-### 1. Defining and Registering a Handler
-
-```go
-package main
-
-import (
-	"context"
-	"fmt"
-	"log"
-	
-	"github.com/redis/go-redis/v9"
-	"github.com/twn39/taskmq/internal/taskmq"
-	"go.uber.org/zap"
-)
-
-func main() {
-	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
-	logger, _ := zap.NewProduction()
-
-	// Initialize worker options with defaults
-	opts := taskmq.NewDefaultWorkerOptions(rdb, logger, "email-queue", taskmq.JSONCodec{}, taskmq.WorkerOptions{
-		Concurrency: 10,
-	})
-
-	// Create worker pool
-	pool := taskmq.NewWorkerPool(rdb, logger, "email-queue", opts)
-
-	// Register task handler
-	pool.Register("send_welcome_email", func(ctx context.Context, task *taskmq.Task) error {
-		fmt.Printf("Processing email for payload: %s\n", string(task.Payload))
-		return nil
-	})
-
-	// Start processing tasks
-	if err := pool.Start(context.Background()); err != nil {
-		log.Fatalf("failed to start worker pool: %v", err)
-	}
-}
-```
-
-### 2. Enqueuing Tasks
+### Minimal producer
 
 ```go
 package main
@@ -195,65 +138,223 @@ import (
 	"time"
 
 	"github.com/redis/go-redis/v9"
-	"github.com/twn39/taskmq/internal/taskmq"
+	"github.com/twn39/taskmq/internal/taskmq/client"
+	"github.com/twn39/taskmq/internal/taskmq/task"
 )
 
 func main() {
 	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
-	client := taskmq.NewClient(rdb)
-
+	c := client.NewClient(rdb)
 	ctx := context.Background()
 
-	// 1. Immediate Task
-	task1 := taskmq.NewTask("send_welcome_email", []byte(`{"user_id": 123}`))
-	_ = client.Enqueue(ctx, task1)
+	// Immediate
+	_ = c.Enqueue(ctx, task.NewTask("send_welcome_email", []byte(`{"user_id":123}`),
+		task.TaskOptions{Queue: "email-queue"}))
 
-	// 2. Delayed Task (runs in 5 minutes)
-	task2 := taskmq.NewTask("send_welcome_email", []byte(`{"user_id": 456}`))
-	_ = client.EnqueueIn(ctx, task2, 5*time.Minute)
+	// Delayed
+	_ = c.EnqueueIn(ctx, task.NewTask("send_welcome_email", []byte(`{"user_id":456}`),
+		task.TaskOptions{Queue: "email-queue"}), 5*time.Minute)
 
-	// 3. Unique Task (prevents duplicate execution within a 1-hour window)
-	task3 := taskmq.NewTask("send_welcome_email", []byte(`{"user_id": 789}`), taskmq.TaskOptions{
-		UniqueKey: "welcome_email_user_789",
-		UniqueTTL: 1 * time.Hour,
-	})
-	_ = client.Enqueue(ctx, task3)
+	// Unique (dedup while lock held)
+	_ = c.Enqueue(ctx, task.NewTask("send_welcome_email", []byte(`{"user_id":789}`),
+		task.TaskOptions{
+			Queue:     "email-queue",
+			UniqueKey: "welcome_email_user_789",
+			UniqueTTL: time.Hour,
+		}))
 }
 ```
 
+### Minimal worker
+
+```go
+package main
+
+import (
+	"context"
+	"fmt"
+	"log"
+
+	"github.com/redis/go-redis/v9"
+	"github.com/twn39/taskmq/internal/taskmq/codec"
+	"github.com/twn39/taskmq/internal/taskmq/task"
+	"github.com/twn39/taskmq/internal/taskmq/worker"
+	"go.uber.org/zap"
+)
+
+func main() {
+	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+	logger := zap.NewExample()
+
+	pool := worker.NewWorkerPool(rdb, logger, "email-queue",
+		worker.WithConcurrency(10),
+		worker.WithCodec(codec.JSONCodec{}),
+	)
+
+	pool.Register("send_welcome_email", func(ctx context.Context, t *task.Task) error {
+		fmt.Printf("payload: %s\n", t.Payload)
+		return nil
+	})
+
+	if err := pool.Start(context.Background()); err != nil {
+		log.Fatal(err)
+	}
+	select {} // block; use Fx lifecycle in production
+}
+```
+
+> **Production:** share one `*lifecycle.Lifecycle` between client and workers (`taskmq.Module` / `BuildWorkerTopologyWithLifecycle`). See [docs/OPERATIONS.md](docs/OPERATIONS.md).
+
 ---
 
-## ⚙️ Configuration
+## API surfaces
 
-Configuration is managed via `config.yaml` or environment variables starting with `TASKMQ_`.
+| Capability | gRPC | HTTP admin | CLI |
+|---|:---:|:---:|:---:|
+| Enqueue / delayed / bulk | ✅ | ✅ | — |
+| Cron register | ✅ | ✅ | — |
+| DLQ list / retry / delete | ✅ | ✅ | ✅ |
+| Pause / resume | ✅ | ✅ | ✅ |
+| Cancel / get task | ✅ | ✅ | ✅ |
+| Scheduled / active list | ✅ | ✅ | ✅ |
+| Events / workers / metrics | — | ✅ | ✅ |
+| Dashboard | — | ✅ `/admin` | — |
 
-Example configuration file:
+Full matrix → [docs/OPERATIONS.md](docs/OPERATIONS.md#api-surfaces-grpc-vs-http-vs-cli)
+
+---
+
+## CLI
+
+```bash
+# Build once (optional)
+go build -o bin/taskmq-cli ./cmd/taskmq-cli
+
+export REDIS_ADDR=localhost:6379   # or --redis-addr
+
+go run ./cmd/taskmq-cli stats
+go run ./cmd/taskmq-cli pause <queue>
+go run ./cmd/taskmq-cli resume <queue>
+
+go run ./cmd/taskmq-cli dlq list <queue> [limit]
+go run ./cmd/taskmq-cli dlq retry <queue> <task_id>
+go run ./cmd/taskmq-cli dlq delete <queue> <task_id>
+
+go run ./cmd/taskmq-cli task get <queue> <task_id>
+go run ./cmd/taskmq-cli task cancel <queue> <task_id>
+go run ./cmd/taskmq-cli task scheduled <queue> [limit]
+go run ./cmd/taskmq-cli task active <queue> [limit]
+
+go run ./cmd/taskmq-cli events <queue> [limit]
+go run ./cmd/taskmq-cli workers <queue>
+go run ./cmd/taskmq-cli metrics [queue]
+```
+
+---
+
+## Admin dashboard
+
+Open **[http://localhost:8080/admin](http://localhost:8080/admin)** after starting the server.
+
+- Live queue depth (stream / delayed / DLQ) and pause state  
+- DLQ inspect, retry, purge  
+- Test console for ad-hoc enqueue  
+
+---
+
+## Configuration
+
+Managed by Viper: `config.yaml` (or `config.$APP_ENV.yaml`) + `TASKMQ_*` env vars.
+
 ```yaml
 server:
   port: ":8080"
+  grpc_port: ":50051"
 logger:
   level: "info"
 redis:
+  mode: standalone          # standalone | cluster | sentinel
   addr: "localhost:6379"
 taskmq:
+  codec: binary
+  shutdown_timeout: 30s
+  # events_max_len: 10000   # queue events stream MAXLEN (0 = default)
+  # completed_retention: 24h
+  lifecycle:
+    delayed_overflow: reject
+    dlq_max_count: 1000
+    cancelled_ttl: 24h
+    safe_trim_enabled: true
   queues:
-    - name: "default"
+    - name: default
       concurrency: 5
-    - name: "high-priority"
-      concurrency: 10
-  cron_healing_interval: 1m
-  janitor_interval: 3s
+```
+
+More: [docs/OPERATIONS.md](docs/OPERATIONS.md) · Lua scripts: [docs/LUA_SCRIPTS.md](docs/LUA_SCRIPTS.md)
+
+---
+
+## Development
+
+### Common commands
+
+| Task | Command |
+|---|---|
+| Build | `go build ./...` · `make build` |
+| Unit tests | `go test ./internal/... -count=1` · `make test-unit` |
+| Race | `go test ./internal/... -race -count=1` · `make test-race` |
+| Integration (needs Redis) | `go test ./tests/integration/... -count=1` · `make test-integration` |
+| Key schema guard | `./scripts/check_keys_schema.sh` · `make keys` |
+| Coverage gates | `make cover-gate` · `make cover` |
+| Regenerate protobuf | `make proto` |
+| Lint | `golangci-lint run` · `make lint` |
+
+Coverage floors: [`coverage.yaml`](coverage.yaml)
+
+### CI
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on every push/PR:
+
+| Job | Scope |
+|---|---|
+| Build & unit | tidy, build, key schema, unit + race, **coverage gates**, artifacts |
+| Lint | `golangci-lint` |
+| Integration | full suite vs Redis 7 service |
+| Nightly | integration-race + optional cluster smoke |
+
+---
+
+## Documentation
+
+| Doc | Contents |
+|---|---|
+| [docs/OPERATIONS.md](docs/OPERATIONS.md) | Deploy, lifecycle limits, metrics scrape, API surfaces, events |
+| [docs/TERMINAL_OUTCOMES.md](docs/TERMINAL_OUTCOMES.md) | Settlement matrix, `SkipRetry` vs `Handled`, test map |
+| [docs/LUA_SCRIPTS.md](docs/LUA_SCRIPTS.md) | Script ownership & hash-tag contracts |
+| [docs/COMPARISON.md](docs/COMPARISON.md) | TaskMQ vs Asynq vs BullMQ |
+| [AGENTS.md](AGENTS.md) | Contributor / AI agent guidelines |
+| [`.codegraph/README.md`](.codegraph/README.md) | Codebase knowledge graph |
+
+---
+
+## Project layout
+
+```text
+cmd/server          HTTP + gRPC process
+cmd/taskmq-cli      Ops CLI
+api/proto/taskmq/v1 Protobuf + generated stubs
+internal/taskmq/    Engine (client, worker, broker, lifecycle, …)
+internal/handler    HTTP admin handlers
+tests/integration   Redis-backed end-to-end suites
+docs/               Operations & design notes
 ```
 
 ---
 
-## 🧪 Testing
+## Design notes
 
-Run all unit and integration test suites:
-```bash
-# Run all tests
-go test ./...
+- **Handlers** return `error` / `task.SkipRetry` / `task.Unrecoverable` only — never settle the stream message.  
+- **Middleware** returns `worker.Handled` / `Abort` after broker settlement.  
+- **Multi-key Lua** stays under the same `{queue}` hash tag for Cluster.  
+- **Observability** (meta / events / metrics) is best-effort and must not block settlement.
 
-# Run integration tests specifically
-go test ./tests/integration/... -v
-```

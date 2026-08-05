@@ -7,16 +7,21 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/twn39/taskmq/internal/taskmq/codec"
+	"github.com/twn39/taskmq/internal/taskmq/events"
 	"github.com/twn39/taskmq/internal/taskmq/lifecycle"
+	"github.com/twn39/taskmq/internal/taskmq/meta"
 	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 )
 
 // deps is the shared Redis/codec/lifecycle kernel used by all client services.
 type deps struct {
-	rdb              *redis.Client
+	rdb              redis.UniversalClient
 	codec            codec.Codec
 	defaultUniqueTTL time.Duration
 	lifecycle        *lifecycle.Lifecycle
+	meta             *meta.Store
+	events           *events.Publisher
+	eventsMaxLen     int64 // 0 → events.DefaultMaxLen
 }
 
 func (d deps) hardLimit() int64 {

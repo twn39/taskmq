@@ -23,12 +23,12 @@ func TestTaskMQ_BinaryCodec(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "binary_codec_test_queue"
+	queueName := UniqueQueue(t, "bin_codec")
 	streamKey := keys.KeysFor(queueName).Stream()
 
 	runChan := make(chan string, 1)
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 	var worker mqworker.Worker
 
@@ -39,10 +39,10 @@ func TestTaskMQ_BinaryCodec(t *testing.T) {
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			func(rdb *goredis.Client) mqclient.Client {
+			func(rdb goredis.UniversalClient) mqclient.Client {
 				return mqclient.NewClient(rdb, mqclient.WithClientCodec(binaryCodec))
 			},
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithConcurrency(2),
 					mqworker.WithCodec(binaryCodec),

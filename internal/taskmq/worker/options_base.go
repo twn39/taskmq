@@ -57,11 +57,11 @@ func (o SharedOption) ApplyPriorityWorker(opts *PriorityWorkerOptions) error {
 
 func defaultWorkerConfig(codec codec.Codec) WorkerConfig {
 	return WorkerConfig{
-		concurrency:     5,
-		group:           "taskmq-group",
-		consumer:        "taskmq-consumer-1",
-		codec:           codec,
-		context:         context.Background(),
+		concurrency: 5,
+		group:       "taskmq-group",
+		consumer:    "taskmq-consumer-1",
+		codec:       codec,
+		context:     context.Background(),
 		// Match default task TimeoutMs (30s) so in-flight work can finish on stop.
 		shutdownTimeout: 30 * time.Second,
 		cron: CronOptions{
@@ -78,14 +78,14 @@ func defaultWorkerConfig(codec codec.Codec) WorkerConfig {
 		janitor: JanitorOptions{
 			interval:    3 * time.Second,
 			minIdleTime: 5 * time.Second,
-			factory:     runner.DefaultJanitorFactory,
+			// factory nil → NewPELRecoveryJanitorWithCodec (stalled events + task id decode)
 		},
 	}
 }
 
 // ensurePolicyDefaults fills broker / retry / DLQ policies when unset.
 // Used by both pool and priority workers (single mapping path).
-func ensurePolicyDefaults(rdb *redis.Client, cfg *WorkerConfig) {
+func ensurePolicyDefaults(rdb redis.UniversalClient, cfg *WorkerConfig) {
 	if cfg.policies.broker == nil {
 		cfg.policies.broker = broker.NewRedisBroker(rdb, cfg.codec, cfg.lifecycle)
 	}
@@ -112,7 +112,6 @@ func (c *WorkerConfig) Apply(opts ...SharedOption) error {
 
 // BaseWorkerOptions is a compatibility alias for WorkerConfig.
 type BaseWorkerOptions = WorkerConfig
-
 
 // WithLifecycle attaches memory / admission lifecycle policy to workers and brokers.
 func WithLifecycle(lc *lifecycle.Lifecycle) SharedOption {

@@ -29,7 +29,7 @@ type dummyCronManager struct{}
 func (d *dummyCronManager) Run(ctx context.Context) error                           { return nil }
 func (d *dummyCronManager) Reschedule(ctx context.Context, t *taskmodel.Task) error { return nil }
 
-func setupMiniRedis(t *testing.T) (*redis.Client, *miniredis.Miniredis, func()) {
+func setupMiniRedis(t *testing.T) (redis.UniversalClient, *miniredis.Miniredis, func()) {
 	t.Helper()
 	mr, err := miniredis.Run()
 	require.NoError(t, err)
@@ -165,6 +165,33 @@ func TestLifecycleFromConfig(t *testing.T) {
 			},
 		})
 		assert.Equal(t, int64(50), cfg.DLQMaxCount)
+	})
+
+	t.Run("empty config aligns with DefaultLifecycleConfig for production-critical fields", func(t *testing.T) {
+		// Bare BuildWorkerTopology uses DefaultLifecycleConfig; Fx empty YAML uses FromConfig.
+		// These must not silently diverge on shared defaults.
+		def := lifecycle.DefaultLifecycleConfig().Normalize()
+		from := lifecycle.FromConfig(&config.Config{}).Normalize()
+		assert.Equal(t, def.DLQMaxCount, from.DLQMaxCount)
+		assert.Equal(t, def.CancelledTTL, from.CancelledTTL)
+		assert.Equal(t, def.DelayedOverflow, from.DelayedOverflow)
+		assert.Equal(t, def.SafeTrimEnabled, from.SafeTrimEnabled)
+		assert.Equal(t, def.SafeTrimInterval, from.SafeTrimInterval)
+		assert.Equal(t, def.SafeTrimBatchLimit, from.SafeTrimBatchLimit)
+		assert.Equal(t, def.PurgeCancelledDelayed, from.PurgeCancelledDelayed)
+		assert.Equal(t, def.EnqueueHardLimit, from.EnqueueHardLimit)
+		assert.Equal(t, def.CompletedRetention, from.CompletedRetention)
+	})
+
+	t.Run("completed retention from TaskMQ root config", func(t *testing.T) {
+		cfg := lifecycle.FromConfig(&config.Config{
+			TaskMQ: config.TaskMQConfig{
+				CompletedRetention: 24 * time.Hour,
+				CompletedMaxCount:  5000,
+			},
+		})
+		assert.Equal(t, 24*time.Hour, cfg.CompletedRetention)
+		assert.Equal(t, int64(5000), cfg.CompletedMaxCount)
 	})
 }
 
@@ -392,7 +419,7 @@ func TestLifecycle_UniqueDelayedLimits(t *testing.T) {
 // DLQ capacity
 // ---------------------------------------------------------------------------
 
-func seedStreamMessageInPEL(t *testing.T, rdb *redis.Client, stream, group, consumer string) string {
+func seedStreamMessageInPEL(t *testing.T, rdb redis.UniversalClient, stream, group, consumer string) string {
 	t.Helper()
 	ctx := context.Background()
 	// Ensure group exists

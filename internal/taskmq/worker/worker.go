@@ -9,6 +9,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/twn39/taskmq/internal/taskmq/codec"
+	"github.com/twn39/taskmq/internal/taskmq/heartbeat"
 	"github.com/twn39/taskmq/internal/taskmq/keys"
 	"github.com/twn39/taskmq/internal/taskmq/runner"
 	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
@@ -42,7 +43,7 @@ type workerPool struct {
 	cronManager      runner.CronManager
 }
 
-func NewWorkerPool(rdb *redis.Client, logger *zap.Logger, queue string, opts ...WorkerPoolOption) Worker {
+func NewWorkerPool(rdb redis.UniversalClient, logger *zap.Logger, queue string, opts ...WorkerPoolOption) Worker {
 	opt, err := applyWorkerPoolOptions(codec.JSONCodec{}, opts)
 	if err != nil {
 		panic(fmt.Errorf("invalid option: %w", err))
@@ -117,6 +118,21 @@ func (w *workerPool) Start(ctx context.Context) error {
 			}
 		}()
 	}
+
+	// Live consumer heartbeat for ops dashboards.
+	w.wg.Add(1)
+	go func() {
+		defer w.wg.Done()
+		rep := heartbeat.NewReporter(w.rdb, w.queue, w.consumer, w.concurrency,
+			heartbeat.WithInUse(func() int {
+				if w.execPool != nil {
+					return w.execPool.InUse()
+				}
+				return 0
+			}),
+		)
+		_ = rep.Run(w.ctx)
+	}()
 
 	if w.retentionJanitor != nil {
 		w.wg.Add(1)

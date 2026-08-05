@@ -38,12 +38,12 @@ func TestTaskMQ_Lifecycle_EnqueueHardLimit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	queueName := "lifecycle_hard_limit_q"
+	queueName := UniqueQueue(t, "lc_hard")
 	streamKey := keys.KeysFor(queueName).Stream()
 	// Block handlers so messages remain in the stream (PEL) and XLEN stays elevated.
 	block := make(chan struct{})
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 	var lc *lifecycle.Lifecycle
 
@@ -62,14 +62,14 @@ func TestTaskMQ_Lifecycle_EnqueueHardLimit(t *testing.T) {
 			func(cfg *config.Config) *lifecycle.Lifecycle {
 				return lifecycle.NewLifecycle(taskmq.LifecycleFromConfig(cfg))
 			},
-			func(rdb *goredis.Client, codec codec.Codec, lifecycle *lifecycle.Lifecycle) mqclient.Client {
+			func(rdb goredis.UniversalClient, codec codec.Codec, lifecycle *lifecycle.Lifecycle) mqclient.Client {
 				return mqclient.NewClient(rdb,
 					mqclient.WithClientCodec(codec),
 					mqclient.WithClientLifecycle(lifecycle),
 				)
 			},
 			func() codec.Codec { return codec.JSONCodec{} },
-			func(rdb *goredis.Client, logger *zap.Logger, lifecycle *lifecycle.Lifecycle) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger, lifecycle *lifecycle.Lifecycle) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("lc-hard-g"),
 					mqworker.WithConsumer("lc-hard-c"),
@@ -122,12 +122,12 @@ func TestTaskMQ_Lifecycle_DelayedPromoteBackpressure(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	queueName := "lifecycle_promote_bp_q"
+	queueName := UniqueQueue(t, "lc_promote")
 	streamKey := keys.KeysFor(queueName).Stream()
 	delayedKey := keys.KeysFor(queueName).Delayed()
 	block := make(chan struct{})
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -146,10 +146,10 @@ func TestTaskMQ_Lifecycle_DelayedPromoteBackpressure(t *testing.T) {
 			func(cfg *config.Config) *lifecycle.Lifecycle {
 				return lifecycle.NewLifecycle(taskmq.LifecycleFromConfig(cfg))
 			},
-			func(rdb *goredis.Client, lifecycle *lifecycle.Lifecycle) mqclient.Client {
+			func(rdb goredis.UniversalClient, lifecycle *lifecycle.Lifecycle) mqclient.Client {
 				return mqclient.NewClient(rdb, mqclient.WithClientLifecycle(lifecycle), mqclient.WithClientCodec(codec.JSONCodec{}))
 			},
-			func(rdb *goredis.Client, logger *zap.Logger, lifecycle *lifecycle.Lifecycle) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger, lifecycle *lifecycle.Lifecycle) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("lc-promo-g"),
 					mqworker.WithConsumer("lc-promo-c"),
@@ -205,10 +205,10 @@ func TestTaskMQ_Lifecycle_DelayedMaxCountAndDelay(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "lifecycle_delayed_cap_q"
+	queueName := UniqueQueue(t, "lc_delayed")
 	delayedKey := keys.KeysFor(queueName).Delayed()
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -228,10 +228,10 @@ func TestTaskMQ_Lifecycle_DelayedMaxCountAndDelay(t *testing.T) {
 			func(cfg *config.Config) *lifecycle.Lifecycle {
 				return lifecycle.NewLifecycle(taskmq.LifecycleFromConfig(cfg))
 			},
-			func(rdb *goredis.Client, lifecycle *lifecycle.Lifecycle) mqclient.Client {
+			func(rdb goredis.UniversalClient, lifecycle *lifecycle.Lifecycle) mqclient.Client {
 				return mqclient.NewClient(rdb, mqclient.WithClientLifecycle(lifecycle))
 			},
-			func(rdb *goredis.Client, logger *zap.Logger, lifecycle *lifecycle.Lifecycle) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger, lifecycle *lifecycle.Lifecycle) mqworker.Worker {
 				return mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("lc-del-g"),
 					mqworker.WithConsumer("lc-del-c"),
@@ -269,12 +269,12 @@ func TestTaskMQ_Lifecycle_DLQMaxCountViaWorker(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
 
-	queueName := "lifecycle_dlq_cap_q"
+	queueName := UniqueQueue(t, "lc_dlq")
 	streamKey := keys.KeysFor(queueName).Stream()
 	dlqKey := keys.KeysFor(queueName).DLQ()
 	dlqIndexKey := keys.KeysFor(queueName).DLQIndex()
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 	var lc *lifecycle.Lifecycle
 	var done int64
@@ -295,10 +295,10 @@ func TestTaskMQ_Lifecycle_DLQMaxCountViaWorker(t *testing.T) {
 			func(cfg *config.Config) *lifecycle.Lifecycle {
 				return lifecycle.NewLifecycle(taskmq.LifecycleFromConfig(cfg))
 			},
-			func(rdb *goredis.Client, lifecycle *lifecycle.Lifecycle) mqclient.Client {
+			func(rdb goredis.UniversalClient, lifecycle *lifecycle.Lifecycle) mqclient.Client {
 				return mqclient.NewClient(rdb, mqclient.WithClientLifecycle(lifecycle))
 			},
-			func(rdb *goredis.Client, logger *zap.Logger, lifecycle *lifecycle.Lifecycle) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger, lifecycle *lifecycle.Lifecycle) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("lc-dlq-g"),
 					mqworker.WithConsumer("lc-dlq-c"),
@@ -357,9 +357,9 @@ func TestTaskMQ_Lifecycle_MaxPayloadRejected(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "lifecycle_payload_q"
+	queueName := UniqueQueue(t, "lc_payload")
 	var client mqclient.Client
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 
 	app := fxtest.New(t,
 		fx.Provide(
@@ -376,10 +376,10 @@ func TestTaskMQ_Lifecycle_MaxPayloadRejected(t *testing.T) {
 			func(cfg *config.Config) *lifecycle.Lifecycle {
 				return lifecycle.NewLifecycle(taskmq.LifecycleFromConfig(cfg))
 			},
-			func(rdb *goredis.Client, lifecycle *lifecycle.Lifecycle) mqclient.Client {
+			func(rdb goredis.UniversalClient, lifecycle *lifecycle.Lifecycle) mqclient.Client {
 				return mqclient.NewClient(rdb, mqclient.WithClientLifecycle(lifecycle))
 			},
-			func(rdb *goredis.Client, logger *zap.Logger, lifecycle *lifecycle.Lifecycle) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger, lifecycle *lifecycle.Lifecycle) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("lc-pay-g"),
 					mqworker.WithConsumer("lc-pay-c"),
@@ -409,10 +409,10 @@ func TestTaskMQ_Lifecycle_CancelledDelayedPurged(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	queueName := "lifecycle_cancel_delayed_q"
+	queueName := UniqueQueue(t, "lc_cancel_del")
 	delayedKey := keys.KeysFor(queueName).Delayed()
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -440,10 +440,10 @@ func TestTaskMQ_Lifecycle_CancelledDelayedPurged(t *testing.T) {
 				lcCfg.SafeTrimEnabled = false
 				return lifecycle.NewLifecycle(lcCfg)
 			},
-			func(rdb *goredis.Client, lifecycle *lifecycle.Lifecycle) mqclient.Client {
+			func(rdb goredis.UniversalClient, lifecycle *lifecycle.Lifecycle) mqclient.Client {
 				return mqclient.NewClient(rdb, mqclient.WithClientLifecycle(lifecycle))
 			},
-			func(rdb *goredis.Client, logger *zap.Logger, lifecycle *lifecycle.Lifecycle) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger, lifecycle *lifecycle.Lifecycle) mqworker.Worker {
 				return mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("lc-cd-g"),
 					mqworker.WithConsumer("lc-cd-c"),
@@ -478,10 +478,10 @@ func TestTaskMQ_Lifecycle_ModuleSharedLifecycle(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "lifecycle_module_q"
+	queueName := UniqueQueue(t, "lc_module")
 	var client mqclient.Client
 	var lc *lifecycle.Lifecycle
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 
 	app := fxtest.New(t,
 		fx.Provide(

@@ -10,11 +10,11 @@ import (
 
 // GCRALimiter implements Generic Cell Rate Algorithm rate limiting via Redis.
 type GCRALimiter struct {
-	rdb *redis.Client
+	rdb redis.UniversalClient
 }
 
 // NewGCRALimiter creates a GCRA limiter backed by Redis.
-func NewGCRALimiter(rdb *redis.Client) *GCRALimiter {
+func NewGCRALimiter(rdb redis.UniversalClient) *GCRALimiter {
 	return &GCRALimiter{rdb: rdb}
 }
 

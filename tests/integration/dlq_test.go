@@ -27,7 +27,7 @@ func TestTaskMQ_DLQFlow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "dlq_test_queue"
+	queueName := UniqueQueue(t, "dlq")
 	streamKey := keys.KeysFor(queueName).Stream()
 	dlqKey := keys.KeysFor(queueName).DLQ()
 	dlqIndexKey := keys.KeysFor(queueName).DLQIndex()
@@ -35,7 +35,7 @@ func TestTaskMQ_DLQFlow(t *testing.T) {
 	runChan := make(chan error, 2)
 	var attempt int64
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -44,7 +44,7 @@ func TestTaskMQ_DLQFlow(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("dlq-group"),
 					mqworker.WithConsumer("dlq-consumer"),
@@ -166,11 +166,11 @@ func TestTaskMQ_DLQIndexCapacityProtection(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "dlq_cap_test_queue"
+	queueName := UniqueQueue(t, "dlq_cap")
 	dlqKey := keys.KeysFor(queueName).DLQ()
 	dlqIndexKey := keys.KeysFor(queueName).DLQIndex()
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -228,11 +228,11 @@ func TestTaskMQ_DLQIndexCapacityProtection_Binary(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "dlq_cap_test_queue_bin"
+	queueName := UniqueQueue(t, "dlq_cap_bin")
 	dlqKey := keys.KeysFor(queueName).DLQ()
 	dlqIndexKey := keys.KeysFor(queueName).DLQIndex()
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,

@@ -10,7 +10,7 @@ import (
 	"go.uber.org/zap"
 )
 
-type JanitorFactory func(rdb *redis.Client, logger *zap.Logger, queue string, group string, consumer string, concurrency int, checkInterval time.Duration, minIdleTime time.Duration) runner.PELRecoveryJanitor
+type JanitorFactory func(rdb redis.UniversalClient, logger *zap.Logger, queue string, group string, consumer string, concurrency int, checkInterval time.Duration, minIdleTime time.Duration) runner.PELRecoveryJanitor
 
 type JanitorOptions struct {
 	interval    time.Duration

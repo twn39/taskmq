@@ -321,6 +321,110 @@ func (x *EnqueueAtRequest) GetTimestampMs() int64 {
 	return 0
 }
 
+type EnqueueBulkRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tasks         []*Task                `protobuf:"bytes,1,rep,name=tasks,proto3" json:"tasks,omitempty"`
+	FailFast      bool                   `protobuf:"varint,2,opt,name=fail_fast,json=failFast,proto3" json:"fail_fast,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EnqueueBulkRequest) Reset() {
+	*x = EnqueueBulkRequest{}
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[5]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EnqueueBulkRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EnqueueBulkRequest) ProtoMessage() {}
+
+func (x *EnqueueBulkRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[5]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EnqueueBulkRequest.ProtoReflect.Descriptor instead.
+func (*EnqueueBulkRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{5}
+}
+
+func (x *EnqueueBulkRequest) GetTasks() []*Task {
+	if x != nil {
+		return x.Tasks
+	}
+	return nil
+}
+
+func (x *EnqueueBulkRequest) GetFailFast() bool {
+	if x != nil {
+		return x.FailFast
+	}
+	return false
+}
+
+type EnqueueBulkResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	TaskIds       []string               `protobuf:"bytes,1,rep,name=task_ids,json=taskIds,proto3" json:"task_ids,omitempty"`
+	FailedIndexes []int32                `protobuf:"varint,2,rep,packed,name=failed_indexes,json=failedIndexes,proto3" json:"failed_indexes,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *EnqueueBulkResponse) Reset() {
+	*x = EnqueueBulkResponse{}
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[6]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *EnqueueBulkResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*EnqueueBulkResponse) ProtoMessage() {}
+
+func (x *EnqueueBulkResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[6]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use EnqueueBulkResponse.ProtoReflect.Descriptor instead.
+func (*EnqueueBulkResponse) Descriptor() ([]byte, []int) {
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{6}
+}
+
+func (x *EnqueueBulkResponse) GetTaskIds() []string {
+	if x != nil {
+		return x.TaskIds
+	}
+	return nil
+}
+
+func (x *EnqueueBulkResponse) GetFailedIndexes() []int32 {
+	if x != nil {
+		return x.FailedIndexes
+	}
+	return nil
+}
+
 type RegisterCronRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	JobName       string                 `protobuf:"bytes,1,opt,name=job_name,json=jobName,proto3" json:"job_name,omitempty"`
@@ -332,7 +436,7 @@ type RegisterCronRequest struct {
 
 func (x *RegisterCronRequest) Reset() {
 	*x = RegisterCronRequest{}
-	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[5]
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -344,7 +448,7 @@ func (x *RegisterCronRequest) String() string {
 func (*RegisterCronRequest) ProtoMessage() {}
 
 func (x *RegisterCronRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[5]
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -357,7 +461,7 @@ func (x *RegisterCronRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterCronRequest.ProtoReflect.Descriptor instead.
 func (*RegisterCronRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{5}
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *RegisterCronRequest) GetJobName() string {
@@ -390,7 +494,7 @@ type RegisterCronResponse struct {
 
 func (x *RegisterCronResponse) Reset() {
 	*x = RegisterCronResponse{}
-	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[6]
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -402,7 +506,7 @@ func (x *RegisterCronResponse) String() string {
 func (*RegisterCronResponse) ProtoMessage() {}
 
 func (x *RegisterCronResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[6]
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -415,7 +519,7 @@ func (x *RegisterCronResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RegisterCronResponse.ProtoReflect.Descriptor instead.
 func (*RegisterCronResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{6}
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *RegisterCronResponse) GetSuccess() bool {
@@ -435,7 +539,7 @@ type ListDeadLettersRequest struct {
 
 func (x *ListDeadLettersRequest) Reset() {
 	*x = ListDeadLettersRequest{}
-	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[7]
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -447,7 +551,7 @@ func (x *ListDeadLettersRequest) String() string {
 func (*ListDeadLettersRequest) ProtoMessage() {}
 
 func (x *ListDeadLettersRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[7]
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -460,7 +564,7 @@ func (x *ListDeadLettersRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDeadLettersRequest.ProtoReflect.Descriptor instead.
 func (*ListDeadLettersRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{7}
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *ListDeadLettersRequest) GetQueue() string {
@@ -486,7 +590,7 @@ type ListDeadLettersResponse struct {
 
 func (x *ListDeadLettersResponse) Reset() {
 	*x = ListDeadLettersResponse{}
-	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[8]
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -498,7 +602,7 @@ func (x *ListDeadLettersResponse) String() string {
 func (*ListDeadLettersResponse) ProtoMessage() {}
 
 func (x *ListDeadLettersResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[8]
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -511,7 +615,7 @@ func (x *ListDeadLettersResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use ListDeadLettersResponse.ProtoReflect.Descriptor instead.
 func (*ListDeadLettersResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{8}
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *ListDeadLettersResponse) GetTasks() []*Task {
@@ -531,7 +635,7 @@ type DeleteDeadLetterRequest struct {
 
 func (x *DeleteDeadLetterRequest) Reset() {
 	*x = DeleteDeadLetterRequest{}
-	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[9]
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -543,7 +647,7 @@ func (x *DeleteDeadLetterRequest) String() string {
 func (*DeleteDeadLetterRequest) ProtoMessage() {}
 
 func (x *DeleteDeadLetterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[9]
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -556,7 +660,7 @@ func (x *DeleteDeadLetterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteDeadLetterRequest.ProtoReflect.Descriptor instead.
 func (*DeleteDeadLetterRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{9}
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *DeleteDeadLetterRequest) GetQueue() string {
@@ -582,7 +686,7 @@ type DeleteDeadLetterResponse struct {
 
 func (x *DeleteDeadLetterResponse) Reset() {
 	*x = DeleteDeadLetterResponse{}
-	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[10]
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -594,7 +698,7 @@ func (x *DeleteDeadLetterResponse) String() string {
 func (*DeleteDeadLetterResponse) ProtoMessage() {}
 
 func (x *DeleteDeadLetterResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[10]
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -607,7 +711,7 @@ func (x *DeleteDeadLetterResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use DeleteDeadLetterResponse.ProtoReflect.Descriptor instead.
 func (*DeleteDeadLetterResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{10}
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *DeleteDeadLetterResponse) GetSuccess() bool {
@@ -627,7 +731,7 @@ type RetryDeadLetterRequest struct {
 
 func (x *RetryDeadLetterRequest) Reset() {
 	*x = RetryDeadLetterRequest{}
-	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[11]
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -639,7 +743,7 @@ func (x *RetryDeadLetterRequest) String() string {
 func (*RetryDeadLetterRequest) ProtoMessage() {}
 
 func (x *RetryDeadLetterRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[11]
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -652,7 +756,7 @@ func (x *RetryDeadLetterRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetryDeadLetterRequest.ProtoReflect.Descriptor instead.
 func (*RetryDeadLetterRequest) Descriptor() ([]byte, []int) {
-	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{11}
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *RetryDeadLetterRequest) GetQueue() string {
@@ -678,7 +782,7 @@ type RetryDeadLetterResponse struct {
 
 func (x *RetryDeadLetterResponse) Reset() {
 	*x = RetryDeadLetterResponse{}
-	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[12]
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -690,7 +794,7 @@ func (x *RetryDeadLetterResponse) String() string {
 func (*RetryDeadLetterResponse) ProtoMessage() {}
 
 func (x *RetryDeadLetterResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[12]
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -703,7 +807,7 @@ func (x *RetryDeadLetterResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use RetryDeadLetterResponse.ProtoReflect.Descriptor instead.
 func (*RetryDeadLetterResponse) Descriptor() ([]byte, []int) {
-	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{12}
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *RetryDeadLetterResponse) GetSuccess() bool {
@@ -711,6 +815,980 @@ func (x *RetryDeadLetterResponse) GetSuccess() bool {
 		return x.Success
 	}
 	return false
+}
+
+type PauseQueueRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Queue         string                 `protobuf:"bytes,1,opt,name=queue,proto3" json:"queue,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PauseQueueRequest) Reset() {
+	*x = PauseQueueRequest{}
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[15]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PauseQueueRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PauseQueueRequest) ProtoMessage() {}
+
+func (x *PauseQueueRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[15]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PauseQueueRequest.ProtoReflect.Descriptor instead.
+func (*PauseQueueRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{15}
+}
+
+func (x *PauseQueueRequest) GetQueue() string {
+	if x != nil {
+		return x.Queue
+	}
+	return ""
+}
+
+type PauseQueueResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *PauseQueueResponse) Reset() {
+	*x = PauseQueueResponse{}
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[16]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PauseQueueResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PauseQueueResponse) ProtoMessage() {}
+
+func (x *PauseQueueResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[16]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PauseQueueResponse.ProtoReflect.Descriptor instead.
+func (*PauseQueueResponse) Descriptor() ([]byte, []int) {
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{16}
+}
+
+func (x *PauseQueueResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+type ResumeQueueRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Queue         string                 `protobuf:"bytes,1,opt,name=queue,proto3" json:"queue,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResumeQueueRequest) Reset() {
+	*x = ResumeQueueRequest{}
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[17]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResumeQueueRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResumeQueueRequest) ProtoMessage() {}
+
+func (x *ResumeQueueRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[17]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResumeQueueRequest.ProtoReflect.Descriptor instead.
+func (*ResumeQueueRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{17}
+}
+
+func (x *ResumeQueueRequest) GetQueue() string {
+	if x != nil {
+		return x.Queue
+	}
+	return ""
+}
+
+type ResumeQueueResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ResumeQueueResponse) Reset() {
+	*x = ResumeQueueResponse{}
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[18]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ResumeQueueResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ResumeQueueResponse) ProtoMessage() {}
+
+func (x *ResumeQueueResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[18]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ResumeQueueResponse.ProtoReflect.Descriptor instead.
+func (*ResumeQueueResponse) Descriptor() ([]byte, []int) {
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{18}
+}
+
+func (x *ResumeQueueResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+type IsQueuePausedRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Queue         string                 `protobuf:"bytes,1,opt,name=queue,proto3" json:"queue,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IsQueuePausedRequest) Reset() {
+	*x = IsQueuePausedRequest{}
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[19]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IsQueuePausedRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IsQueuePausedRequest) ProtoMessage() {}
+
+func (x *IsQueuePausedRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[19]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IsQueuePausedRequest.ProtoReflect.Descriptor instead.
+func (*IsQueuePausedRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{19}
+}
+
+func (x *IsQueuePausedRequest) GetQueue() string {
+	if x != nil {
+		return x.Queue
+	}
+	return ""
+}
+
+type IsQueuePausedResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Paused        bool                   `protobuf:"varint,1,opt,name=paused,proto3" json:"paused,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *IsQueuePausedResponse) Reset() {
+	*x = IsQueuePausedResponse{}
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[20]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *IsQueuePausedResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*IsQueuePausedResponse) ProtoMessage() {}
+
+func (x *IsQueuePausedResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[20]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use IsQueuePausedResponse.ProtoReflect.Descriptor instead.
+func (*IsQueuePausedResponse) Descriptor() ([]byte, []int) {
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{20}
+}
+
+func (x *IsQueuePausedResponse) GetPaused() bool {
+	if x != nil {
+		return x.Paused
+	}
+	return false
+}
+
+type CancelTaskRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Queue         string                 `protobuf:"bytes,1,opt,name=queue,proto3" json:"queue,omitempty"`
+	TaskId        string                 `protobuf:"bytes,2,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CancelTaskRequest) Reset() {
+	*x = CancelTaskRequest{}
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[21]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CancelTaskRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CancelTaskRequest) ProtoMessage() {}
+
+func (x *CancelTaskRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[21]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CancelTaskRequest.ProtoReflect.Descriptor instead.
+func (*CancelTaskRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{21}
+}
+
+func (x *CancelTaskRequest) GetQueue() string {
+	if x != nil {
+		return x.Queue
+	}
+	return ""
+}
+
+func (x *CancelTaskRequest) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+type CancelTaskResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Success       bool                   `protobuf:"varint,1,opt,name=success,proto3" json:"success,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *CancelTaskResponse) Reset() {
+	*x = CancelTaskResponse{}
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[22]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *CancelTaskResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*CancelTaskResponse) ProtoMessage() {}
+
+func (x *CancelTaskResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[22]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use CancelTaskResponse.ProtoReflect.Descriptor instead.
+func (*CancelTaskResponse) Descriptor() ([]byte, []int) {
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{22}
+}
+
+func (x *CancelTaskResponse) GetSuccess() bool {
+	if x != nil {
+		return x.Success
+	}
+	return false
+}
+
+type GetTaskRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Queue         string                 `protobuf:"bytes,1,opt,name=queue,proto3" json:"queue,omitempty"`
+	TaskId        string                 `protobuf:"bytes,2,opt,name=task_id,json=taskId,proto3" json:"task_id,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetTaskRequest) Reset() {
+	*x = GetTaskRequest{}
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[23]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetTaskRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetTaskRequest) ProtoMessage() {}
+
+func (x *GetTaskRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[23]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetTaskRequest.ProtoReflect.Descriptor instead.
+func (*GetTaskRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{23}
+}
+
+func (x *GetTaskRequest) GetQueue() string {
+	if x != nil {
+		return x.Queue
+	}
+	return ""
+}
+
+func (x *GetTaskRequest) GetTaskId() string {
+	if x != nil {
+		return x.TaskId
+	}
+	return ""
+}
+
+// TaskInfo is durable inspector metadata (not the full stream payload).
+type TaskInfo struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Id            string                 `protobuf:"bytes,1,opt,name=id,proto3" json:"id,omitempty"`
+	Queue         string                 `protobuf:"bytes,2,opt,name=queue,proto3" json:"queue,omitempty"`
+	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	State         string                 `protobuf:"bytes,4,opt,name=state,proto3" json:"state,omitempty"`
+	Retry         int32                  `protobuf:"varint,5,opt,name=retry,proto3" json:"retry,omitempty"`
+	MaxRetry      int32                  `protobuf:"varint,6,opt,name=max_retry,json=maxRetry,proto3" json:"max_retry,omitempty"`
+	LastError     string                 `protobuf:"bytes,7,opt,name=last_error,json=lastError,proto3" json:"last_error,omitempty"`
+	TimeoutMs     int64                  `protobuf:"varint,8,opt,name=timeout_ms,json=timeoutMs,proto3" json:"timeout_ms,omitempty"`
+	DeadlineMs    int64                  `protobuf:"varint,9,opt,name=deadline_ms,json=deadlineMs,proto3" json:"deadline_ms,omitempty"`
+	UniqueKey     string                 `protobuf:"bytes,10,opt,name=unique_key,json=uniqueKey,proto3" json:"unique_key,omitempty"`
+	GroupKey      string                 `protobuf:"bytes,11,opt,name=group_key,json=groupKey,proto3" json:"group_key,omitempty"`
+	StreamId      string                 `protobuf:"bytes,12,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
+	Result        []byte                 `protobuf:"bytes,13,opt,name=result,proto3" json:"result,omitempty"`
+	Progress      int32                  `protobuf:"varint,14,opt,name=progress,proto3" json:"progress,omitempty"`
+	ProgressData  string                 `protobuf:"bytes,15,opt,name=progress_data,json=progressData,proto3" json:"progress_data,omitempty"`
+	CreatedAtMs   int64                  `protobuf:"varint,16,opt,name=created_at_ms,json=createdAtMs,proto3" json:"created_at_ms,omitempty"`
+	UpdatedAtMs   int64                  `protobuf:"varint,17,opt,name=updated_at_ms,json=updatedAtMs,proto3" json:"updated_at_ms,omitempty"`
+	CompletedAtMs int64                  `protobuf:"varint,18,opt,name=completed_at_ms,json=completedAtMs,proto3" json:"completed_at_ms,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *TaskInfo) Reset() {
+	*x = TaskInfo{}
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[24]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *TaskInfo) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*TaskInfo) ProtoMessage() {}
+
+func (x *TaskInfo) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[24]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use TaskInfo.ProtoReflect.Descriptor instead.
+func (*TaskInfo) Descriptor() ([]byte, []int) {
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{24}
+}
+
+func (x *TaskInfo) GetId() string {
+	if x != nil {
+		return x.Id
+	}
+	return ""
+}
+
+func (x *TaskInfo) GetQueue() string {
+	if x != nil {
+		return x.Queue
+	}
+	return ""
+}
+
+func (x *TaskInfo) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *TaskInfo) GetState() string {
+	if x != nil {
+		return x.State
+	}
+	return ""
+}
+
+func (x *TaskInfo) GetRetry() int32 {
+	if x != nil {
+		return x.Retry
+	}
+	return 0
+}
+
+func (x *TaskInfo) GetMaxRetry() int32 {
+	if x != nil {
+		return x.MaxRetry
+	}
+	return 0
+}
+
+func (x *TaskInfo) GetLastError() string {
+	if x != nil {
+		return x.LastError
+	}
+	return ""
+}
+
+func (x *TaskInfo) GetTimeoutMs() int64 {
+	if x != nil {
+		return x.TimeoutMs
+	}
+	return 0
+}
+
+func (x *TaskInfo) GetDeadlineMs() int64 {
+	if x != nil {
+		return x.DeadlineMs
+	}
+	return 0
+}
+
+func (x *TaskInfo) GetUniqueKey() string {
+	if x != nil {
+		return x.UniqueKey
+	}
+	return ""
+}
+
+func (x *TaskInfo) GetGroupKey() string {
+	if x != nil {
+		return x.GroupKey
+	}
+	return ""
+}
+
+func (x *TaskInfo) GetStreamId() string {
+	if x != nil {
+		return x.StreamId
+	}
+	return ""
+}
+
+func (x *TaskInfo) GetResult() []byte {
+	if x != nil {
+		return x.Result
+	}
+	return nil
+}
+
+func (x *TaskInfo) GetProgress() int32 {
+	if x != nil {
+		return x.Progress
+	}
+	return 0
+}
+
+func (x *TaskInfo) GetProgressData() string {
+	if x != nil {
+		return x.ProgressData
+	}
+	return ""
+}
+
+func (x *TaskInfo) GetCreatedAtMs() int64 {
+	if x != nil {
+		return x.CreatedAtMs
+	}
+	return 0
+}
+
+func (x *TaskInfo) GetUpdatedAtMs() int64 {
+	if x != nil {
+		return x.UpdatedAtMs
+	}
+	return 0
+}
+
+func (x *TaskInfo) GetCompletedAtMs() int64 {
+	if x != nil {
+		return x.CompletedAtMs
+	}
+	return 0
+}
+
+type GetTaskResponse struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// Present when meta exists; omitted/empty when not found.
+	Task          *TaskInfo `protobuf:"bytes,1,opt,name=task,proto3" json:"task,omitempty"`
+	Found         bool      `protobuf:"varint,2,opt,name=found,proto3" json:"found,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *GetTaskResponse) Reset() {
+	*x = GetTaskResponse{}
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[25]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *GetTaskResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*GetTaskResponse) ProtoMessage() {}
+
+func (x *GetTaskResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[25]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use GetTaskResponse.ProtoReflect.Descriptor instead.
+func (*GetTaskResponse) Descriptor() ([]byte, []int) {
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{25}
+}
+
+func (x *GetTaskResponse) GetTask() *TaskInfo {
+	if x != nil {
+		return x.Task
+	}
+	return nil
+}
+
+func (x *GetTaskResponse) GetFound() bool {
+	if x != nil {
+		return x.Found
+	}
+	return false
+}
+
+type ListScheduledTasksRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Queue         string                 `protobuf:"bytes,1,opt,name=queue,proto3" json:"queue,omitempty"`
+	Limit         int32                  `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListScheduledTasksRequest) Reset() {
+	*x = ListScheduledTasksRequest{}
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[26]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListScheduledTasksRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListScheduledTasksRequest) ProtoMessage() {}
+
+func (x *ListScheduledTasksRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[26]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListScheduledTasksRequest.ProtoReflect.Descriptor instead.
+func (*ListScheduledTasksRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{26}
+}
+
+func (x *ListScheduledTasksRequest) GetQueue() string {
+	if x != nil {
+		return x.Queue
+	}
+	return ""
+}
+
+func (x *ListScheduledTasksRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+type ScheduledTask struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Task          *Task                  `protobuf:"bytes,1,opt,name=task,proto3" json:"task,omitempty"`
+	RunAtMs       int64                  `protobuf:"varint,2,opt,name=run_at_ms,json=runAtMs,proto3" json:"run_at_ms,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ScheduledTask) Reset() {
+	*x = ScheduledTask{}
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[27]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ScheduledTask) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ScheduledTask) ProtoMessage() {}
+
+func (x *ScheduledTask) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[27]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ScheduledTask.ProtoReflect.Descriptor instead.
+func (*ScheduledTask) Descriptor() ([]byte, []int) {
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{27}
+}
+
+func (x *ScheduledTask) GetTask() *Task {
+	if x != nil {
+		return x.Task
+	}
+	return nil
+}
+
+func (x *ScheduledTask) GetRunAtMs() int64 {
+	if x != nil {
+		return x.RunAtMs
+	}
+	return 0
+}
+
+type ListScheduledTasksResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tasks         []*ScheduledTask       `protobuf:"bytes,1,rep,name=tasks,proto3" json:"tasks,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListScheduledTasksResponse) Reset() {
+	*x = ListScheduledTasksResponse{}
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[28]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListScheduledTasksResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListScheduledTasksResponse) ProtoMessage() {}
+
+func (x *ListScheduledTasksResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[28]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListScheduledTasksResponse.ProtoReflect.Descriptor instead.
+func (*ListScheduledTasksResponse) Descriptor() ([]byte, []int) {
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{28}
+}
+
+func (x *ListScheduledTasksResponse) GetTasks() []*ScheduledTask {
+	if x != nil {
+		return x.Tasks
+	}
+	return nil
+}
+
+type ListActiveTasksRequest struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Queue         string                 `protobuf:"bytes,1,opt,name=queue,proto3" json:"queue,omitempty"`
+	Limit         int32                  `protobuf:"varint,2,opt,name=limit,proto3" json:"limit,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListActiveTasksRequest) Reset() {
+	*x = ListActiveTasksRequest{}
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[29]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListActiveTasksRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListActiveTasksRequest) ProtoMessage() {}
+
+func (x *ListActiveTasksRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[29]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListActiveTasksRequest.ProtoReflect.Descriptor instead.
+func (*ListActiveTasksRequest) Descriptor() ([]byte, []int) {
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{29}
+}
+
+func (x *ListActiveTasksRequest) GetQueue() string {
+	if x != nil {
+		return x.Queue
+	}
+	return ""
+}
+
+func (x *ListActiveTasksRequest) GetLimit() int32 {
+	if x != nil {
+		return x.Limit
+	}
+	return 0
+}
+
+type ActiveTask struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Task          *Task                  `protobuf:"bytes,1,opt,name=task,proto3" json:"task,omitempty"`
+	StreamId      string                 `protobuf:"bytes,2,opt,name=stream_id,json=streamId,proto3" json:"stream_id,omitempty"`
+	Status        string                 `protobuf:"bytes,3,opt,name=status,proto3" json:"status,omitempty"` // Pending | Processing
+	Consumer      string                 `protobuf:"bytes,4,opt,name=consumer,proto3" json:"consumer,omitempty"`
+	Deliveries    int64                  `protobuf:"varint,5,opt,name=deliveries,proto3" json:"deliveries,omitempty"`
+	EnqueuedAtMs  int64                  `protobuf:"varint,6,opt,name=enqueued_at_ms,json=enqueuedAtMs,proto3" json:"enqueued_at_ms,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ActiveTask) Reset() {
+	*x = ActiveTask{}
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[30]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ActiveTask) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ActiveTask) ProtoMessage() {}
+
+func (x *ActiveTask) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[30]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ActiveTask.ProtoReflect.Descriptor instead.
+func (*ActiveTask) Descriptor() ([]byte, []int) {
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{30}
+}
+
+func (x *ActiveTask) GetTask() *Task {
+	if x != nil {
+		return x.Task
+	}
+	return nil
+}
+
+func (x *ActiveTask) GetStreamId() string {
+	if x != nil {
+		return x.StreamId
+	}
+	return ""
+}
+
+func (x *ActiveTask) GetStatus() string {
+	if x != nil {
+		return x.Status
+	}
+	return ""
+}
+
+func (x *ActiveTask) GetConsumer() string {
+	if x != nil {
+		return x.Consumer
+	}
+	return ""
+}
+
+func (x *ActiveTask) GetDeliveries() int64 {
+	if x != nil {
+		return x.Deliveries
+	}
+	return 0
+}
+
+func (x *ActiveTask) GetEnqueuedAtMs() int64 {
+	if x != nil {
+		return x.EnqueuedAtMs
+	}
+	return 0
+}
+
+type ListActiveTasksResponse struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	Tasks         []*ActiveTask          `protobuf:"bytes,1,rep,name=tasks,proto3" json:"tasks,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *ListActiveTasksResponse) Reset() {
+	*x = ListActiveTasksResponse{}
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[31]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *ListActiveTasksResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*ListActiveTasksResponse) ProtoMessage() {}
+
+func (x *ListActiveTasksResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_api_proto_taskmq_v1_taskmq_proto_msgTypes[31]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use ListActiveTasksResponse.ProtoReflect.Descriptor instead.
+func (*ListActiveTasksResponse) Descriptor() ([]byte, []int) {
+	return file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP(), []int{31}
+}
+
+func (x *ListActiveTasksResponse) GetTasks() []*ActiveTask {
+	if x != nil {
+		return x.Tasks
+	}
+	return nil
 }
 
 var File_api_proto_taskmq_v1_taskmq_proto protoreflect.FileDescriptor
@@ -739,7 +1817,13 @@ const file_api_proto_taskmq_v1_taskmq_proto_rawDesc = "" +
 	"\bdelay_ms\x18\x02 \x01(\x03R\adelayMs\"Z\n" +
 	"\x10EnqueueAtRequest\x12#\n" +
 	"\x04task\x18\x01 \x01(\v2\x0f.taskmq.v1.TaskR\x04task\x12!\n" +
-	"\ftimestamp_ms\x18\x02 \x01(\x03R\vtimestampMs\"r\n" +
+	"\ftimestamp_ms\x18\x02 \x01(\x03R\vtimestampMs\"X\n" +
+	"\x12EnqueueBulkRequest\x12%\n" +
+	"\x05tasks\x18\x01 \x03(\v2\x0f.taskmq.v1.TaskR\x05tasks\x12\x1b\n" +
+	"\tfail_fast\x18\x02 \x01(\bR\bfailFast\"W\n" +
+	"\x13EnqueueBulkResponse\x12\x19\n" +
+	"\btask_ids\x18\x01 \x03(\tR\ataskIds\x12%\n" +
+	"\x0efailed_indexes\x18\x02 \x03(\x05R\rfailedIndexes\"r\n" +
 	"\x13RegisterCronRequest\x12\x19\n" +
 	"\bjob_name\x18\x01 \x01(\tR\ajobName\x12\x1b\n" +
 	"\tcron_spec\x18\x02 \x01(\tR\bcronSpec\x12#\n" +
@@ -760,15 +1844,95 @@ const file_api_proto_taskmq_v1_taskmq_proto_rawDesc = "" +
 	"\x05queue\x18\x01 \x01(\tR\x05queue\x12\x17\n" +
 	"\atask_id\x18\x02 \x01(\tR\x06taskId\"3\n" +
 	"\x17RetryDeadLetterResponse\x12\x18\n" +
-	"\asuccess\x18\x01 \x01(\bR\asuccess2\xbf\x04\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\")\n" +
+	"\x11PauseQueueRequest\x12\x14\n" +
+	"\x05queue\x18\x01 \x01(\tR\x05queue\".\n" +
+	"\x12PauseQueueResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\"*\n" +
+	"\x12ResumeQueueRequest\x12\x14\n" +
+	"\x05queue\x18\x01 \x01(\tR\x05queue\"/\n" +
+	"\x13ResumeQueueResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\",\n" +
+	"\x14IsQueuePausedRequest\x12\x14\n" +
+	"\x05queue\x18\x01 \x01(\tR\x05queue\"/\n" +
+	"\x15IsQueuePausedResponse\x12\x16\n" +
+	"\x06paused\x18\x01 \x01(\bR\x06paused\"B\n" +
+	"\x11CancelTaskRequest\x12\x14\n" +
+	"\x05queue\x18\x01 \x01(\tR\x05queue\x12\x17\n" +
+	"\atask_id\x18\x02 \x01(\tR\x06taskId\".\n" +
+	"\x12CancelTaskResponse\x12\x18\n" +
+	"\asuccess\x18\x01 \x01(\bR\asuccess\"?\n" +
+	"\x0eGetTaskRequest\x12\x14\n" +
+	"\x05queue\x18\x01 \x01(\tR\x05queue\x12\x17\n" +
+	"\atask_id\x18\x02 \x01(\tR\x06taskId\"\x8e\x04\n" +
+	"\bTaskInfo\x12\x0e\n" +
+	"\x02id\x18\x01 \x01(\tR\x02id\x12\x14\n" +
+	"\x05queue\x18\x02 \x01(\tR\x05queue\x12\x12\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\x12\x14\n" +
+	"\x05state\x18\x04 \x01(\tR\x05state\x12\x14\n" +
+	"\x05retry\x18\x05 \x01(\x05R\x05retry\x12\x1b\n" +
+	"\tmax_retry\x18\x06 \x01(\x05R\bmaxRetry\x12\x1d\n" +
+	"\n" +
+	"last_error\x18\a \x01(\tR\tlastError\x12\x1d\n" +
+	"\n" +
+	"timeout_ms\x18\b \x01(\x03R\ttimeoutMs\x12\x1f\n" +
+	"\vdeadline_ms\x18\t \x01(\x03R\n" +
+	"deadlineMs\x12\x1d\n" +
+	"\n" +
+	"unique_key\x18\n" +
+	" \x01(\tR\tuniqueKey\x12\x1b\n" +
+	"\tgroup_key\x18\v \x01(\tR\bgroupKey\x12\x1b\n" +
+	"\tstream_id\x18\f \x01(\tR\bstreamId\x12\x16\n" +
+	"\x06result\x18\r \x01(\fR\x06result\x12\x1a\n" +
+	"\bprogress\x18\x0e \x01(\x05R\bprogress\x12#\n" +
+	"\rprogress_data\x18\x0f \x01(\tR\fprogressData\x12\"\n" +
+	"\rcreated_at_ms\x18\x10 \x01(\x03R\vcreatedAtMs\x12\"\n" +
+	"\rupdated_at_ms\x18\x11 \x01(\x03R\vupdatedAtMs\x12&\n" +
+	"\x0fcompleted_at_ms\x18\x12 \x01(\x03R\rcompletedAtMs\"P\n" +
+	"\x0fGetTaskResponse\x12'\n" +
+	"\x04task\x18\x01 \x01(\v2\x13.taskmq.v1.TaskInfoR\x04task\x12\x14\n" +
+	"\x05found\x18\x02 \x01(\bR\x05found\"G\n" +
+	"\x19ListScheduledTasksRequest\x12\x14\n" +
+	"\x05queue\x18\x01 \x01(\tR\x05queue\x12\x14\n" +
+	"\x05limit\x18\x02 \x01(\x05R\x05limit\"P\n" +
+	"\rScheduledTask\x12#\n" +
+	"\x04task\x18\x01 \x01(\v2\x0f.taskmq.v1.TaskR\x04task\x12\x1a\n" +
+	"\trun_at_ms\x18\x02 \x01(\x03R\arunAtMs\"L\n" +
+	"\x1aListScheduledTasksResponse\x12.\n" +
+	"\x05tasks\x18\x01 \x03(\v2\x18.taskmq.v1.ScheduledTaskR\x05tasks\"D\n" +
+	"\x16ListActiveTasksRequest\x12\x14\n" +
+	"\x05queue\x18\x01 \x01(\tR\x05queue\x12\x14\n" +
+	"\x05limit\x18\x02 \x01(\x05R\x05limit\"\xc8\x01\n" +
+	"\n" +
+	"ActiveTask\x12#\n" +
+	"\x04task\x18\x01 \x01(\v2\x0f.taskmq.v1.TaskR\x04task\x12\x1b\n" +
+	"\tstream_id\x18\x02 \x01(\tR\bstreamId\x12\x16\n" +
+	"\x06status\x18\x03 \x01(\tR\x06status\x12\x1a\n" +
+	"\bconsumer\x18\x04 \x01(\tR\bconsumer\x12\x1e\n" +
+	"\n" +
+	"deliveries\x18\x05 \x01(\x03R\n" +
+	"deliveries\x12$\n" +
+	"\x0eenqueued_at_ms\x18\x06 \x01(\x03R\fenqueuedAtMs\"F\n" +
+	"\x17ListActiveTasksResponse\x12+\n" +
+	"\x05tasks\x18\x01 \x03(\v2\x15.taskmq.v1.ActiveTaskR\x05tasks2\xc4\t\n" +
 	"\rTaskMQService\x12@\n" +
 	"\aEnqueue\x12\x19.taskmq.v1.EnqueueRequest\x1a\x1a.taskmq.v1.EnqueueResponse\x12D\n" +
 	"\tEnqueueIn\x12\x1b.taskmq.v1.EnqueueInRequest\x1a\x1a.taskmq.v1.EnqueueResponse\x12D\n" +
-	"\tEnqueueAt\x12\x1b.taskmq.v1.EnqueueAtRequest\x1a\x1a.taskmq.v1.EnqueueResponse\x12O\n" +
+	"\tEnqueueAt\x12\x1b.taskmq.v1.EnqueueAtRequest\x1a\x1a.taskmq.v1.EnqueueResponse\x12L\n" +
+	"\vEnqueueBulk\x12\x1d.taskmq.v1.EnqueueBulkRequest\x1a\x1e.taskmq.v1.EnqueueBulkResponse\x12O\n" +
 	"\fRegisterCron\x12\x1e.taskmq.v1.RegisterCronRequest\x1a\x1f.taskmq.v1.RegisterCronResponse\x12X\n" +
 	"\x0fListDeadLetters\x12!.taskmq.v1.ListDeadLettersRequest\x1a\".taskmq.v1.ListDeadLettersResponse\x12[\n" +
 	"\x10DeleteDeadLetter\x12\".taskmq.v1.DeleteDeadLetterRequest\x1a#.taskmq.v1.DeleteDeadLetterResponse\x12X\n" +
-	"\x0fRetryDeadLetter\x12!.taskmq.v1.RetryDeadLetterRequest\x1a\".taskmq.v1.RetryDeadLetterResponseB6Z4github.com/twn39/taskmq/api/proto/taskmq/v1;taskmqv1b\x06proto3"
+	"\x0fRetryDeadLetter\x12!.taskmq.v1.RetryDeadLetterRequest\x1a\".taskmq.v1.RetryDeadLetterResponse\x12I\n" +
+	"\n" +
+	"PauseQueue\x12\x1c.taskmq.v1.PauseQueueRequest\x1a\x1d.taskmq.v1.PauseQueueResponse\x12L\n" +
+	"\vResumeQueue\x12\x1d.taskmq.v1.ResumeQueueRequest\x1a\x1e.taskmq.v1.ResumeQueueResponse\x12R\n" +
+	"\rIsQueuePaused\x12\x1f.taskmq.v1.IsQueuePausedRequest\x1a .taskmq.v1.IsQueuePausedResponse\x12I\n" +
+	"\n" +
+	"CancelTask\x12\x1c.taskmq.v1.CancelTaskRequest\x1a\x1d.taskmq.v1.CancelTaskResponse\x12@\n" +
+	"\aGetTask\x12\x19.taskmq.v1.GetTaskRequest\x1a\x1a.taskmq.v1.GetTaskResponse\x12a\n" +
+	"\x12ListScheduledTasks\x12$.taskmq.v1.ListScheduledTasksRequest\x1a%.taskmq.v1.ListScheduledTasksResponse\x12X\n" +
+	"\x0fListActiveTasks\x12!.taskmq.v1.ListActiveTasksRequest\x1a\".taskmq.v1.ListActiveTasksResponseB6Z4github.com/twn39/taskmq/api/proto/taskmq/v1;taskmqv1b\x06proto3"
 
 var (
 	file_api_proto_taskmq_v1_taskmq_proto_rawDescOnce sync.Once
@@ -782,47 +1946,88 @@ func file_api_proto_taskmq_v1_taskmq_proto_rawDescGZIP() []byte {
 	return file_api_proto_taskmq_v1_taskmq_proto_rawDescData
 }
 
-var file_api_proto_taskmq_v1_taskmq_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_api_proto_taskmq_v1_taskmq_proto_msgTypes = make([]protoimpl.MessageInfo, 32)
 var file_api_proto_taskmq_v1_taskmq_proto_goTypes = []any{
-	(*Task)(nil),                     // 0: taskmq.v1.Task
-	(*EnqueueRequest)(nil),           // 1: taskmq.v1.EnqueueRequest
-	(*EnqueueResponse)(nil),          // 2: taskmq.v1.EnqueueResponse
-	(*EnqueueInRequest)(nil),         // 3: taskmq.v1.EnqueueInRequest
-	(*EnqueueAtRequest)(nil),         // 4: taskmq.v1.EnqueueAtRequest
-	(*RegisterCronRequest)(nil),      // 5: taskmq.v1.RegisterCronRequest
-	(*RegisterCronResponse)(nil),     // 6: taskmq.v1.RegisterCronResponse
-	(*ListDeadLettersRequest)(nil),   // 7: taskmq.v1.ListDeadLettersRequest
-	(*ListDeadLettersResponse)(nil),  // 8: taskmq.v1.ListDeadLettersResponse
-	(*DeleteDeadLetterRequest)(nil),  // 9: taskmq.v1.DeleteDeadLetterRequest
-	(*DeleteDeadLetterResponse)(nil), // 10: taskmq.v1.DeleteDeadLetterResponse
-	(*RetryDeadLetterRequest)(nil),   // 11: taskmq.v1.RetryDeadLetterRequest
-	(*RetryDeadLetterResponse)(nil),  // 12: taskmq.v1.RetryDeadLetterResponse
+	(*Task)(nil),                       // 0: taskmq.v1.Task
+	(*EnqueueRequest)(nil),             // 1: taskmq.v1.EnqueueRequest
+	(*EnqueueResponse)(nil),            // 2: taskmq.v1.EnqueueResponse
+	(*EnqueueInRequest)(nil),           // 3: taskmq.v1.EnqueueInRequest
+	(*EnqueueAtRequest)(nil),           // 4: taskmq.v1.EnqueueAtRequest
+	(*EnqueueBulkRequest)(nil),         // 5: taskmq.v1.EnqueueBulkRequest
+	(*EnqueueBulkResponse)(nil),        // 6: taskmq.v1.EnqueueBulkResponse
+	(*RegisterCronRequest)(nil),        // 7: taskmq.v1.RegisterCronRequest
+	(*RegisterCronResponse)(nil),       // 8: taskmq.v1.RegisterCronResponse
+	(*ListDeadLettersRequest)(nil),     // 9: taskmq.v1.ListDeadLettersRequest
+	(*ListDeadLettersResponse)(nil),    // 10: taskmq.v1.ListDeadLettersResponse
+	(*DeleteDeadLetterRequest)(nil),    // 11: taskmq.v1.DeleteDeadLetterRequest
+	(*DeleteDeadLetterResponse)(nil),   // 12: taskmq.v1.DeleteDeadLetterResponse
+	(*RetryDeadLetterRequest)(nil),     // 13: taskmq.v1.RetryDeadLetterRequest
+	(*RetryDeadLetterResponse)(nil),    // 14: taskmq.v1.RetryDeadLetterResponse
+	(*PauseQueueRequest)(nil),          // 15: taskmq.v1.PauseQueueRequest
+	(*PauseQueueResponse)(nil),         // 16: taskmq.v1.PauseQueueResponse
+	(*ResumeQueueRequest)(nil),         // 17: taskmq.v1.ResumeQueueRequest
+	(*ResumeQueueResponse)(nil),        // 18: taskmq.v1.ResumeQueueResponse
+	(*IsQueuePausedRequest)(nil),       // 19: taskmq.v1.IsQueuePausedRequest
+	(*IsQueuePausedResponse)(nil),      // 20: taskmq.v1.IsQueuePausedResponse
+	(*CancelTaskRequest)(nil),          // 21: taskmq.v1.CancelTaskRequest
+	(*CancelTaskResponse)(nil),         // 22: taskmq.v1.CancelTaskResponse
+	(*GetTaskRequest)(nil),             // 23: taskmq.v1.GetTaskRequest
+	(*TaskInfo)(nil),                   // 24: taskmq.v1.TaskInfo
+	(*GetTaskResponse)(nil),            // 25: taskmq.v1.GetTaskResponse
+	(*ListScheduledTasksRequest)(nil),  // 26: taskmq.v1.ListScheduledTasksRequest
+	(*ScheduledTask)(nil),              // 27: taskmq.v1.ScheduledTask
+	(*ListScheduledTasksResponse)(nil), // 28: taskmq.v1.ListScheduledTasksResponse
+	(*ListActiveTasksRequest)(nil),     // 29: taskmq.v1.ListActiveTasksRequest
+	(*ActiveTask)(nil),                 // 30: taskmq.v1.ActiveTask
+	(*ListActiveTasksResponse)(nil),    // 31: taskmq.v1.ListActiveTasksResponse
 }
 var file_api_proto_taskmq_v1_taskmq_proto_depIdxs = []int32{
 	0,  // 0: taskmq.v1.EnqueueRequest.task:type_name -> taskmq.v1.Task
 	0,  // 1: taskmq.v1.EnqueueInRequest.task:type_name -> taskmq.v1.Task
 	0,  // 2: taskmq.v1.EnqueueAtRequest.task:type_name -> taskmq.v1.Task
-	0,  // 3: taskmq.v1.RegisterCronRequest.task:type_name -> taskmq.v1.Task
-	0,  // 4: taskmq.v1.ListDeadLettersResponse.tasks:type_name -> taskmq.v1.Task
-	1,  // 5: taskmq.v1.TaskMQService.Enqueue:input_type -> taskmq.v1.EnqueueRequest
-	3,  // 6: taskmq.v1.TaskMQService.EnqueueIn:input_type -> taskmq.v1.EnqueueInRequest
-	4,  // 7: taskmq.v1.TaskMQService.EnqueueAt:input_type -> taskmq.v1.EnqueueAtRequest
-	5,  // 8: taskmq.v1.TaskMQService.RegisterCron:input_type -> taskmq.v1.RegisterCronRequest
-	7,  // 9: taskmq.v1.TaskMQService.ListDeadLetters:input_type -> taskmq.v1.ListDeadLettersRequest
-	9,  // 10: taskmq.v1.TaskMQService.DeleteDeadLetter:input_type -> taskmq.v1.DeleteDeadLetterRequest
-	11, // 11: taskmq.v1.TaskMQService.RetryDeadLetter:input_type -> taskmq.v1.RetryDeadLetterRequest
-	2,  // 12: taskmq.v1.TaskMQService.Enqueue:output_type -> taskmq.v1.EnqueueResponse
-	2,  // 13: taskmq.v1.TaskMQService.EnqueueIn:output_type -> taskmq.v1.EnqueueResponse
-	2,  // 14: taskmq.v1.TaskMQService.EnqueueAt:output_type -> taskmq.v1.EnqueueResponse
-	6,  // 15: taskmq.v1.TaskMQService.RegisterCron:output_type -> taskmq.v1.RegisterCronResponse
-	8,  // 16: taskmq.v1.TaskMQService.ListDeadLetters:output_type -> taskmq.v1.ListDeadLettersResponse
-	10, // 17: taskmq.v1.TaskMQService.DeleteDeadLetter:output_type -> taskmq.v1.DeleteDeadLetterResponse
-	12, // 18: taskmq.v1.TaskMQService.RetryDeadLetter:output_type -> taskmq.v1.RetryDeadLetterResponse
-	12, // [12:19] is the sub-list for method output_type
-	5,  // [5:12] is the sub-list for method input_type
-	5,  // [5:5] is the sub-list for extension type_name
-	5,  // [5:5] is the sub-list for extension extendee
-	0,  // [0:5] is the sub-list for field type_name
+	0,  // 3: taskmq.v1.EnqueueBulkRequest.tasks:type_name -> taskmq.v1.Task
+	0,  // 4: taskmq.v1.RegisterCronRequest.task:type_name -> taskmq.v1.Task
+	0,  // 5: taskmq.v1.ListDeadLettersResponse.tasks:type_name -> taskmq.v1.Task
+	24, // 6: taskmq.v1.GetTaskResponse.task:type_name -> taskmq.v1.TaskInfo
+	0,  // 7: taskmq.v1.ScheduledTask.task:type_name -> taskmq.v1.Task
+	27, // 8: taskmq.v1.ListScheduledTasksResponse.tasks:type_name -> taskmq.v1.ScheduledTask
+	0,  // 9: taskmq.v1.ActiveTask.task:type_name -> taskmq.v1.Task
+	30, // 10: taskmq.v1.ListActiveTasksResponse.tasks:type_name -> taskmq.v1.ActiveTask
+	1,  // 11: taskmq.v1.TaskMQService.Enqueue:input_type -> taskmq.v1.EnqueueRequest
+	3,  // 12: taskmq.v1.TaskMQService.EnqueueIn:input_type -> taskmq.v1.EnqueueInRequest
+	4,  // 13: taskmq.v1.TaskMQService.EnqueueAt:input_type -> taskmq.v1.EnqueueAtRequest
+	5,  // 14: taskmq.v1.TaskMQService.EnqueueBulk:input_type -> taskmq.v1.EnqueueBulkRequest
+	7,  // 15: taskmq.v1.TaskMQService.RegisterCron:input_type -> taskmq.v1.RegisterCronRequest
+	9,  // 16: taskmq.v1.TaskMQService.ListDeadLetters:input_type -> taskmq.v1.ListDeadLettersRequest
+	11, // 17: taskmq.v1.TaskMQService.DeleteDeadLetter:input_type -> taskmq.v1.DeleteDeadLetterRequest
+	13, // 18: taskmq.v1.TaskMQService.RetryDeadLetter:input_type -> taskmq.v1.RetryDeadLetterRequest
+	15, // 19: taskmq.v1.TaskMQService.PauseQueue:input_type -> taskmq.v1.PauseQueueRequest
+	17, // 20: taskmq.v1.TaskMQService.ResumeQueue:input_type -> taskmq.v1.ResumeQueueRequest
+	19, // 21: taskmq.v1.TaskMQService.IsQueuePaused:input_type -> taskmq.v1.IsQueuePausedRequest
+	21, // 22: taskmq.v1.TaskMQService.CancelTask:input_type -> taskmq.v1.CancelTaskRequest
+	23, // 23: taskmq.v1.TaskMQService.GetTask:input_type -> taskmq.v1.GetTaskRequest
+	26, // 24: taskmq.v1.TaskMQService.ListScheduledTasks:input_type -> taskmq.v1.ListScheduledTasksRequest
+	29, // 25: taskmq.v1.TaskMQService.ListActiveTasks:input_type -> taskmq.v1.ListActiveTasksRequest
+	2,  // 26: taskmq.v1.TaskMQService.Enqueue:output_type -> taskmq.v1.EnqueueResponse
+	2,  // 27: taskmq.v1.TaskMQService.EnqueueIn:output_type -> taskmq.v1.EnqueueResponse
+	2,  // 28: taskmq.v1.TaskMQService.EnqueueAt:output_type -> taskmq.v1.EnqueueResponse
+	6,  // 29: taskmq.v1.TaskMQService.EnqueueBulk:output_type -> taskmq.v1.EnqueueBulkResponse
+	8,  // 30: taskmq.v1.TaskMQService.RegisterCron:output_type -> taskmq.v1.RegisterCronResponse
+	10, // 31: taskmq.v1.TaskMQService.ListDeadLetters:output_type -> taskmq.v1.ListDeadLettersResponse
+	12, // 32: taskmq.v1.TaskMQService.DeleteDeadLetter:output_type -> taskmq.v1.DeleteDeadLetterResponse
+	14, // 33: taskmq.v1.TaskMQService.RetryDeadLetter:output_type -> taskmq.v1.RetryDeadLetterResponse
+	16, // 34: taskmq.v1.TaskMQService.PauseQueue:output_type -> taskmq.v1.PauseQueueResponse
+	18, // 35: taskmq.v1.TaskMQService.ResumeQueue:output_type -> taskmq.v1.ResumeQueueResponse
+	20, // 36: taskmq.v1.TaskMQService.IsQueuePaused:output_type -> taskmq.v1.IsQueuePausedResponse
+	22, // 37: taskmq.v1.TaskMQService.CancelTask:output_type -> taskmq.v1.CancelTaskResponse
+	25, // 38: taskmq.v1.TaskMQService.GetTask:output_type -> taskmq.v1.GetTaskResponse
+	28, // 39: taskmq.v1.TaskMQService.ListScheduledTasks:output_type -> taskmq.v1.ListScheduledTasksResponse
+	31, // 40: taskmq.v1.TaskMQService.ListActiveTasks:output_type -> taskmq.v1.ListActiveTasksResponse
+	26, // [26:41] is the sub-list for method output_type
+	11, // [11:26] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_api_proto_taskmq_v1_taskmq_proto_init() }
@@ -836,7 +2041,7 @@ func file_api_proto_taskmq_v1_taskmq_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_api_proto_taskmq_v1_taskmq_proto_rawDesc), len(file_api_proto_taskmq_v1_taskmq_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   13,
+			NumMessages:   32,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

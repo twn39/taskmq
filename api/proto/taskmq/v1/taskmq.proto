@@ -4,16 +4,36 @@ package taskmq.v1;
 
 option go_package = "github.com/twn39/taskmq/api/proto/taskmq/v1;taskmqv1";
 
-// TaskMQService provides APIs for multi-language enqueuing and queue management.
+// TaskMQService is the multi-language producer, DLQ, and ops control API.
+//
+// Scope:
+//   - Enqueue immediate / delayed / bulk tasks
+//   - Register cron jobs
+//   - List / delete / retry dead letters
+//   - Queue pause / resume
+//   - Cancel task, get task meta, list scheduled / active
+//
+// Dashboard, lifecycle metrics scrape, and events feed remain on HTTP admin
+// and taskmq-cli. See docs/OPERATIONS.md "API surfaces".
 service TaskMQService {
   rpc Enqueue(EnqueueRequest) returns (EnqueueResponse);
   rpc EnqueueIn(EnqueueInRequest) returns (EnqueueResponse);
   rpc EnqueueAt(EnqueueAtRequest) returns (EnqueueResponse);
+  rpc EnqueueBulk(EnqueueBulkRequest) returns (EnqueueBulkResponse);
   rpc RegisterCron(RegisterCronRequest) returns (RegisterCronResponse);
 
   rpc ListDeadLetters(ListDeadLettersRequest) returns (ListDeadLettersResponse);
   rpc DeleteDeadLetter(DeleteDeadLetterRequest) returns (DeleteDeadLetterResponse);
   rpc RetryDeadLetter(RetryDeadLetterRequest) returns (RetryDeadLetterResponse);
+
+  // Ops / inspect (parity with HTTP admin + CLI task/queue controls).
+  rpc PauseQueue(PauseQueueRequest) returns (PauseQueueResponse);
+  rpc ResumeQueue(ResumeQueueRequest) returns (ResumeQueueResponse);
+  rpc IsQueuePaused(IsQueuePausedRequest) returns (IsQueuePausedResponse);
+  rpc CancelTask(CancelTaskRequest) returns (CancelTaskResponse);
+  rpc GetTask(GetTaskRequest) returns (GetTaskResponse);
+  rpc ListScheduledTasks(ListScheduledTasksRequest) returns (ListScheduledTasksResponse);
+  rpc ListActiveTasks(ListActiveTasksRequest) returns (ListActiveTasksResponse);
 }
 
 message Task {
@@ -44,6 +64,16 @@ message EnqueueInRequest {
 message EnqueueAtRequest {
   Task task = 1;
   int64 timestamp_ms = 2;
+}
+
+message EnqueueBulkRequest {
+  repeated Task tasks = 1;
+  bool fail_fast = 2;
+}
+
+message EnqueueBulkResponse {
+  repeated string task_ids = 1;
+  repeated int32 failed_indexes = 2;
 }
 
 message RegisterCronRequest {
@@ -81,4 +111,104 @@ message RetryDeadLetterRequest {
 
 message RetryDeadLetterResponse {
   bool success = 1;
+}
+
+// --- Ops / inspect ---
+
+message PauseQueueRequest {
+  string queue = 1;
+}
+
+message PauseQueueResponse {
+  bool success = 1;
+}
+
+message ResumeQueueRequest {
+  string queue = 1;
+}
+
+message ResumeQueueResponse {
+  bool success = 1;
+}
+
+message IsQueuePausedRequest {
+  string queue = 1;
+}
+
+message IsQueuePausedResponse {
+  bool paused = 1;
+}
+
+message CancelTaskRequest {
+  string queue = 1;
+  string task_id = 2;
+}
+
+message CancelTaskResponse {
+  bool success = 1;
+}
+
+message GetTaskRequest {
+  string queue = 1;
+  string task_id = 2;
+}
+
+// TaskInfo is durable inspector metadata (not the full stream payload).
+message TaskInfo {
+  string id = 1;
+  string queue = 2;
+  string name = 3;
+  string state = 4;
+  int32 retry = 5;
+  int32 max_retry = 6;
+  string last_error = 7;
+  int64 timeout_ms = 8;
+  int64 deadline_ms = 9;
+  string unique_key = 10;
+  string group_key = 11;
+  string stream_id = 12;
+  bytes result = 13;
+  int32 progress = 14;
+  string progress_data = 15;
+  int64 created_at_ms = 16;
+  int64 updated_at_ms = 17;
+  int64 completed_at_ms = 18;
+}
+
+message GetTaskResponse {
+  // Present when meta exists; omitted/empty when not found.
+  TaskInfo task = 1;
+  bool found = 2;
+}
+
+message ListScheduledTasksRequest {
+  string queue = 1;
+  int32 limit = 2;
+}
+
+message ScheduledTask {
+  Task task = 1;
+  int64 run_at_ms = 2;
+}
+
+message ListScheduledTasksResponse {
+  repeated ScheduledTask tasks = 1;
+}
+
+message ListActiveTasksRequest {
+  string queue = 1;
+  int32 limit = 2;
+}
+
+message ActiveTask {
+  Task task = 1;
+  string stream_id = 2;
+  string status = 3; // Pending | Processing
+  string consumer = 4;
+  int64 deliveries = 5;
+  int64 enqueued_at_ms = 6;
+}
+
+message ListActiveTasksResponse {
+  repeated ActiveTask tasks = 1;
 }

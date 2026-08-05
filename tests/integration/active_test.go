@@ -24,10 +24,10 @@ func TestTaskMQ_ActiveInspector_ListTasks(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "active_list_test_queue"
+	queueName := UniqueQueue(t, "active_list")
 	streamKey := keys.KeysFor(queueName).Stream()
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -76,10 +76,10 @@ func TestTaskMQ_ActiveInspector_DeletePending(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "active_delete_test_queue"
+	queueName := UniqueQueue(t, "active_del")
 	streamKey := keys.KeysFor(queueName).Stream()
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -137,13 +137,13 @@ func TestTaskMQ_ActiveInspector_DeleteProcessingAndCancel(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
 
-	queueName := "active_del_proc_test_queue"
+	queueName := UniqueQueue(t, "active_del_proc")
 	streamKey := keys.KeysFor(queueName).Stream()
 
 	startedChan := make(chan string, 1)
 	resultChan := make(chan error, 1)
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -152,7 +152,7 @@ func TestTaskMQ_ActiveInspector_DeleteProcessingAndCancel(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("active-inspect-group"),
 					mqworker.WithConsumer("active-inspect-consumer"),

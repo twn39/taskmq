@@ -23,11 +23,11 @@ import (
 
 func TestTaskMQ_GCRARateLimiting(t *testing.T) {
 	ctx := context.Background()
-	var rdb *redis.Client
+	var rdb redis.UniversalClient
 	var client mqclient.Client
 	var worker mqworker.Worker
 
-	qName := "gcra_rate_limit_queue"
+	qName := UniqueQueue(t, "gcra")
 
 	app := fxtest.New(
 		t,
@@ -118,11 +118,11 @@ func TestTaskMQ_GCRARateLimiting(t *testing.T) {
 
 func TestTaskMQ_GroupRateLimiting(t *testing.T) {
 	ctx := context.Background()
-	var rdb *redis.Client
+	var rdb redis.UniversalClient
 	var client mqclient.Client
 	var worker mqworker.Worker
 
-	qName := "group_rate_limit_queue"
+	qName := UniqueQueue(t, "group_rl")
 
 	app := fxtest.New(
 		t,
@@ -223,12 +223,12 @@ func TestTaskMQ_GroupRateLimiting(t *testing.T) {
 
 func TestTaskMQ_PriorityQueueRateLimiting(t *testing.T) {
 	ctx := context.Background()
-	var rdb *redis.Client
+	var rdb redis.UniversalClient
 	var client mqclient.Client
 	var worker mqworker.Worker
 
-	qLow := "pq_rl_low"
-	qCritical := "pq_rl_critical"
+	qLow := UniqueQueue(t, "pq_rl_low")
+	qCritical := UniqueQueue(t, "pq_rl_crit")
 
 	app := fxtest.New(
 		t,
@@ -341,11 +341,11 @@ func TestTaskMQ_PriorityQueueRateLimiting(t *testing.T) {
 
 func TestTaskMQ_RateLimitDeferralAtomicity(t *testing.T) {
 	ctx := context.Background()
-	var rdb *redis.Client
+	var rdb redis.UniversalClient
 	var client mqclient.Client
 	var worker mqworker.Worker
 
-	qName := "atomicity_rate_limit_queue"
+	qName := UniqueQueue(t, "atom_rl")
 
 	app := fxtest.New(
 		t,

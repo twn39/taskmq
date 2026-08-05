@@ -23,13 +23,13 @@ func TestTaskMQ_DelayedFlow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	queueName := "delayed_test_queue"
+	queueName := UniqueQueue(t, "delayed")
 	streamKey := keys.KeysFor(queueName).Stream()
 	delayedKey := keys.KeysFor(queueName).Delayed()
 
 	runChan := make(chan time.Time, 1)
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -38,7 +38,7 @@ func TestTaskMQ_DelayedFlow(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("delayed-group"),
 					mqworker.WithConsumer("delayed-consumer"),
@@ -84,13 +84,13 @@ func TestTaskMQ_TimeoutCancellationFlow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	queueName := "timeout_test_queue"
+	queueName := UniqueQueue(t, "timeout")
 	streamKey := keys.KeysFor(queueName).Stream()
 	delayedKey := keys.KeysFor(queueName).Delayed()
 
 	var execCount int64
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -99,7 +99,7 @@ func TestTaskMQ_TimeoutCancellationFlow(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("timeout-group"),
 					mqworker.WithConsumer("timeout-consumer"),
@@ -158,13 +158,13 @@ func TestTaskMQ_DelayedSchedulerWakeup(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "wakeup_test_queue"
+	queueName := UniqueQueue(t, "wakeup")
 	streamKey := keys.KeysFor(queueName).Stream()
 	delayedKey := keys.KeysFor(queueName).Delayed()
 
 	runChan := make(chan time.Time, 1)
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -173,7 +173,7 @@ func TestTaskMQ_DelayedSchedulerWakeup(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				// We configure the scheduler with a very long poll interval (e.g. 5 seconds)
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("wakeup-group"),

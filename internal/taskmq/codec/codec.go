@@ -51,6 +51,10 @@ func (BinaryCodec) Marshal(t *task.Task) ([]byte, error) {
 	size += 4 + len(t.LastError)
 	size += 2 + len(t.CronSpec)
 	size += 8 // CreatedAt (int64 Unix nano)
+	// Trailing optional fields (v2): UniqueScope, GroupKey, DeadlineMs
+	size += 4                 // UniqueScope int32
+	size += 2 + len(t.GroupKey)
+	size += 8 // DeadlineMs int64
 
 	buf := make([]byte, size)
 	offset := 0
@@ -95,6 +99,12 @@ func (BinaryCodec) Marshal(t *task.Task) ([]byte, error) {
 	writeString16(t.CronSpec)
 
 	binary.BigEndian.PutUint64(buf[offset:], uint64(t.CreatedAt.UnixNano()))
+	offset += 8
+
+	binary.BigEndian.PutUint32(buf[offset:], uint32(t.UniqueScope))
+	offset += 4
+	writeString16(t.GroupKey)
+	binary.BigEndian.PutUint64(buf[offset:], uint64(t.DeadlineMs))
 	offset += 8
 
 	return buf, nil
@@ -212,6 +222,22 @@ func (BinaryCodec) Unmarshal(data []byte, t *task.Task) error {
 	unixNano := int64(binary.BigEndian.Uint64(data[offset:]))
 	t.CreatedAt = time.Unix(0, unixNano)
 	offset += 8
+
+	// Optional trailing fields (backward compatible with older payloads).
+	if offset+4 <= len(data) {
+		t.UniqueScope = task.UniqueScope(binary.BigEndian.Uint32(data[offset:]))
+		offset += 4
+	}
+	if offset+2 <= len(data) {
+		t.GroupKey, err = readString16()
+		if err != nil {
+			return err
+		}
+	}
+	if offset+8 <= len(data) {
+		t.DeadlineMs = int64(binary.BigEndian.Uint64(data[offset:]))
+		offset += 8
+	}
 
 	return nil
 }

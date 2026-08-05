@@ -1,0 +1,21 @@
+# Optional Redis Cluster for TaskMQ multi-key / hash-tag smoke tests.
+#
+#   docker compose -f docker-compose.cluster.yml up -d
+#   export TASKMQ_REDIS_CLUSTER_ADDRS=127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002
+#   go test ./tests/integration/ -run ClusterHashTag -v
+#
+# Uses grokzen/redis-cluster (6 nodes mapped to 7000-7005). Tear down with:
+#   docker compose -f docker-compose.cluster.yml down -v
+
+services:
+  redis-cluster:
+    image: grokzen/redis-cluster:7.0.15
+    ports:
+      - "7000-7005:7000-7005"
+    environment:
+      IP: "0.0.0.0"
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "7000", "cluster", "info"]
+      interval: 5s
+      timeout: 5s
+      retries: 20

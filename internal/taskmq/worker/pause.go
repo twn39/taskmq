@@ -12,7 +12,7 @@ import (
 
 // PauseController tracks per-queue pause state and wakes waiters on resume.
 type PauseController struct {
-	rdb    *redis.Client
+	rdb    redis.UniversalClient
 	logger *zap.Logger
 
 	mu           sync.RWMutex
@@ -21,7 +21,7 @@ type PauseController struct {
 }
 
 // NewPauseController creates an empty pause controller.
-func NewPauseController(rdb *redis.Client, logger *zap.Logger) *PauseController {
+func NewPauseController(rdb redis.UniversalClient, logger *zap.Logger) *PauseController {
 	return &PauseController{
 		rdb:          rdb,
 		logger:       logger,

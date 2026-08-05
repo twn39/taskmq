@@ -24,7 +24,7 @@ func TestTaskMQ_MVPFlow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "mvp_test_queue"
+	queueName := UniqueQueue(t, "mvp")
 	streamKey := keys.KeysFor(queueName).Stream()
 
 	type WelcomeEmail struct {
@@ -34,7 +34,7 @@ func TestTaskMQ_MVPFlow(t *testing.T) {
 
 	runChan := make(chan *WelcomeEmail, 1)
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 	var worker mqworker.Worker
 
@@ -44,7 +44,7 @@ func TestTaskMQ_MVPFlow(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("test-group"),
 					mqworker.WithConsumer("test-consumer"),
@@ -104,12 +104,12 @@ func TestTaskMQ_SyncExecution(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "sync_exec_test_queue"
+	queueName := UniqueQueue(t, "sync")
 	streamKey := keys.KeysFor(queueName).Stream()
 
 	runChan := make(chan string, 1)
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 	var worker mqworker.Worker
 
@@ -118,10 +118,10 @@ func TestTaskMQ_SyncExecution(t *testing.T) {
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			func(rdb *goredis.Client) mqclient.Client {
+			func(rdb goredis.UniversalClient) mqclient.Client {
 				return mqclient.NewClient(rdb)
 			},
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithConcurrency(2),
 					mqworker.WithSyncExecution(true),
@@ -163,12 +163,12 @@ func TestTaskMQ_ExecutionPoolPanicRecovery(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "pool_panic_test_queue"
+	queueName := UniqueQueue(t, "panic")
 	streamKey := keys.KeysFor(queueName).Stream()
 	dlqKey := keys.KeysFor(queueName).DLQ()
 	dlqIndexKey := keys.KeysFor(queueName).DLQIndex()
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 	var worker mqworker.Worker
 
@@ -177,10 +177,10 @@ func TestTaskMQ_ExecutionPoolPanicRecovery(t *testing.T) {
 			NewTestConfig,
 			logger.NewLogger,
 			internalredis.NewRedisClient,
-			func(rdb *goredis.Client) mqclient.Client {
+			func(rdb goredis.UniversalClient) mqclient.Client {
 				return mqclient.NewClient(rdb)
 			},
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithConcurrency(2),
 				)

@@ -23,14 +23,14 @@ func TestTaskMQ_TaskCancellationFlow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "cancel_test_queue"
+	queueName := UniqueQueue(t, "cancel_run")
 	streamKey := keys.KeysFor(queueName).Stream()
 	taskID := "test-running-cancel-id"
 
 	startedChan := make(chan string, 1)
 	resultChan := make(chan error, 1)
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -39,7 +39,7 @@ func TestTaskMQ_TaskCancellationFlow(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("cancel-group"),
 					mqworker.WithConsumer("cancel-consumer"),
@@ -105,14 +105,14 @@ func TestTaskMQ_TaskCancellationBeforeRun(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "cancel_before_run_queue"
+	queueName := UniqueQueue(t, "cancel_before")
 	streamKey := keys.KeysFor(queueName).Stream()
 	taskID := "test-before-cancel-id"
 
 	var mu sync.Mutex
 	handlerInvoked := false
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -121,7 +121,7 @@ func TestTaskMQ_TaskCancellationBeforeRun(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("cancel-before-run-group"),
 					mqworker.WithConsumer("cancel-before-run-consumer"),

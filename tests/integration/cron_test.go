@@ -24,12 +24,12 @@ func TestTaskMQ_CronFlow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	queueName := "cron_test_queue"
+	queueName := UniqueQueue(t, "cron")
 
 	var runCount int64
 	doneChan := make(chan bool, 1)
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 	var worker mqworker.Worker
 
@@ -39,7 +39,7 @@ func TestTaskMQ_CronFlow(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithConcurrency(2),
 					mqworker.WithCronHealingInterval(2*time.Second),
@@ -132,12 +132,12 @@ func TestTaskMQ_CronSelfHealing_CustomConfig(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "cron_healing_custom_test_queue"
+	queueName := UniqueQueue(t, "cron_heal_custom")
 
 	var runCount int64
 	doneChan := make(chan bool, 1)
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 	var worker mqworker.Worker
 
@@ -147,7 +147,7 @@ func TestTaskMQ_CronSelfHealing_CustomConfig(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithConcurrency(1),
 					mqworker.WithCronHealingInterval(1*time.Second),
@@ -237,9 +237,9 @@ func TestTaskMQ_CronSelfHealing_Pagination_ExceededLimit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "cron_healing_pag_exceeded_test_queue"
+	queueName := UniqueQueue(t, "cron_heal_pag_ex")
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -248,7 +248,7 @@ func TestTaskMQ_CronSelfHealing_Pagination_ExceededLimit(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithConcurrency(1),
 					mqworker.WithCronHealingInterval(1*time.Second),
@@ -327,9 +327,9 @@ func TestTaskMQ_CronSelfHealing_Pagination_WithinLimit(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "cron_healing_pag_within_test_queue"
+	queueName := UniqueQueue(t, "cron_heal_pag_in")
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -338,7 +338,7 @@ func TestTaskMQ_CronSelfHealing_Pagination_WithinLimit(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithConcurrency(1),
 					mqworker.WithCronHealingInterval(1*time.Second),
@@ -406,13 +406,13 @@ func TestTaskMQ_CronOverwrite(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "cron_overwrite_test_queue"
+	queueName := UniqueQueue(t, "cron_overwrite")
 
 	var version1Count int64
 	var version2Count int64
 	doneChan := make(chan bool, 1)
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -421,7 +421,7 @@ func TestTaskMQ_CronOverwrite(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithConcurrency(2),
 					mqworker.WithCronHealingInterval(1*time.Second),

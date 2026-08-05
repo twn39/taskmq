@@ -3,7 +3,9 @@ package client
 import (
 	"github.com/redis/go-redis/v9"
 	"github.com/twn39/taskmq/internal/taskmq/codec"
+	"github.com/twn39/taskmq/internal/taskmq/events"
 	"github.com/twn39/taskmq/internal/taskmq/lifecycle"
+	"github.com/twn39/taskmq/internal/taskmq/meta"
 )
 
 // admin composes operational ports into AdminClient.
@@ -13,6 +15,9 @@ type admin struct {
 	ScheduledTaskManager
 	ActiveTaskManager
 	TaskCanceler
+	TaskInspector
+	EventReader
+	WorkerViewer
 }
 
 // facade is the convenience Client implementation via interface embedding.
@@ -30,13 +35,20 @@ func (f *facade) Lifecycle() *lifecycle.Lifecycle {
 }
 
 // NewClient creates a TaskMQ client facade combining enqueue, cron, and admin ports.
-func NewClient(rdb *redis.Client, opts ...ClientOption) Client {
+func NewClient(rdb redis.UniversalClient, opts ...ClientOption) Client {
 	d := deps{
 		rdb:   rdb,
 		codec: codec.JSONCodec{},
+		meta:  meta.NewStore(rdb),
 	}
 	for _, opt := range opts {
 		opt(&d)
+	}
+	if d.meta == nil {
+		d.meta = meta.NewStore(rdb)
+	}
+	if d.events == nil {
+		d.events = events.NewPublisher(rdb, d.eventsMaxLen)
 	}
 
 	enq := &enqueuer{d: d}
@@ -45,6 +57,7 @@ func NewClient(rdb *redis.Client, opts ...ClientOption) Client {
 	sch := &scheduled{d: d}
 	act := &active{d: d, cancel: ctl}
 	crn := &cronService{d: d}
+	insp := &inspector{d: d}
 
 	adm := &admin{
 		DLQManager:           dlqSvc,
@@ -52,6 +65,9 @@ func NewClient(rdb *redis.Client, opts ...ClientOption) Client {
 		ScheduledTaskManager: sch,
 		ActiveTaskManager:    act,
 		TaskCanceler:         ctl,
+		TaskInspector:        insp,
+		EventReader:          insp,
+		WorkerViewer:         insp,
 	}
 
 	f := &facade{
@@ -63,15 +79,18 @@ func NewClient(rdb *redis.Client, opts ...ClientOption) Client {
 
 	// Compile-time interface checks.
 	var (
-		_ Client                 = f
-		_ EnqueueClient          = enq
-		_ CronClient             = crn
-		_ AdminClient            = adm
-		_ DLQManager             = dlqSvc
-		_ QueueController        = ctl
-		_ TaskCanceler           = ctl
-		_ ScheduledTaskManager   = sch
-		_ ActiveTaskManager      = act
+		_ Client               = f
+		_ EnqueueClient        = enq
+		_ CronClient           = crn
+		_ AdminClient          = adm
+		_ DLQManager           = dlqSvc
+		_ QueueController      = ctl
+		_ TaskCanceler         = ctl
+		_ ScheduledTaskManager = sch
+		_ ActiveTaskManager    = act
+		_ TaskInspector        = insp
+		_ EventReader          = insp
+		_ WorkerViewer         = insp
 	)
 	return f
 }

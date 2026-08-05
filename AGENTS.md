@@ -25,10 +25,14 @@ Run all commands from the workspace root directory:
 | **Lint (local optional)** | `golangci-lint run` | Not enforced in CI; config in `.golangci.yml`. |
 | **Key schema** | `./scripts/check_keys_schema.sh` | Ensure Redis key literals only live in `keys` package. |
 | **Unit Tests** | `go test ./internal/... ./tests/unit/... -count=1` | Unit tests (miniredis where needed). |
+| **Coverage config** | [`coverage.yaml`](coverage.yaml) | Per-package floors, report packages, exclude globs, `covermode`. |
+| **Coverage gates** | `./scripts/check_coverage.sh` or `make cover-gate` | Enforce floors from `coverage.yaml`. |
+| **Coverage report** | `./scripts/check_coverage.sh --report` or `make cover` | Gates + `coverage.out` / `coverage.html`. |
 | **Integration Tests** | `go test ./tests/integration/... -v` | Needs Redis on `localhost:6379`. |
+| **Cluster smoke** | `TASKMQ_REDIS_CLUSTER_ADDRS=… go test ./tests/integration/ -run ClusterHashTag` | Optional; see `docker-compose.cluster.yml`. |
 | **All Tests** | `go test ./...` | Unit + integration (Redis required). |
 | **Update Graph** | `codegraph build . -e third_party/` | Rebuild the codebase knowledge graph. |
-| **CI** | `.github/workflows/ci.yml` | GitHub Actions: unit + integration (Redis service). No golangci-lint. |
+| **CI** | `.github/workflows/ci.yml` | Unit + race + coverage gates/artifact, lint, integration (+ nightly race/cluster). |
 
 ---
 
@@ -66,9 +70,13 @@ This project maintains a codebase knowledge graph at `.codegraph/`.
 - **DO** use Uber Fx lifecycle hooks (`fx.Hook`) to register startups/shutdowns of background loops or servers.
 - **DO** decouple third-party/external calls and sub-components (like queue runners) by declaring them as separate Fx providers and injecting them via constructor options.
 - **DO** use the custom `BinaryCodec` for high-performance and zero-allocation serialization in TaskMQ where performance is critical.
+- **DO** keep Redis key literals in the `keys` package only; multi-key Lua must stay hash-tagged under `{queue}` (see `docs/LUA_SCRIPTS.md`, `scripts/check_keys_schema.sh`).
+- **DO** follow terminal-outcome rules in `docs/TERMINAL_OUTCOMES.md`: handlers return `task.SkipRetry`/`error`; middleware returns `worker.Handled`/`Abort`; never XACK from handlers. Extend `tests/integration/settlement_matrix_test.go` for Redis-visible outcomes.
+- **DO** share one `*lifecycle.Lifecycle` between client and workers in production (`BuildWorkerTopologyWithLifecycle` / Fx module). Bare `BuildWorkerTopology` is tests/tools only.
 - **DON'T** introduce circular dependency chains across packages. Keep packages clean and single-purpose.
 - **DON'T** swallow errors. Log them with Zap structured context (`zap.Error(err)`) and return them.
 - **DON'T** ignore lint failures. Although `gofmt` and `typecheck` linters may be disabled or bypassed on external libraries, your Go files must compile cleanly with `go build ./...`.
+- **DON'T** re-export `worker.ErrHandled` to application handlers or block settlement on best-effort meta/events/metrics writes.
 
 ## codegraph-gen
 

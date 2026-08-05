@@ -76,6 +76,11 @@ type LifecycleConfig struct {
 
 	// PurgeCancelledDelayed removes delayed members whose task is cancelled (default true when janitor runs).
 	PurgeCancelledDelayed bool
+
+	// CompletedRetention keeps task meta/results after success (0 = delete meta on complete).
+	CompletedRetention time.Duration
+	// CompletedMaxCount caps completed ZSET members per queue while retention is enabled (0 = unlimited).
+	CompletedMaxCount int64
 }
 
 // DefaultLifecycleConfig returns backward-compatible defaults:
@@ -261,7 +266,7 @@ func (l *Lifecycle) CheckDelayedMaxDelay(runAt time.Time) error {
 }
 
 // NoteSoftLimitIfNeeded samples XLEN and increments soft-limit metrics (non-blocking).
-func (l *Lifecycle) NoteSoftLimitIfNeeded(ctx context.Context, rdb *redis.Client, queue string) {
+func (l *Lifecycle) NoteSoftLimitIfNeeded(ctx context.Context, rdb redis.UniversalClient, queue string) {
 	if l == nil || l.cfg.EnqueueSoftLimit <= 0 {
 		return
 	}

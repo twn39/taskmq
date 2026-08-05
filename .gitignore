@@ -1,6 +1,7 @@
 # Binaries
 *.exe
 *.test
+.bin/
 
 # SQLite
 *.db
@@ -19,3 +20,11 @@
 /static/*
 .codegraph
 code_review.md
+
+# Coverage artifacts
+coverage.out
+coverage.out.raw
+coverage.html
+coverage.txt
+*.coverprofile
+/cover/

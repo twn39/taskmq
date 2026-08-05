@@ -105,8 +105,20 @@ func TestApplyDeliveryCount(t *testing.T) {
 			wantRetry:   1,
 		},
 		{
-			name:        "unsupported type ignored",
+			name:        "string delivery count from Redis",
 			values:      map[string]interface{}{"__delivery_count": "3"},
+			retryBefore: 1,
+			wantRetry:   2,
+		},
+		{
+			name:        "bytes delivery count",
+			values:      map[string]interface{}{"__delivery_count": []byte("4")},
+			retryBefore: 0,
+			wantRetry:   3,
+		},
+		{
+			name:        "non-numeric string ignored",
+			values:      map[string]interface{}{"__delivery_count": "x"},
 			retryBefore: 1,
 			wantRetry:   1,
 		},

@@ -8,8 +8,13 @@ logger:
   level: "info"
 
 # Redis configuration
+# mode: standalone (default) | cluster | sentinel
+# cluster/sentinel: set addrs (seed nodes / sentinels); sentinel also needs master_name
 redis:
+  mode: standalone
   addr: "localhost:6379"
+  # addrs: ["127.0.0.1:7000", "127.0.0.1:7001"]
+  # master_name: "mymaster"
   pool_size: 0 # Maximum number of socket connections (0 resolved dynamically)
 
 # TaskMQ configuration
@@ -25,6 +30,11 @@ taskmq:
   janitor_min_idle_time: 5s
   # How long workers wait for in-flight tasks on graceful stop (default 30s).
   shutdown_timeout: 30s
+  # Optional completed task meta/result retention (0 = delete meta on success; Asynq-like when set).
+  # completed_retention: 24h
+  # completed_max_count: 10000
+  # Approximate MAXLEN for per-queue lifecycle events stream (0 = default 10000).
+  # events_max_len: 10000
   # Memory / storage lifecycle (defaults are production-safe and backward compatible).
   # Hard limits default to 0 (disabled). Enable in prod when needed.
   lifecycle:

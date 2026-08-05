@@ -9,6 +9,8 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/twn39/taskmq/internal/taskmq/broker"
 	"github.com/twn39/taskmq/internal/taskmq/codec"
+	"github.com/twn39/taskmq/internal/taskmq/events"
+	"github.com/twn39/taskmq/internal/taskmq/meta"
 	"github.com/twn39/taskmq/internal/taskmq/policy"
 	"github.com/twn39/taskmq/internal/taskmq/ratelimit"
 	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
@@ -18,7 +20,7 @@ import (
 // baseWorker is the shared runtime kernel for pool and priority workers.
 // Pause, cancel, and message processing are delegated to focused collaborators.
 type baseWorker struct {
-	rdb            *redis.Client
+	rdb            redis.UniversalClient
 	logger         *zap.Logger
 	group          string
 	consumer       string
@@ -59,7 +61,7 @@ type baseWorker struct {
 	shutdownTimeout time.Duration
 }
 
-func (b *baseWorker) initBase(rdb *redis.Client, logger *zap.Logger, opt *WorkerConfig) {
+func (b *baseWorker) initBase(rdb redis.UniversalClient, logger *zap.Logger, opt *WorkerConfig) {
 	b.rdb = rdb
 	b.logger = logger
 	b.handlers = make(map[string]HandlerFunc)
@@ -149,8 +151,8 @@ func (b *baseWorker) buildMiddlewareChain() {
 			if !exists {
 				return fmt.Errorf("%w: %s", taskmodel.ErrNoHandler, c.Task.Name)
 			}
-			if c.Task.TimeoutMs > 0 {
-				timeoutCtx, cancel := context.WithTimeout(c.Context, time.Duration(c.Task.TimeoutMs)*time.Millisecond)
+			if eff := c.Task.EffectiveTimeout(time.Now()); eff > 0 {
+				timeoutCtx, cancel := context.WithTimeout(c.Context, eff)
 				defer cancel()
 				oldCtx := c.Context
 				c.Context = timeoutCtx
@@ -171,6 +173,8 @@ func (b *baseWorker) buildMiddlewareChain() {
 		cancel:           b.cancelHub.Cancelations,
 		handlers:         b.handlers,
 		middlewareChain:  b.middlewareChain,
+		meta:             meta.NewStore(b.rdb),
+		events:           events.NewPublisher(b.rdb, 0),
 	}
 }
 

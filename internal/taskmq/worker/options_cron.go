@@ -13,7 +13,7 @@ import (
 )
 
 // CronManagerFactory builds a cron manager. lc may be nil.
-type CronManagerFactory func(rdb *redis.Client, logger *zap.Logger, queue string, codec codec.Codec, healingInterval time.Duration, healingLockTTL time.Duration, scanBatchSize int, scanMaxCount int, lc *lifecycle.Lifecycle) runner.CronManager
+type CronManagerFactory func(rdb redis.UniversalClient, logger *zap.Logger, queue string, codec codec.Codec, healingInterval time.Duration, healingLockTTL time.Duration, scanBatchSize int, scanMaxCount int, lc *lifecycle.Lifecycle) runner.CronManager
 
 type CronOptions struct {
 	healingInterval time.Duration

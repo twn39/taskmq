@@ -8,6 +8,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/twn39/taskmq/internal/taskmq/codec"
+	"github.com/twn39/taskmq/internal/taskmq/heartbeat"
 	"github.com/twn39/taskmq/internal/taskmq/keys"
 	"github.com/twn39/taskmq/internal/taskmq/lifecycle"
 	"github.com/twn39/taskmq/internal/taskmq/runner"
@@ -28,7 +29,13 @@ func (m *multiWorker) Queue(name string) Worker {
 }
 
 func (m *multiWorker) Register(taskName string, handler HandlerFunc) {
-	if w, ok := m.workers["default"]; ok {
+	// Register on every unique worker instance (priority pools may be shared by name).
+	seen := make(map[Worker]bool)
+	for _, w := range m.workers {
+		if seen[w] {
+			continue
+		}
+		seen[w] = true
 		w.Register(taskName, handler)
 	}
 }
@@ -82,7 +89,7 @@ type priorityWorker struct {
 	lifecycle         *lifecycle.Lifecycle
 }
 
-func NewPriorityWorker(rdb *redis.Client, logger *zap.Logger, opts ...PriorityWorkerOption) Worker {
+func NewPriorityWorker(rdb redis.UniversalClient, logger *zap.Logger, opts ...PriorityWorkerOption) Worker {
 	opt, err := applyPriorityWorkerOptions(codec.JSONCodec{}, opts)
 	if err != nil {
 		panic(fmt.Errorf("invalid option: %w", err))
@@ -141,7 +148,7 @@ func NewPriorityWorker(rdb *redis.Client, logger *zap.Logger, opts ...PriorityWo
 		if opt.janitor.factory != nil {
 			qJan = opt.janitor.factory(rdb, logger, q.Name, pw.group, pw.consumer, pw.concurrency, opt.janitor.interval, opt.janitor.minIdleTime)
 		} else {
-			qJan = runner.NewPELRecoveryJanitor(rdb, logger, q.Name, pw.group, pw.consumer, pw.concurrency, opt.janitor.interval, opt.janitor.minIdleTime, nil)
+			qJan = runner.NewPELRecoveryJanitorWithCodec(rdb, logger, q.Name, pw.group, pw.consumer, pw.concurrency, opt.janitor.interval, opt.janitor.minIdleTime, pw.codec, 0)
 		}
 
 		pw.cronManagers[q.Name] = qCron
@@ -213,6 +220,24 @@ func (pw *priorityWorker) Start(ctx context.Context) error {
 	for qName, cron := range pw.cronManagers {
 		pw.wg.Add(1)
 		go pw.runBackgroundLoop(cron, "cron-"+qName)
+	}
+
+	// Heartbeat per priority queue (shared consumer name).
+	for _, q := range pw.queues {
+		qName := q.Name
+		pw.wg.Add(1)
+		go func() {
+			defer pw.wg.Done()
+			rep := heartbeat.NewReporter(pw.rdb, qName, pw.consumer, pw.concurrency,
+				heartbeat.WithInUse(func() int {
+					if pw.execPool != nil {
+						return pw.execPool.InUse()
+					}
+					return 0
+				}),
+			)
+			_ = rep.Run(pw.ctx)
+		}()
 	}
 
 	return nil

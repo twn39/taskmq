@@ -6,6 +6,9 @@ on:
     branches: [main, master]
   pull_request:
   workflow_dispatch:
+  schedule:
+    # Nightly 03:17 UTC — integration-race + cluster-smoke
+    - cron: "17 3 * * *"
 
 permissions:
   contents: read
@@ -23,7 +26,8 @@ jobs:
   unit:
     name: Build & unit tests
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    # unit + race + coverage re-runs tests; keep headroom on free runners
+    timeout-minutes: 25
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -53,7 +57,45 @@ jobs:
         run: go test ./internal/... ./tests/unit/... ./cmd/... -count=1 -timeout 10m
 
       - name: Unit tests with race detector
-        run: go test ./internal/... ./tests/unit/... -race -count=1 -timeout 10m
+        # Include cmd so race coverage matches the non-race unit matrix.
+        run: go test ./internal/... ./tests/unit/... ./cmd/... -race -count=1 -timeout 10m
+
+      - name: Coverage gates + report
+        run: |
+          chmod +x ./scripts/check_coverage.sh ./scripts/coverage_report.sh ./scripts/check_keys_schema.sh
+          ./scripts/check_coverage.sh --report
+
+      - name: Upload coverage artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: |
+            coverage.out
+            coverage.html
+          if-no-files-found: ignore
+          retention-days: 14
+
+  lint:
+    name: golangci-lint
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          # Keep in sync with .golangci.yml header recommendation.
+          version: v2.4.0
+          args: --timeout=5m
 
   # Full Redis Streams / worker / admin integration suite.
   integration:
@@ -80,10 +122,15 @@ jobs:
           go-version-file: go.mod
           cache: true
 
-      # Service container healthcheck already gates job start; this is a host-side belt-and-braces check.
+      # Service healthcheck already gates job start; host-side ping is belt-and-braces.
       - name: Wait for Redis
         run: |
           for i in $(seq 1 30); do
+            if redis-cli -h 127.0.0.1 -p 6379 ping 2>/dev/null | grep -q PONG; then
+              echo "Redis ready"
+              exit 0
+            fi
+            # Fallback when redis-cli is not on the runner host
             if (echo > /dev/tcp/127.0.0.1/6379) >/dev/null 2>&1; then
               echo "Redis port is open"
               exit 0
@@ -95,5 +142,93 @@ jobs:
 
       - name: Integration tests
         env:
+          # Honored by tests/integration helpers (redisTestAddr).
           REDIS_ADDR: 127.0.0.1:6379
         run: go test ./tests/integration/... -count=1 -timeout 20m -v
+
+  # Optional heavier path: integration under the race detector.
+  # Runs on workflow_dispatch and nightly schedule so PRs stay fast.
+  integration-race:
+    name: Integration tests (race)
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Wait for Redis
+        run: |
+          for i in $(seq 1 30); do
+            if redis-cli -h 127.0.0.1 -p 6379 ping 2>/dev/null | grep -q PONG; then
+              echo "Redis ready"
+              exit 0
+            fi
+            if (echo > /dev/tcp/127.0.0.1/6379) >/dev/null 2>&1; then
+              echo "Redis port is open"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Redis did not become ready on 127.0.0.1:6379" >&2
+          exit 1
+
+      - name: Integration tests with race detector
+        env:
+          REDIS_ADDR: 127.0.0.1:6379
+        run: go test ./tests/integration/... -race -count=1 -timeout 40m
+
+  # Optional Redis Cluster smoke (hash-tag multi-key paths). Manual / nightly only.
+  cluster-smoke:
+    name: Cluster smoke
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Start Redis Cluster
+        run: |
+          docker compose -f docker-compose.cluster.yml up -d
+          for i in $(seq 1 60); do
+            if docker compose -f docker-compose.cluster.yml exec -T redis-cluster redis-cli -p 7000 cluster info 2>/dev/null | grep -q 'cluster_state:ok'; then
+              echo "cluster ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "cluster not ready" >&2
+          docker compose -f docker-compose.cluster.yml logs || true
+          exit 1
+
+      - name: Cluster hash-tag smoke test
+        env:
+          TASKMQ_REDIS_CLUSTER_ADDRS: 127.0.0.1:7000,127.0.0.1:7001,127.0.0.1:7002
+        run: go test ./tests/integration/ -run 'ClusterHashTag' -count=1 -timeout 10m -v
+
+      - name: Tear down cluster
+        if: always()
+        run: docker compose -f docker-compose.cluster.yml down -v

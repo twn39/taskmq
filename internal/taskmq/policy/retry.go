@@ -32,7 +32,11 @@ func NewExponentialBackoff(base, max time.Duration, jitter bool) RetryPolicy {
 }
 
 // ShouldRetry reports whether the task has remaining retries.
+// SkipRetry / Unrecoverable errors never retry.
 func (e *ExponentialBackoff) ShouldRetry(t *task.Task, err error) bool {
+	if task.IsSkipRetry(err) {
+		return false
+	}
 	return t.Retry < t.MaxRetry
 }
 
@@ -65,6 +69,9 @@ func NewErrorFilterRetryPolicy(base RetryPolicy, nonRetryable []error) RetryPoli
 
 // ShouldRetry defers to the base policy unless the error is non-retryable.
 func (p *ErrorFilterRetryPolicy) ShouldRetry(t *task.Task, err error) bool {
+	if task.IsSkipRetry(err) {
+		return false
+	}
 	if !p.BasePolicy.ShouldRetry(t, err) {
 		return false
 	}

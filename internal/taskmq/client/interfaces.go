@@ -38,6 +38,8 @@ type EnqueueClient interface {
 	Enqueue(ctx context.Context, task *taskmodel.Task, opts ...TaskOption) error
 	EnqueueIn(ctx context.Context, task *taskmodel.Task, delay time.Duration, opts ...TaskOption) error
 	EnqueueAt(ctx context.Context, task *taskmodel.Task, at time.Time, opts ...TaskOption) error
+	// EnqueueBulk pipelines immediate non-unique tasks; unique tasks use single-path enqueue.
+	EnqueueBulk(ctx context.Context, tasks []*taskmodel.Task, opts ...BulkOption) (*BulkResult, error)
 }
 
 // Enqueuer is an alias for EnqueueClient.
@@ -88,6 +90,71 @@ type TaskCanceler interface {
 	CancelTask(ctx context.Context, queue, taskID string) error
 }
 
+// TaskInspector looks up durable per-task metadata and progress.
+type TaskInspector interface {
+	GetTaskInfo(ctx context.Context, queue, taskID string) (*TaskInfoView, error)
+	// UpdateProgress sets 0-100 progress (and optional data) on task meta + emits a progress event.
+	UpdateProgress(ctx context.Context, queue, taskID string, percent int, data string) error
+}
+
+// TaskInfoView is the client-facing task metadata (alias of meta.TaskInfo fields).
+type TaskInfoView struct {
+	ID           string    `json:"id"`
+	Queue        string    `json:"queue"`
+	Name         string    `json:"name"`
+	State        string    `json:"state"`
+	Retry        int       `json:"retry"`
+	MaxRetry     int       `json:"max_retry"`
+	LastError    string    `json:"last_error,omitempty"`
+	TimeoutMs    int       `json:"timeout_ms,omitempty"`
+	DeadlineMs   int64     `json:"deadline_ms,omitempty"`
+	UniqueKey    string    `json:"unique_key,omitempty"`
+	GroupKey     string    `json:"group_key,omitempty"`
+	StreamID     string    `json:"stream_id,omitempty"`
+	Result       []byte    `json:"result,omitempty"`
+	Progress     int       `json:"progress,omitempty"`
+	ProgressData string    `json:"progress_data,omitempty"`
+	CreatedAt    time.Time `json:"created_at,omitempty"`
+	UpdatedAt    time.Time `json:"updated_at,omitempty"`
+	CompletedAt  time.Time `json:"completed_at,omitempty"`
+}
+
+// EventReader lists recent queue lifecycle events.
+type EventReader interface {
+	ListEvents(ctx context.Context, queue string, limit int64) ([]EventView, error)
+}
+
+// EventView is a client-facing queue event.
+type EventView struct {
+	ID          string `json:"id"`
+	Type        string `json:"type"`
+	Queue       string `json:"queue"`
+	TaskID      string `json:"task_id,omitempty"`
+	Name        string `json:"name,omitempty"`
+	Error       string `json:"error,omitempty"`
+	Progress    int    `json:"progress,omitempty"`
+	Data        string `json:"data,omitempty"`
+	TimestampMs int64  `json:"timestamp_ms"`
+}
+
+// WorkerViewer lists live worker heartbeats for a queue.
+type WorkerViewer interface {
+	ListWorkers(ctx context.Context, queue string) ([]WorkerView, error)
+}
+
+// WorkerView is a live consumer heartbeat.
+type WorkerView struct {
+	Queue       string    `json:"queue"`
+	Consumer    string    `json:"consumer"`
+	Host        string    `json:"host,omitempty"`
+	PID         int       `json:"pid,omitempty"`
+	Concurrency int       `json:"concurrency,omitempty"`
+	InUse       int       `json:"in_use,omitempty"`
+	ActiveTask  string    `json:"active_task,omitempty"`
+	StartedAt   time.Time `json:"started_at,omitempty"`
+	UpdatedAt   time.Time `json:"updated_at,omitempty"`
+}
+
 // AdminClient aggregates operational surfaces.
 type AdminClient interface {
 	DLQManager
@@ -95,6 +162,9 @@ type AdminClient interface {
 	ScheduledTaskManager
 	ActiveTaskManager
 	TaskCanceler
+	TaskInspector
+	EventReader
+	WorkerViewer
 }
 
 // Client is the convenience facade combining enqueue, cron, and admin ports.

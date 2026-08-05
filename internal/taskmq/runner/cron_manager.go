@@ -17,7 +17,7 @@ import (
 var CronParser = cron.NewParser(cron.SecondOptional | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
 
 type cronManager struct {
-	rdb             *redis.Client
+	rdb             redis.UniversalClient
 	logger          *zap.Logger
 	queue           string
 	codec           codec.Codec
@@ -31,7 +31,7 @@ type cronManager struct {
 // NewCronManager creates a cron self-healing manager.
 // Optional lifecycle enables DelayedMaxCount on reschedule/healing ZADDs (system path: drop_farthest).
 func NewCronManager(
-	rdb *redis.Client,
+	rdb redis.UniversalClient,
 	logger *zap.Logger,
 	queue string,
 	codec codec.Codec,

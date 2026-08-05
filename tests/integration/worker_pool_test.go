@@ -23,9 +23,9 @@ import (
 func TestTaskMQ_WorkerPool_ParentContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 
-	queueName := "parent_ctx_cancel_test_queue"
+	queueName := UniqueQueue(t, "parent_cancel")
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 	var worker mqworker.Worker
 
@@ -35,7 +35,7 @@ func TestTaskMQ_WorkerPool_ParentContextCancellation(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithConcurrency(1),
 					mqworker.WithContext(ctx),
@@ -80,9 +80,9 @@ func TestTaskMQ_WorkerPool_ParentContextCancellation(t *testing.T) {
 }
 
 func TestTaskMQ_WorkerPool_GracefulShutdownDeadline(t *testing.T) {
-	queueName := "graceful_shutdown_deadline_test_queue"
+	queueName := UniqueQueue(t, "grace_shutdown")
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 	var worker mqworker.Worker
 
@@ -94,7 +94,7 @@ func TestTaskMQ_WorkerPool_GracefulShutdownDeadline(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithConcurrency(1),
 				)

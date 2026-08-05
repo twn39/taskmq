@@ -24,11 +24,11 @@ func TestTaskMQ_AtomicUniqueEnqueue(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "atomic_enqueue_queue"
+	queueName := UniqueQueue(t, "atomic_enq")
 	streamKey := keys.KeysFor(queueName).Stream()
 	uniqueLockKey := keys.KeysFor(queueName).Unique("atomic-key")
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -92,13 +92,13 @@ func TestTaskMQ_AtomicCompleteAndRelease(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "atomic_complete_queue"
+	queueName := UniqueQueue(t, "atomic_complete")
 	streamKey := keys.KeysFor(queueName).Stream()
 	uniqueLockKey := keys.KeysFor(queueName).Unique("complete-key")
 
 	runChan := make(chan bool, 1)
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -107,7 +107,7 @@ func TestTaskMQ_AtomicCompleteAndRelease(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("complete-group"),
 					mqworker.WithConsumer("complete-consumer"),

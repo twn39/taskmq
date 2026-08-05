@@ -10,23 +10,25 @@ import (
 	"github.com/twn39/taskmq/internal/taskmq/codec"
 	"github.com/twn39/taskmq/internal/taskmq/keys"
 	"github.com/twn39/taskmq/internal/taskmq/lifecycle"
+	"github.com/twn39/taskmq/internal/taskmq/meta"
 	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 	"go.uber.org/zap"
 )
 
 // RetentionJanitor performs SafeTrim, DLQ age purge, cancelled-delayed cleanup,
-// and idle consumer hygiene. It is separate from PEL recovery.
+// completed meta purge, and idle consumer hygiene. It is separate from PEL recovery.
 type RetentionJanitor struct {
-	rdb       *redis.Client
+	rdb       redis.UniversalClient
 	logger    *zap.Logger
 	queue     string
 	group     string
 	codec     codec.Codec
 	lifecycle *lifecycle.Lifecycle
+	meta      *meta.Store
 }
 
 func NewRetentionJanitor(
-	rdb *redis.Client,
+	rdb redis.UniversalClient,
 	logger *zap.Logger,
 	queue string,
 	group string,
@@ -40,6 +42,7 @@ func NewRetentionJanitor(
 		group:     group,
 		codec:     codec,
 		lifecycle: lifecycle,
+		meta:      meta.NewStore(rdb),
 	}
 }
 
@@ -50,7 +53,7 @@ func (j *RetentionJanitor) Run(ctx context.Context) error {
 		return ctx.Err()
 	}
 	cfg := j.lifecycle.Config()
-	if !cfg.SafeTrimEnabled && cfg.DLQMaxAge <= 0 && !cfg.PurgeCancelledDelayed && cfg.IdleConsumerTimeout <= 0 {
+	if !cfg.SafeTrimEnabled && cfg.DLQMaxAge <= 0 && !cfg.PurgeCancelledDelayed && cfg.IdleConsumerTimeout <= 0 && cfg.CompletedRetention <= 0 {
 		<-ctx.Done()
 		return ctx.Err()
 	}
@@ -115,6 +118,22 @@ func (j *RetentionJanitor) tick(ctx context.Context) {
 			}
 		} else if n > 0 {
 			j.lifecycle.IncMetric("cancelled_delayed_purged", n)
+		}
+	}
+	if cfg.CompletedRetention > 0 && j.meta != nil {
+		beforeMs := time.Now().Add(-cfg.CompletedRetention).UnixMilli()
+		if n, err := j.meta.PurgeExpiredCompleted(ctx, j.queue, beforeMs, cfg.SafeTrimBatchLimit); err != nil {
+			if ctx.Err() == nil {
+				j.logger.Error("RetentionJanitor completed meta purge failed",
+					zap.String("queue", j.queue),
+					zap.Error(err),
+				)
+			}
+		} else if n > 0 {
+			j.logger.Debug("RetentionJanitor purged expired completed meta",
+				zap.String("queue", j.queue),
+				zap.Int64("count", n),
+			)
 		}
 	}
 	if cfg.IdleConsumerTimeout > 0 {

@@ -23,14 +23,14 @@ func TestTaskMQ_UniquenessFlow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "unique_test_queue"
+	queueName := UniqueQueue(t, "unique")
 	streamKey := keys.KeysFor(queueName).Stream()
 	uniqueLockKey := keys.KeysFor(queueName).Unique("my-unique-key")
 
 	runChan := make(chan bool, 1)
 	blockChan := make(chan struct{})
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -39,7 +39,7 @@ func TestTaskMQ_UniquenessFlow(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("unique-group"),
 					mqworker.WithConsumer("unique-consumer"),

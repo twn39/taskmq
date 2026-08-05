@@ -34,6 +34,14 @@ func WithClientLifecycle(lc *lifecycle.Lifecycle) ClientOption {
 	}
 }
 
+// WithEventsMaxLen sets the approximate MAXLEN for the queue events stream
+// (0 = package default). Must be applied before NewClient finishes wiring.
+func WithEventsMaxLen(maxLen int64) ClientOption {
+	return func(d *deps) {
+		d.eventsMaxLen = maxLen
+	}
+}
+
 // WithTaskID sets a custom task ID.
 func WithTaskID(id string) TaskOption {
 	return func(t *taskmodel.Task) error {
@@ -63,6 +71,17 @@ func WithTaskTimeout(timeout time.Duration) TaskOption {
 			return fmt.Errorf("taskmq: timeout must be positive: %v", timeout)
 		}
 		t.TimeoutMs = int(timeout.Milliseconds())
+		return nil
+	}
+}
+
+// WithTaskDeadline sets an absolute wall-clock deadline for the task.
+func WithTaskDeadline(deadline time.Time) TaskOption {
+	return func(t *taskmodel.Task) error {
+		if deadline.IsZero() {
+			return errors.New("taskmq: deadline cannot be zero")
+		}
+		t.DeadlineMs = deadline.UnixMilli()
 		return nil
 	}
 }

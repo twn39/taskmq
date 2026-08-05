@@ -268,15 +268,15 @@ func TestCustomFactories(t *testing.T) {
 	schedulerCalled := false
 	janitorCalled := false
 
-	cronFactory := func(rdb *redis.Client, logger *zap.Logger, queue string, codec codec.Codec, healingInterval time.Duration, healingLockTTL time.Duration, scanBatchSize int, scanMaxCount int, lc *lifecycle.Lifecycle) runner.CronManager {
+	cronFactory := func(rdb redis.UniversalClient, logger *zap.Logger, queue string, codec codec.Codec, healingInterval time.Duration, healingLockTTL time.Duration, scanBatchSize int, scanMaxCount int, lc *lifecycle.Lifecycle) runner.CronManager {
 		cronCalled = true
 		return &dummyCronManager{}
 	}
-	schedulerFactory := func(rdb *redis.Client, logger *zap.Logger, queue string, cronManager runner.CronManager, codec codec.Codec, pollInterval time.Duration, streamHardLimit, streamMaxLen int64) runner.Runner {
+	schedulerFactory := func(rdb redis.UniversalClient, logger *zap.Logger, queue string, cronManager runner.CronManager, codec codec.Codec, pollInterval time.Duration, streamHardLimit, streamMaxLen int64) runner.Runner {
 		schedulerCalled = true
 		return &dummyScheduler{}
 	}
-	janitorFactory := func(rdb *redis.Client, logger *zap.Logger, queue string, group string, consumer string, concurrency int, checkInterval time.Duration, minIdleTime time.Duration) runner.PELRecoveryJanitor {
+	janitorFactory := func(rdb redis.UniversalClient, logger *zap.Logger, queue string, group string, consumer string, concurrency int, checkInterval time.Duration, minIdleTime time.Duration) runner.PELRecoveryJanitor {
 		janitorCalled = true
 		return &dummyJanitor{}
 	}

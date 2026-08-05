@@ -90,17 +90,28 @@ func RateLimitMiddleware(limiter *ratelimit.GCRALimiter, broker broker.TaskBroke
 }
 
 // RetryAndDLQMiddleware manages task error retries and routes to dead letter queues.
+//
+// On successful settlement (retry scheduled or moved to DLQ) it returns Handled(err)
+// so outer layers know the message must not be CompleteTask'd again.
+// If the broker settlement call fails, that error is returned unwrapped (not Handled)
+// so the message can remain in the PEL for reclaim.
 func RetryAndDLQMiddleware(broker broker.TaskBroker, retryPolicy policy.RetryPolicy, dlqPolicy policy.DeadLetterPolicy, logger *zap.Logger) CoreHandlerFunc {
 	return func(c *ConsumeContext) error {
 		err := c.Next()
 		if err == nil {
 			return nil
 		}
+		// Already settled by an inner middleware (e.g. rate-limit defer uses Abort+nil;
+		// custom middleware may return ErrHandled).
+		if IsHandled(err) {
+			return err
+		}
 
 		c.Task.Retry++
+		c.Task.LastError = err.Error()
 		streamKey := keys.KeysFor(c.Queue).Stream()
 
-		if errors.Is(err, taskmodel.ErrNoHandler) || !retryPolicy.ShouldRetry(c.Task, err) {
+		if errors.Is(err, taskmodel.ErrNoHandler) || taskmodel.IsSkipRetry(err) || !retryPolicy.ShouldRetry(c.Task, err) {
 			dlqPolicy.BeforeDeadLetter(c.Context, c.Task, err)
 			dlqName := dlqPolicy.DLQQueueName(c.Task)
 
@@ -112,8 +123,9 @@ func RetryAndDLQMiddleware(broker broker.TaskBroker, retryPolicy policy.RetryPol
 
 			if dlqErr := broker.MoveToDLQ(c.Context, c.Task, streamKey, c.MessageID, c.Group, dlqName); dlqErr != nil {
 				logger.Error("Failed to move task to DLQ atomically", zap.Error(dlqErr))
+				return fmt.Errorf("move to dlq: %w", dlqErr)
 			}
-			return err
+			return Handled(err)
 		}
 
 		backoff := retryPolicy.NextBackoff(c.Task)
@@ -127,8 +139,9 @@ func RetryAndDLQMiddleware(broker broker.TaskBroker, retryPolicy policy.RetryPol
 		runAt := time.Now().Add(backoff)
 		if rErr := broker.ScheduleRetry(c.Context, c.Task, streamKey, c.MessageID, c.Group, runAt); rErr != nil {
 			logger.Error("Failed to schedule task retry atomically", zap.Error(rErr))
+			return fmt.Errorf("schedule retry: %w", rErr)
 		}
-		return err
+		return Handled(err)
 	}
 }
 

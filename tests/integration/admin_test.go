@@ -28,7 +28,7 @@ func TestAdminDashboard(t *testing.T) {
 	defer cancel()
 
 	var e *echo.Echo
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -47,6 +47,8 @@ func TestAdminDashboard(t *testing.T) {
 
 	app.RequireStart()
 	defer app.RequireStop()
+
+	adminQueue := UniqueQueue(t, "admin")
 
 	t.Run("GET /admin HTML Rendering", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodGet, "/admin", nil)
@@ -84,7 +86,7 @@ func TestAdminDashboard(t *testing.T) {
 
 	t.Run("POST Pause and Resume Queue", func(t *testing.T) {
 		// Pause
-		req := httptest.NewRequest(http.MethodPost, "/api/queues/test-admin-queue/pause", nil)
+		req := httptest.NewRequest(http.MethodPost, "/api/queues/"+adminQueue+"/pause", nil)
 		rec := httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -97,13 +99,13 @@ func TestAdminDashboard(t *testing.T) {
 		var stats []handler.QueueStat
 		_ = json.Unmarshal(recStats.Body.Bytes(), &stats)
 		for _, q := range stats {
-			if q.Name == "test-admin-queue" {
+			if q.Name == adminQueue {
 				assert.Equal(t, "Paused", q.Status)
 			}
 		}
 
 		// Resume
-		req = httptest.NewRequest(http.MethodPost, "/api/queues/test-admin-queue/resume", nil)
+		req = httptest.NewRequest(http.MethodPost, "/api/queues/"+adminQueue+"/resume", nil)
 		rec = httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -114,7 +116,7 @@ func TestAdminDashboard(t *testing.T) {
 		e.ServeHTTP(recStats, reqStats)
 		_ = json.Unmarshal(recStats.Body.Bytes(), &stats)
 		for _, q := range stats {
-			if q.Name == "test-admin-queue" {
+			if q.Name == adminQueue {
 				assert.Equal(t, "Active", q.Status)
 			}
 		}
@@ -122,12 +124,12 @@ func TestAdminDashboard(t *testing.T) {
 
 	t.Run("Enqueue Test Task via API", func(t *testing.T) {
 		reqBody, _ := json.Marshal(map[string]interface{}{
-			"queue":     "test-admin-queue",
+			"queue":     adminQueue,
 			"name":      "task:test-enqueue",
 			"payload":   `{"test":true}`,
 			"delay_sec": 0,
 		})
-		req := httptest.NewRequest(http.MethodPost, "/api/queues/test-admin-queue/enqueue", bytes.NewReader(reqBody))
+		req := httptest.NewRequest(http.MethodPost, "/api/queues/"+adminQueue+"/enqueue", bytes.NewReader(reqBody))
 		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 		rec := httptest.NewRecorder()
 
@@ -140,7 +142,7 @@ func TestAdminDashboard(t *testing.T) {
 
 	t.Run("DLQ Management APIs", func(t *testing.T) {
 		// Mock a DLQ task in Redis
-		queueName := "test-admin-queue"
+		queueName := adminQueue
 		dlqKey := keys.KeysFor(queueName).DLQ()
 		dlqIndexKey := keys.KeysFor(queueName).DLQIndex()
 
@@ -159,7 +161,7 @@ func TestAdminDashboard(t *testing.T) {
 		assert.NoError(t, err)
 
 		// 1. List DLQ
-		req := httptest.NewRequest(http.MethodGet, "/api/queues/test-admin-queue/dlq", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/queues/"+adminQueue+"/dlq", nil)
 		rec := httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -167,7 +169,7 @@ func TestAdminDashboard(t *testing.T) {
 		assert.Contains(t, rec.Body.String(), "some critical failure")
 
 		// 2. Retry DLQ Task
-		req = httptest.NewRequest(http.MethodPost, "/api/queues/test-admin-queue/dlq/test-dead-id/retry", nil)
+		req = httptest.NewRequest(http.MethodPost, "/api/queues/"+adminQueue+"/dlq/test-dead-id/retry", nil)
 		rec = httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -180,7 +182,7 @@ func TestAdminDashboard(t *testing.T) {
 		assert.NoError(t, err)
 
 		// 3. Delete DLQ Task
-		req = httptest.NewRequest(http.MethodDelete, "/api/queues/test-admin-queue/dlq/test-dead-id", nil)
+		req = httptest.NewRequest(http.MethodDelete, "/api/queues/"+adminQueue+"/dlq/test-dead-id", nil)
 		rec = httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -188,7 +190,7 @@ func TestAdminDashboard(t *testing.T) {
 	})
 
 	t.Run("DLQ Bulk Operations Management APIs", func(t *testing.T) {
-		queueName := "test-admin-queue"
+		queueName := adminQueue
 		dlqKey := keys.KeysFor(queueName).DLQ()
 		dlqIndexKey := keys.KeysFor(queueName).DLQIndex()
 
@@ -208,7 +210,7 @@ func TestAdminDashboard(t *testing.T) {
 		}
 
 		// 1. Verify 5 tasks in DLQ
-		req := httptest.NewRequest(http.MethodGet, "/api/queues/test-admin-queue/dlq", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/queues/"+adminQueue+"/dlq", nil)
 		rec := httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -217,14 +219,14 @@ func TestAdminDashboard(t *testing.T) {
 		assert.Len(t, tasks, 5)
 
 		// 2. Retry All DLQ tasks
-		req = httptest.NewRequest(http.MethodPost, "/api/queues/test-admin-queue/dlq/retry", nil)
+		req = httptest.NewRequest(http.MethodPost, "/api/queues/"+adminQueue+"/dlq/retry", nil)
 		rec = httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.Contains(t, rec.Body.String(), "Successfully re-enqueued 5 tasks")
 
 		// 3. Verify DLQ is empty after retry all
-		req = httptest.NewRequest(http.MethodGet, "/api/queues/test-admin-queue/dlq", nil)
+		req = httptest.NewRequest(http.MethodGet, "/api/queues/"+adminQueue+"/dlq", nil)
 		rec = httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -241,14 +243,14 @@ func TestAdminDashboard(t *testing.T) {
 		}
 
 		// 5. Purge DLQ
-		req = httptest.NewRequest(http.MethodDelete, "/api/queues/test-admin-queue/dlq", nil)
+		req = httptest.NewRequest(http.MethodDelete, "/api/queues/"+adminQueue+"/dlq", nil)
 		rec = httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.Contains(t, rec.Body.String(), "Successfully purged 3 tasks")
 
 		// 6. Verify DLQ is empty
-		req = httptest.NewRequest(http.MethodGet, "/api/queues/test-admin-queue/dlq", nil)
+		req = httptest.NewRequest(http.MethodGet, "/api/queues/"+adminQueue+"/dlq", nil)
 		rec = httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -257,7 +259,7 @@ func TestAdminDashboard(t *testing.T) {
 	})
 
 	t.Run("Scheduled Tasks Management APIs", func(t *testing.T) {
-		queueName := "test-admin-queue"
+		queueName := adminQueue
 		delayedKey := keys.KeysFor(queueName).Delayed()
 
 		rdb.Del(ctx, delayedKey)
@@ -270,7 +272,7 @@ func TestAdminDashboard(t *testing.T) {
 			"payload":   `{"test":true}`,
 			"delay_sec": 60,
 		})
-		req := httptest.NewRequest(http.MethodPost, "/api/queues/test-admin-queue/enqueue", bytes.NewReader(reqBody))
+		req := httptest.NewRequest(http.MethodPost, "/api/queues/"+adminQueue+"/enqueue", bytes.NewReader(reqBody))
 		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 		rec := httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
@@ -281,7 +283,7 @@ func TestAdminDashboard(t *testing.T) {
 		taskID := resp["task_id"].(string)
 
 		// 1. List Scheduled Tasks
-		req = httptest.NewRequest(http.MethodGet, "/api/queues/test-admin-queue/scheduled", nil)
+		req = httptest.NewRequest(http.MethodGet, "/api/queues/"+adminQueue+"/scheduled", nil)
 		rec = httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -289,14 +291,14 @@ func TestAdminDashboard(t *testing.T) {
 		assert.Contains(t, rec.Body.String(), "task:delayed-test")
 
 		// 2. Promote / Run Scheduled Task Immediately
-		req = httptest.NewRequest(http.MethodPost, "/api/queues/test-admin-queue/scheduled/"+taskID+"/run", nil)
+		req = httptest.NewRequest(http.MethodPost, "/api/queues/"+adminQueue+"/scheduled/"+taskID+"/run", nil)
 		rec = httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.Contains(t, rec.Body.String(), "promoted to run immediately")
 
 		// Enqueue another delayed task to test deletion
-		req = httptest.NewRequest(http.MethodPost, "/api/queues/test-admin-queue/enqueue", bytes.NewReader(reqBody))
+		req = httptest.NewRequest(http.MethodPost, "/api/queues/"+adminQueue+"/enqueue", bytes.NewReader(reqBody))
 		req.Header.Set(echo.HeaderContentType, echo.MIMEApplicationJSON)
 		rec = httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
@@ -306,7 +308,7 @@ func TestAdminDashboard(t *testing.T) {
 		taskID2 := resp["task_id"].(string)
 
 		// 3. Delete Scheduled Task
-		req = httptest.NewRequest(http.MethodDelete, "/api/queues/test-admin-queue/scheduled/"+taskID2, nil)
+		req = httptest.NewRequest(http.MethodDelete, "/api/queues/"+adminQueue+"/scheduled/"+taskID2, nil)
 		rec = httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -314,7 +316,7 @@ func TestAdminDashboard(t *testing.T) {
 	})
 
 	t.Run("Cron Schedules Management APIs", func(t *testing.T) {
-		queueName := "test-admin-queue"
+		queueName := adminQueue
 		configsKey := keys.KeysFor(queueName).CronConfigs()
 		delayedKey := keys.KeysFor(queueName).Delayed()
 
@@ -330,7 +332,7 @@ func TestAdminDashboard(t *testing.T) {
 		assert.NoError(t, err)
 
 		// 1. List Cron Jobs
-		req := httptest.NewRequest(http.MethodGet, "/api/queues/test-admin-queue/cron", nil)
+		req := httptest.NewRequest(http.MethodGet, "/api/queues/"+adminQueue+"/cron", nil)
 		rec := httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
@@ -338,21 +340,21 @@ func TestAdminDashboard(t *testing.T) {
 		assert.Contains(t, rec.Body.String(), "Y3Jvbi1wYXlsb2Fk")
 
 		// 2. Trigger Cron Job Immediately
-		req = httptest.NewRequest(http.MethodPost, "/api/queues/test-admin-queue/cron/"+jobName+"/run", nil)
+		req = httptest.NewRequest(http.MethodPost, "/api/queues/"+adminQueue+"/cron/"+jobName+"/run", nil)
 		rec = httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.Contains(t, rec.Body.String(), "successfully triggered to run immediately")
 
 		// 3. Delete Cron Job
-		req = httptest.NewRequest(http.MethodDelete, "/api/queues/test-admin-queue/cron/"+jobName, nil)
+		req = httptest.NewRequest(http.MethodDelete, "/api/queues/"+adminQueue+"/cron/"+jobName, nil)
 		rec = httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)
 		assert.Contains(t, rec.Body.String(), "successfully deleted")
 
 		// Verify deletion
-		req = httptest.NewRequest(http.MethodGet, "/api/queues/test-admin-queue/cron", nil)
+		req = httptest.NewRequest(http.MethodGet, "/api/queues/"+adminQueue+"/cron", nil)
 		rec = httptest.NewRecorder()
 		e.ServeHTTP(rec, req)
 		assert.Equal(t, http.StatusOK, rec.Code)

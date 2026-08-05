@@ -14,7 +14,7 @@ import (
 )
 
 type delayedScheduler struct {
-	rdb             *redis.Client
+	rdb             redis.UniversalClient
 	logger          *zap.Logger
 	queue           string
 	cronManager     CronManager
@@ -26,7 +26,7 @@ type delayedScheduler struct {
 
 // NewDelayedScheduler creates a delayed→stream promoter.
 // streamLimits optional: [0]=EnqueueHardLimit, [1]=StreamMaxLen (both 0 = unlimited/off).
-func NewDelayedScheduler(rdb *redis.Client, logger *zap.Logger, queue string, cronManager CronManager, codec codec.Codec, pollInterval time.Duration, streamLimits ...int64) Runner {
+func NewDelayedScheduler(rdb redis.UniversalClient, logger *zap.Logger, queue string, cronManager CronManager, codec codec.Codec, pollInterval time.Duration, streamLimits ...int64) Runner {
 	var hard, maxlen int64
 	if len(streamLimits) > 0 {
 		hard = streamLimits[0]

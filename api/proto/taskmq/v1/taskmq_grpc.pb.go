@@ -19,28 +19,55 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	TaskMQService_Enqueue_FullMethodName          = "/taskmq.v1.TaskMQService/Enqueue"
-	TaskMQService_EnqueueIn_FullMethodName        = "/taskmq.v1.TaskMQService/EnqueueIn"
-	TaskMQService_EnqueueAt_FullMethodName        = "/taskmq.v1.TaskMQService/EnqueueAt"
-	TaskMQService_RegisterCron_FullMethodName     = "/taskmq.v1.TaskMQService/RegisterCron"
-	TaskMQService_ListDeadLetters_FullMethodName  = "/taskmq.v1.TaskMQService/ListDeadLetters"
-	TaskMQService_DeleteDeadLetter_FullMethodName = "/taskmq.v1.TaskMQService/DeleteDeadLetter"
-	TaskMQService_RetryDeadLetter_FullMethodName  = "/taskmq.v1.TaskMQService/RetryDeadLetter"
+	TaskMQService_Enqueue_FullMethodName            = "/taskmq.v1.TaskMQService/Enqueue"
+	TaskMQService_EnqueueIn_FullMethodName          = "/taskmq.v1.TaskMQService/EnqueueIn"
+	TaskMQService_EnqueueAt_FullMethodName          = "/taskmq.v1.TaskMQService/EnqueueAt"
+	TaskMQService_EnqueueBulk_FullMethodName        = "/taskmq.v1.TaskMQService/EnqueueBulk"
+	TaskMQService_RegisterCron_FullMethodName       = "/taskmq.v1.TaskMQService/RegisterCron"
+	TaskMQService_ListDeadLetters_FullMethodName    = "/taskmq.v1.TaskMQService/ListDeadLetters"
+	TaskMQService_DeleteDeadLetter_FullMethodName   = "/taskmq.v1.TaskMQService/DeleteDeadLetter"
+	TaskMQService_RetryDeadLetter_FullMethodName    = "/taskmq.v1.TaskMQService/RetryDeadLetter"
+	TaskMQService_PauseQueue_FullMethodName         = "/taskmq.v1.TaskMQService/PauseQueue"
+	TaskMQService_ResumeQueue_FullMethodName        = "/taskmq.v1.TaskMQService/ResumeQueue"
+	TaskMQService_IsQueuePaused_FullMethodName      = "/taskmq.v1.TaskMQService/IsQueuePaused"
+	TaskMQService_CancelTask_FullMethodName         = "/taskmq.v1.TaskMQService/CancelTask"
+	TaskMQService_GetTask_FullMethodName            = "/taskmq.v1.TaskMQService/GetTask"
+	TaskMQService_ListScheduledTasks_FullMethodName = "/taskmq.v1.TaskMQService/ListScheduledTasks"
+	TaskMQService_ListActiveTasks_FullMethodName    = "/taskmq.v1.TaskMQService/ListActiveTasks"
 )
 
 // TaskMQServiceClient is the client API for TaskMQService service.
 //
 // For semantics around ctx use and closing/ending streaming RPCs, please refer to https://pkg.go.dev/google.golang.org/grpc/?tab=doc#ClientConn.NewStream.
 //
-// TaskMQService provides APIs for multi-language enqueuing and queue management.
+// TaskMQService is the multi-language producer, DLQ, and ops control API.
+//
+// Scope:
+//   - Enqueue immediate / delayed / bulk tasks
+//   - Register cron jobs
+//   - List / delete / retry dead letters
+//   - Queue pause / resume
+//   - Cancel task, get task meta, list scheduled / active
+//
+// Dashboard, lifecycle metrics scrape, and events feed remain on HTTP admin
+// and taskmq-cli. See docs/OPERATIONS.md "API surfaces".
 type TaskMQServiceClient interface {
 	Enqueue(ctx context.Context, in *EnqueueRequest, opts ...grpc.CallOption) (*EnqueueResponse, error)
 	EnqueueIn(ctx context.Context, in *EnqueueInRequest, opts ...grpc.CallOption) (*EnqueueResponse, error)
 	EnqueueAt(ctx context.Context, in *EnqueueAtRequest, opts ...grpc.CallOption) (*EnqueueResponse, error)
+	EnqueueBulk(ctx context.Context, in *EnqueueBulkRequest, opts ...grpc.CallOption) (*EnqueueBulkResponse, error)
 	RegisterCron(ctx context.Context, in *RegisterCronRequest, opts ...grpc.CallOption) (*RegisterCronResponse, error)
 	ListDeadLetters(ctx context.Context, in *ListDeadLettersRequest, opts ...grpc.CallOption) (*ListDeadLettersResponse, error)
 	DeleteDeadLetter(ctx context.Context, in *DeleteDeadLetterRequest, opts ...grpc.CallOption) (*DeleteDeadLetterResponse, error)
 	RetryDeadLetter(ctx context.Context, in *RetryDeadLetterRequest, opts ...grpc.CallOption) (*RetryDeadLetterResponse, error)
+	// Ops / inspect (parity with HTTP admin + CLI task/queue controls).
+	PauseQueue(ctx context.Context, in *PauseQueueRequest, opts ...grpc.CallOption) (*PauseQueueResponse, error)
+	ResumeQueue(ctx context.Context, in *ResumeQueueRequest, opts ...grpc.CallOption) (*ResumeQueueResponse, error)
+	IsQueuePaused(ctx context.Context, in *IsQueuePausedRequest, opts ...grpc.CallOption) (*IsQueuePausedResponse, error)
+	CancelTask(ctx context.Context, in *CancelTaskRequest, opts ...grpc.CallOption) (*CancelTaskResponse, error)
+	GetTask(ctx context.Context, in *GetTaskRequest, opts ...grpc.CallOption) (*GetTaskResponse, error)
+	ListScheduledTasks(ctx context.Context, in *ListScheduledTasksRequest, opts ...grpc.CallOption) (*ListScheduledTasksResponse, error)
+	ListActiveTasks(ctx context.Context, in *ListActiveTasksRequest, opts ...grpc.CallOption) (*ListActiveTasksResponse, error)
 }
 
 type taskMQServiceClient struct {
@@ -75,6 +102,16 @@ func (c *taskMQServiceClient) EnqueueAt(ctx context.Context, in *EnqueueAtReques
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(EnqueueResponse)
 	err := c.cc.Invoke(ctx, TaskMQService_EnqueueAt_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskMQServiceClient) EnqueueBulk(ctx context.Context, in *EnqueueBulkRequest, opts ...grpc.CallOption) (*EnqueueBulkResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(EnqueueBulkResponse)
+	err := c.cc.Invoke(ctx, TaskMQService_EnqueueBulk_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -121,19 +158,108 @@ func (c *taskMQServiceClient) RetryDeadLetter(ctx context.Context, in *RetryDead
 	return out, nil
 }
 
+func (c *taskMQServiceClient) PauseQueue(ctx context.Context, in *PauseQueueRequest, opts ...grpc.CallOption) (*PauseQueueResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PauseQueueResponse)
+	err := c.cc.Invoke(ctx, TaskMQService_PauseQueue_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskMQServiceClient) ResumeQueue(ctx context.Context, in *ResumeQueueRequest, opts ...grpc.CallOption) (*ResumeQueueResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ResumeQueueResponse)
+	err := c.cc.Invoke(ctx, TaskMQService_ResumeQueue_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskMQServiceClient) IsQueuePaused(ctx context.Context, in *IsQueuePausedRequest, opts ...grpc.CallOption) (*IsQueuePausedResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(IsQueuePausedResponse)
+	err := c.cc.Invoke(ctx, TaskMQService_IsQueuePaused_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskMQServiceClient) CancelTask(ctx context.Context, in *CancelTaskRequest, opts ...grpc.CallOption) (*CancelTaskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(CancelTaskResponse)
+	err := c.cc.Invoke(ctx, TaskMQService_CancelTask_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskMQServiceClient) GetTask(ctx context.Context, in *GetTaskRequest, opts ...grpc.CallOption) (*GetTaskResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetTaskResponse)
+	err := c.cc.Invoke(ctx, TaskMQService_GetTask_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskMQServiceClient) ListScheduledTasks(ctx context.Context, in *ListScheduledTasksRequest, opts ...grpc.CallOption) (*ListScheduledTasksResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListScheduledTasksResponse)
+	err := c.cc.Invoke(ctx, TaskMQService_ListScheduledTasks_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *taskMQServiceClient) ListActiveTasks(ctx context.Context, in *ListActiveTasksRequest, opts ...grpc.CallOption) (*ListActiveTasksResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(ListActiveTasksResponse)
+	err := c.cc.Invoke(ctx, TaskMQService_ListActiveTasks_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // TaskMQServiceServer is the server API for TaskMQService service.
 // All implementations must embed UnimplementedTaskMQServiceServer
 // for forward compatibility.
 //
-// TaskMQService provides APIs for multi-language enqueuing and queue management.
+// TaskMQService is the multi-language producer, DLQ, and ops control API.
+//
+// Scope:
+//   - Enqueue immediate / delayed / bulk tasks
+//   - Register cron jobs
+//   - List / delete / retry dead letters
+//   - Queue pause / resume
+//   - Cancel task, get task meta, list scheduled / active
+//
+// Dashboard, lifecycle metrics scrape, and events feed remain on HTTP admin
+// and taskmq-cli. See docs/OPERATIONS.md "API surfaces".
 type TaskMQServiceServer interface {
 	Enqueue(context.Context, *EnqueueRequest) (*EnqueueResponse, error)
 	EnqueueIn(context.Context, *EnqueueInRequest) (*EnqueueResponse, error)
 	EnqueueAt(context.Context, *EnqueueAtRequest) (*EnqueueResponse, error)
+	EnqueueBulk(context.Context, *EnqueueBulkRequest) (*EnqueueBulkResponse, error)
 	RegisterCron(context.Context, *RegisterCronRequest) (*RegisterCronResponse, error)
 	ListDeadLetters(context.Context, *ListDeadLettersRequest) (*ListDeadLettersResponse, error)
 	DeleteDeadLetter(context.Context, *DeleteDeadLetterRequest) (*DeleteDeadLetterResponse, error)
 	RetryDeadLetter(context.Context, *RetryDeadLetterRequest) (*RetryDeadLetterResponse, error)
+	// Ops / inspect (parity with HTTP admin + CLI task/queue controls).
+	PauseQueue(context.Context, *PauseQueueRequest) (*PauseQueueResponse, error)
+	ResumeQueue(context.Context, *ResumeQueueRequest) (*ResumeQueueResponse, error)
+	IsQueuePaused(context.Context, *IsQueuePausedRequest) (*IsQueuePausedResponse, error)
+	CancelTask(context.Context, *CancelTaskRequest) (*CancelTaskResponse, error)
+	GetTask(context.Context, *GetTaskRequest) (*GetTaskResponse, error)
+	ListScheduledTasks(context.Context, *ListScheduledTasksRequest) (*ListScheduledTasksResponse, error)
+	ListActiveTasks(context.Context, *ListActiveTasksRequest) (*ListActiveTasksResponse, error)
 	mustEmbedUnimplementedTaskMQServiceServer()
 }
 
@@ -153,6 +279,9 @@ func (UnimplementedTaskMQServiceServer) EnqueueIn(context.Context, *EnqueueInReq
 func (UnimplementedTaskMQServiceServer) EnqueueAt(context.Context, *EnqueueAtRequest) (*EnqueueResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method EnqueueAt not implemented")
 }
+func (UnimplementedTaskMQServiceServer) EnqueueBulk(context.Context, *EnqueueBulkRequest) (*EnqueueBulkResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method EnqueueBulk not implemented")
+}
 func (UnimplementedTaskMQServiceServer) RegisterCron(context.Context, *RegisterCronRequest) (*RegisterCronResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RegisterCron not implemented")
 }
@@ -164,6 +293,27 @@ func (UnimplementedTaskMQServiceServer) DeleteDeadLetter(context.Context, *Delet
 }
 func (UnimplementedTaskMQServiceServer) RetryDeadLetter(context.Context, *RetryDeadLetterRequest) (*RetryDeadLetterResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method RetryDeadLetter not implemented")
+}
+func (UnimplementedTaskMQServiceServer) PauseQueue(context.Context, *PauseQueueRequest) (*PauseQueueResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PauseQueue not implemented")
+}
+func (UnimplementedTaskMQServiceServer) ResumeQueue(context.Context, *ResumeQueueRequest) (*ResumeQueueResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ResumeQueue not implemented")
+}
+func (UnimplementedTaskMQServiceServer) IsQueuePaused(context.Context, *IsQueuePausedRequest) (*IsQueuePausedResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method IsQueuePaused not implemented")
+}
+func (UnimplementedTaskMQServiceServer) CancelTask(context.Context, *CancelTaskRequest) (*CancelTaskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method CancelTask not implemented")
+}
+func (UnimplementedTaskMQServiceServer) GetTask(context.Context, *GetTaskRequest) (*GetTaskResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetTask not implemented")
+}
+func (UnimplementedTaskMQServiceServer) ListScheduledTasks(context.Context, *ListScheduledTasksRequest) (*ListScheduledTasksResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListScheduledTasks not implemented")
+}
+func (UnimplementedTaskMQServiceServer) ListActiveTasks(context.Context, *ListActiveTasksRequest) (*ListActiveTasksResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method ListActiveTasks not implemented")
 }
 func (UnimplementedTaskMQServiceServer) mustEmbedUnimplementedTaskMQServiceServer() {}
 func (UnimplementedTaskMQServiceServer) testEmbeddedByValue()                       {}
@@ -240,6 +390,24 @@ func _TaskMQService_EnqueueAt_Handler(srv interface{}, ctx context.Context, dec 
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TaskMQService_EnqueueBulk_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(EnqueueBulkRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskMQServiceServer).EnqueueBulk(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskMQService_EnqueueBulk_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskMQServiceServer).EnqueueBulk(ctx, req.(*EnqueueBulkRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 func _TaskMQService_RegisterCron_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
 	in := new(RegisterCronRequest)
 	if err := dec(in); err != nil {
@@ -312,6 +480,132 @@ func _TaskMQService_RetryDeadLetter_Handler(srv interface{}, ctx context.Context
 	return interceptor(ctx, in, info, handler)
 }
 
+func _TaskMQService_PauseQueue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PauseQueueRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskMQServiceServer).PauseQueue(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskMQService_PauseQueue_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskMQServiceServer).PauseQueue(ctx, req.(*PauseQueueRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskMQService_ResumeQueue_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ResumeQueueRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskMQServiceServer).ResumeQueue(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskMQService_ResumeQueue_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskMQServiceServer).ResumeQueue(ctx, req.(*ResumeQueueRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskMQService_IsQueuePaused_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(IsQueuePausedRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskMQServiceServer).IsQueuePaused(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskMQService_IsQueuePaused_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskMQServiceServer).IsQueuePaused(ctx, req.(*IsQueuePausedRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskMQService_CancelTask_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(CancelTaskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskMQServiceServer).CancelTask(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskMQService_CancelTask_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskMQServiceServer).CancelTask(ctx, req.(*CancelTaskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskMQService_GetTask_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetTaskRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskMQServiceServer).GetTask(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskMQService_GetTask_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskMQServiceServer).GetTask(ctx, req.(*GetTaskRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskMQService_ListScheduledTasks_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListScheduledTasksRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskMQServiceServer).ListScheduledTasks(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskMQService_ListScheduledTasks_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskMQServiceServer).ListScheduledTasks(ctx, req.(*ListScheduledTasksRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _TaskMQService_ListActiveTasks_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(ListActiveTasksRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(TaskMQServiceServer).ListActiveTasks(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: TaskMQService_ListActiveTasks_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(TaskMQServiceServer).ListActiveTasks(ctx, req.(*ListActiveTasksRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // TaskMQService_ServiceDesc is the grpc.ServiceDesc for TaskMQService service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -332,6 +626,10 @@ var TaskMQService_ServiceDesc = grpc.ServiceDesc{
 			Handler:    _TaskMQService_EnqueueAt_Handler,
 		},
 		{
+			MethodName: "EnqueueBulk",
+			Handler:    _TaskMQService_EnqueueBulk_Handler,
+		},
+		{
 			MethodName: "RegisterCron",
 			Handler:    _TaskMQService_RegisterCron_Handler,
 		},
@@ -346,6 +644,34 @@ var TaskMQService_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "RetryDeadLetter",
 			Handler:    _TaskMQService_RetryDeadLetter_Handler,
+		},
+		{
+			MethodName: "PauseQueue",
+			Handler:    _TaskMQService_PauseQueue_Handler,
+		},
+		{
+			MethodName: "ResumeQueue",
+			Handler:    _TaskMQService_ResumeQueue_Handler,
+		},
+		{
+			MethodName: "IsQueuePaused",
+			Handler:    _TaskMQService_IsQueuePaused_Handler,
+		},
+		{
+			MethodName: "CancelTask",
+			Handler:    _TaskMQService_CancelTask_Handler,
+		},
+		{
+			MethodName: "GetTask",
+			Handler:    _TaskMQService_GetTask_Handler,
+		},
+		{
+			MethodName: "ListScheduledTasks",
+			Handler:    _TaskMQService_ListScheduledTasks_Handler,
+		},
+		{
+			MethodName: "ListActiveTasks",
+			Handler:    _TaskMQService_ListActiveTasks_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},

@@ -22,13 +22,13 @@ func TestTaskMQ_PauseResume_SingleQueue(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	queueName := "pause_test_queue"
+	queueName := UniqueQueue(t, "pause")
 	streamKey := keys.KeysFor(queueName).Stream()
 	pausedKey := keys.KeysFor(queueName).Paused()
 
 	runChan := make(chan string, 10)
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 	var worker mqworker.Worker
 
@@ -38,7 +38,7 @@ func TestTaskMQ_PauseResume_SingleQueue(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("pause-group"),
 					mqworker.WithConsumer("pause-consumer"),
@@ -138,8 +138,8 @@ func TestTaskMQ_PauseResume_MultiQueuePriority(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	queueActive := "priority_active_queue"
-	queuePaused := "priority_paused_queue"
+	queueActive := UniqueQueue(t, "pause_active")
+	queuePaused := UniqueQueue(t, "pause_paused")
 
 	streamActive := keys.KeysFor(queueActive).Stream()
 	streamPaused := keys.KeysFor(queuePaused).Stream()
@@ -147,7 +147,7 @@ func TestTaskMQ_PauseResume_MultiQueuePriority(t *testing.T) {
 
 	runChan := make(chan string, 10)
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 	var worker mqworker.Worker
 
@@ -157,7 +157,7 @@ func TestTaskMQ_PauseResume_MultiQueuePriority(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pw := mqworker.NewPriorityWorker(rdb, logger,
 					mqworker.WithGroup("priority-group"),
 					mqworker.WithConsumer("priority-consumer"),
@@ -233,13 +233,13 @@ func TestTaskMQ_PauseBlockedWorker(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	queueName := "pause_blocked_test_queue"
+	queueName := UniqueQueue(t, "pause_blocked")
 	streamKey := keys.KeysFor(queueName).Stream()
 	pausedKey := keys.KeysFor(queueName).Paused()
 
 	runChan := make(chan string, 1)
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -248,7 +248,7 @@ func TestTaskMQ_PauseBlockedWorker(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("pause-blocked-group"),
 					mqworker.WithConsumer("pause-blocked-consumer"),

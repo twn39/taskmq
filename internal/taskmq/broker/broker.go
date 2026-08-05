@@ -7,8 +7,11 @@ import (
 
 	"github.com/redis/go-redis/v9"
 	"github.com/twn39/taskmq/internal/taskmq/codec"
+	"github.com/twn39/taskmq/internal/taskmq/events"
 	"github.com/twn39/taskmq/internal/taskmq/keys"
 	"github.com/twn39/taskmq/internal/taskmq/lifecycle"
+	"github.com/twn39/taskmq/internal/taskmq/meta"
+	"github.com/twn39/taskmq/internal/taskmq/metricsq"
 	"github.com/twn39/taskmq/internal/taskmq/task"
 )
 
@@ -23,13 +26,16 @@ type TaskBroker interface {
 }
 
 type redisBroker struct {
-	rdb       *redis.Client
+	rdb       redis.UniversalClient
 	codec     codec.Codec
 	lifecycle *lifecycle.Lifecycle
+	meta      *meta.Store
+	metrics   *metricsq.Store
+	events    *events.Publisher
 }
 
-// NewRedisBroker creates a TaskBroker. Optional lifecycle controls DLQ capacity.
-func NewRedisBroker(rdb *redis.Client, c codec.Codec, lc ...*lifecycle.Lifecycle) TaskBroker {
+// NewRedisBroker creates a TaskBroker. Optional lifecycle controls DLQ capacity and completed retention.
+func NewRedisBroker(rdb redis.UniversalClient, c codec.Codec, lc ...*lifecycle.Lifecycle) TaskBroker {
 	var life *lifecycle.Lifecycle
 	if len(lc) > 0 {
 		life = lc[0]
@@ -38,6 +44,9 @@ func NewRedisBroker(rdb *redis.Client, c codec.Codec, lc ...*lifecycle.Lifecycle
 		rdb:       rdb,
 		codec:     c,
 		lifecycle: life,
+		meta:      meta.NewStore(rdb),
+		metrics:   metricsq.NewStore(rdb),
+		events:    events.NewPublisher(rdb, 0),
 	}
 }
 
@@ -212,6 +221,10 @@ func (b *redisBroker) MoveToDLQ(ctx context.Context, t *task.Task, streamKey, ms
 			b.lifecycle.IncMetric("dlq_evicted_total", n)
 		}
 	}
+	_ = b.meta.MarkDLQ(ctx, t, t.LastError)
+	b.metrics.Inc(ctx, t.Queue, metricsq.FieldDLQ, 1)
+	b.metrics.Inc(ctx, t.Queue, metricsq.FieldFailed, 1)
+	b.events.Emit(ctx, t.Queue, events.TypeFailed, t.ID, t.Name, t.LastError)
 	return nil
 }
 
@@ -236,6 +249,9 @@ func (b *redisBroker) ScheduleRetry(ctx context.Context, t *task.Task, streamKey
 	if err == nil {
 		// Notify the delayed scheduler so it wakes up instead of waiting up to maxSleep (10s).
 		_ = b.rdb.Publish(ctx, qk.DelayedWakeupChannel(), fmt.Sprintf("%d", runAt.UnixMilli())).Err()
+		_ = b.meta.MarkRetry(ctx, t, t.LastError)
+		b.metrics.Inc(ctx, t.Queue, metricsq.FieldRetried, 1)
+		b.events.Emit(ctx, t.Queue, events.TypeRetry, t.ID, t.Name, t.LastError)
 	}
 	return err
 }
@@ -257,6 +273,9 @@ func (b *redisBroker) DeferRateLimitedTask(ctx context.Context, msgID string, t 
 	if err == nil {
 		// Notify the delayed scheduler so it wakes up instead of waiting up to maxSleep (10s).
 		_ = b.rdb.Publish(ctx, qk.DelayedWakeupChannel(), fmt.Sprintf("%d", runAt.UnixMilli())).Err()
+		_ = b.meta.SetState(ctx, t.Queue, t.ID, meta.StateDelayed, "", msgID)
+		b.metrics.Inc(ctx, t.Queue, metricsq.FieldDeferred, 1)
+		b.events.Emit(ctx, t.Queue, events.TypeDelayed, t.ID, t.Name, "rate_limited")
 	}
 	return err
 }
@@ -281,6 +300,7 @@ func (b *redisBroker) RenewUniqueLock(ctx context.Context, t *task.Task, ttl tim
 }
 
 // CompleteTask ACKs/deletes the stream message and releases the unique lock when owned.
+// When lifecycle.CompletedRetention > 0, task meta/results are retained; otherwise meta is deleted.
 func (b *redisBroker) CompleteTask(ctx context.Context, t *task.Task, streamKey, msgID, group string) error {
 	var uniqueLockKey string
 	var uniqueLockVal string
@@ -289,5 +309,20 @@ func (b *redisBroker) CompleteTask(ctx context.Context, t *task.Task, streamKey,
 		uniqueLockVal = t.ID
 	}
 	_, err := completeTaskCmd.Run(ctx, b.rdb, []string{streamKey, uniqueLockKey}, msgID, group, uniqueLockVal).Result()
-	return err
+	if err != nil {
+		return err
+	}
+	var retention time.Duration
+	var maxCount int64
+	if b.lifecycle != nil {
+		cfg := b.lifecycle.Config()
+		retention = cfg.CompletedRetention
+		maxCount = cfg.CompletedMaxCount
+	}
+	result := t.Result
+	_ = b.meta.MarkCompleted(ctx, t, result, retention, maxCount)
+	b.metrics.Inc(ctx, t.Queue, metricsq.FieldCompleted, 1)
+	b.metrics.Inc(ctx, t.Queue, metricsq.FieldProcessed, 1)
+	b.events.Emit(ctx, t.Queue, events.TypeCompleted, t.ID, t.Name, "")
+	return nil
 }

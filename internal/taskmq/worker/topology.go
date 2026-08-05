@@ -14,7 +14,7 @@ import (
 // BuildWorkerTopology constructs a Worker using DefaultLifecycleConfig.
 // The Lifecycle is not shared with any separately constructed Client.
 // Prefer BuildWorkerTopologyWithLifecycle with the Fx-provided shared instance in production.
-func BuildWorkerTopology(rdb *redis.Client, logger *zap.Logger, cfg *config.Config, c codec.Codec, rootCtx context.Context) (Worker, error) {
+func BuildWorkerTopology(rdb redis.UniversalClient, logger *zap.Logger, cfg *config.Config, c codec.Codec, rootCtx context.Context) (Worker, error) {
 	lc := lifecycle.NewLifecycle(lifecycle.DefaultLifecycleConfig())
 	return BuildWorkerTopologyWithLifecycle(rdb, logger, cfg, c, rootCtx, lc)
 }
@@ -22,7 +22,7 @@ func BuildWorkerTopology(rdb *redis.Client, logger *zap.Logger, cfg *config.Conf
 // BuildWorkerTopologyWithLifecycle reuses a shared Lifecycle instance
 // so client and workers share admission policy and process-local metrics.
 // lc must not be nil (WithLifecycle rejects nil).
-func BuildWorkerTopologyWithLifecycle(rdb *redis.Client, logger *zap.Logger, cfg *config.Config, c codec.Codec, rootCtx context.Context, lc *lifecycle.Lifecycle) (Worker, error) {
+func BuildWorkerTopologyWithLifecycle(rdb redis.UniversalClient, logger *zap.Logger, cfg *config.Config, c codec.Codec, rootCtx context.Context, lc *lifecycle.Lifecycle) (Worker, error) {
 	if lc == nil {
 		return nil, fmt.Errorf("lifecycle must not be nil")
 	}

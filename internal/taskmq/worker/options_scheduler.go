@@ -13,7 +13,7 @@ import (
 
 // SchedulerFactory builds a delayed scheduler.
 // streamHardLimit is EnqueueHardLimit; streamMaxLen is StreamMaxLen (both 0 = unlimited/off).
-type SchedulerFactory func(rdb *redis.Client, logger *zap.Logger, queue string, cronManager runner.CronManager, codec codec.Codec, pollInterval time.Duration, streamHardLimit, streamMaxLen int64) runner.Runner
+type SchedulerFactory func(rdb redis.UniversalClient, logger *zap.Logger, queue string, cronManager runner.CronManager, codec codec.Codec, pollInterval time.Duration, streamHardLimit, streamMaxLen int64) runner.Runner
 
 type SchedulerOptions struct {
 	pollInterval time.Duration

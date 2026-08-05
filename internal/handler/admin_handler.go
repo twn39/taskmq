@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"strconv"
@@ -11,13 +12,14 @@ import (
 	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
 	mqkeys "github.com/twn39/taskmq/internal/taskmq/keys"
 	"github.com/twn39/taskmq/internal/taskmq/lifecycle"
+	"github.com/twn39/taskmq/internal/taskmq/metricsq"
 	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 	"go.uber.org/zap"
 )
 
 // AdminHandler serves HTTP admin APIs using ISP-narrow client ports.
 type AdminHandler struct {
-	rdb       *redis.Client
+	rdb       redis.UniversalClient
 	admin     mqclient.AdminClient
 	cron      mqclient.CronClient
 	enq       mqclient.EnqueueClient
@@ -26,7 +28,7 @@ type AdminHandler struct {
 }
 
 // NewAdminHandler wires admin, cron, enqueue ports and optional shared lifecycle metrics.
-func NewAdminHandler(rdb *redis.Client, admin mqclient.AdminClient, cron mqclient.CronClient, enq mqclient.EnqueueClient, lc *lifecycle.Lifecycle, logger *zap.Logger) *AdminHandler {
+func NewAdminHandler(rdb redis.UniversalClient, admin mqclient.AdminClient, cron mqclient.CronClient, enq mqclient.EnqueueClient, lc *lifecycle.Lifecycle, logger *zap.Logger) *AdminHandler {
 	return &AdminHandler{
 		rdb:       rdb,
 		admin:     admin,
@@ -39,7 +41,9 @@ func NewAdminHandler(rdb *redis.Client, admin mqclient.AdminClient, cron mqclien
 
 // GetLifecycleMetrics returns process-local lifecycle counters.
 // Query format=prometheus for Prometheus exposition text (no client dependency).
+// Query scope=queue adds Redis-backed per-queue counters/depths (cross-process).
 func (h *AdminHandler) GetLifecycleMetrics(c *echo.Context) error {
+	ctx := c.Request().Context()
 	var snap map[string]int64
 	if h.lifecycle != nil {
 		snap = h.lifecycle.Metrics().Snapshot()
@@ -47,9 +51,210 @@ func (h *AdminHandler) GetLifecycleMetrics(c *echo.Context) error {
 		snap = map[string]int64{}
 	}
 	if c.QueryParam("format") == "prometheus" {
+		if c.QueryParam("scope") == "queue" {
+			queues, err := h.listQueueNames(ctx)
+			if err != nil {
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			}
+			text, err := metricsq.PrometheusText(ctx, h.rdb, queues)
+			if err != nil {
+				return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+			}
+			text += "\n" + lifecycle.PrometheusText(snap)
+			return c.String(http.StatusOK, text)
+		}
 		return c.String(http.StatusOK, lifecycle.PrometheusText(snap))
 	}
 	return c.JSON(http.StatusOK, snap)
+}
+
+// GetQueueMetrics returns Redis-backed counters and depth gauges for one or all queues.
+func (h *AdminHandler) GetQueueMetrics(c *echo.Context) error {
+	ctx := c.Request().Context()
+	queue := c.Param("queue")
+	var queues []string
+	var err error
+	if queue != "" {
+		queues = []string{queue}
+	} else {
+		queues, err = h.listQueueNames(ctx)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
+	}
+	if c.QueryParam("format") == "prometheus" {
+		text, err := metricsq.PrometheusText(ctx, h.rdb, queues)
+		if err != nil {
+			return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+		}
+		return c.String(http.StatusOK, text)
+	}
+	store := metricsq.NewStore(h.rdb)
+	out := make([]map[string]interface{}, 0, len(queues))
+	for _, q := range queues {
+		snap, _ := store.Snapshot(ctx, q)
+		d, _ := metricsq.Depths(ctx, h.rdb, q)
+		out = append(out, map[string]interface{}{
+			"queue":   q,
+			"counters": snap,
+			"depths":  d,
+		})
+	}
+	return c.JSON(http.StatusOK, out)
+}
+
+// GetTask returns durable task metadata by queue + id.
+func (h *AdminHandler) GetTask(c *echo.Context) error {
+	ctx := c.Request().Context()
+	queue := c.Param("queue")
+	id := c.Param("id")
+	if queue == "" || id == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue or id parameter"})
+	}
+	info, err := h.admin.GetTaskInfo(ctx, queue, id)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	if info == nil {
+		return c.JSON(http.StatusNotFound, map[string]string{"error": "task not found"})
+	}
+	return c.JSON(http.StatusOK, info)
+}
+
+func (h *AdminHandler) listQueueNames(ctx context.Context) ([]string, error) {
+	redisKeys, err := h.rdb.Keys(ctx, mqkeys.StreamScanPattern()).Result()
+	if err != nil {
+		return nil, err
+	}
+	set := map[string]bool{"default": true}
+	for _, key := range redisKeys {
+		if q, ok := mqkeys.ParseQueueFromStreamKey(key); ok {
+			set[q] = true
+		}
+	}
+	out := make([]string, 0, len(set))
+	for q := range set {
+		out = append(out, q)
+	}
+	return out, nil
+}
+
+// ListEvents returns recent queue lifecycle events.
+func (h *AdminHandler) ListEvents(c *echo.Context) error {
+	ctx := c.Request().Context()
+	queue := c.Param("queue")
+	if queue == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue parameter"})
+	}
+	limit := int64(50)
+	if lim, err := strconv.ParseInt(c.QueryParam("limit"), 10, 64); err == nil && lim > 0 {
+		limit = lim
+	}
+	evs, err := h.admin.ListEvents(ctx, queue, limit)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	if evs == nil {
+		evs = []mqclient.EventView{}
+	}
+	return c.JSON(http.StatusOK, evs)
+}
+
+// ListWorkers returns live consumer heartbeats for a queue.
+func (h *AdminHandler) ListWorkers(c *echo.Context) error {
+	ctx := c.Request().Context()
+	queue := c.Param("queue")
+	if queue == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue parameter"})
+	}
+	workers, err := h.admin.ListWorkers(ctx, queue)
+	if err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	if workers == nil {
+		workers = []mqclient.WorkerView{}
+	}
+	return c.JSON(http.StatusOK, workers)
+}
+
+// UpdateProgressRequest is the body for task progress updates.
+type UpdateProgressRequest struct {
+	Percent int    `json:"percent"`
+	Data    string `json:"data"`
+}
+
+// UpdateProgress sets task progress metadata.
+func (h *AdminHandler) UpdateProgress(c *echo.Context) error {
+	ctx := c.Request().Context()
+	queue := c.Param("queue")
+	id := c.Param("id")
+	if queue == "" || id == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue or id parameter"})
+	}
+	var req UpdateProgressRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid body"})
+	}
+	if err := h.admin.UpdateProgress(ctx, queue, id, req.Percent, req.Data); err != nil {
+		return c.JSON(http.StatusInternalServerError, map[string]string{"error": err.Error()})
+	}
+	return c.JSON(http.StatusOK, map[string]string{"message": "ok"})
+}
+
+// BulkEnqueueRequest is the body for bulk enqueue.
+type BulkEnqueueRequest struct {
+	Tasks []struct {
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		Payload string `json:"payload"`
+	} `json:"tasks"`
+	FailFast bool `json:"fail_fast"`
+}
+
+// BulkEnqueue enqueues many tasks on a queue via pipeline.
+func (h *AdminHandler) BulkEnqueue(c *echo.Context) error {
+	ctx := c.Request().Context()
+	queue := c.Param("queue")
+	if queue == "" {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Missing queue parameter"})
+	}
+	var req BulkEnqueueRequest
+	if err := c.Bind(&req); err != nil {
+		return c.JSON(http.StatusBadRequest, map[string]string{"error": "Invalid body"})
+	}
+	tasks := make([]*taskmodel.Task, 0, len(req.Tasks))
+	for _, t := range req.Tasks {
+		name := t.Name
+		if name == "" {
+			name = "task:bulk"
+		}
+		tasks = append(tasks, taskmodel.NewTask(name, []byte(t.Payload), taskmodel.TaskOptions{
+			ID:    t.ID,
+			Queue: queue,
+		}))
+	}
+	res, err := h.enq.EnqueueBulk(ctx, tasks, mqclient.WithBulkFailFast(req.FailFast))
+	if res == nil {
+		res = &mqclient.BulkResult{}
+	}
+	statusCode := http.StatusOK
+	if err != nil && len(res.Succeeded) == 0 {
+		statusCode = http.StatusInternalServerError
+	} else if err != nil {
+		statusCode = http.StatusMultiStatus
+	}
+	return c.JSON(statusCode, map[string]interface{}{
+		"succeeded":      res.Succeeded,
+		"failed_indexes": res.FailedIndexes,
+		"error":          errString(err),
+	})
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
 }
 
 func (h *AdminHandler) GetDashboard(c *echo.Context) error {

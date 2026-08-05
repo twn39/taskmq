@@ -23,14 +23,14 @@ func TestTaskMQ_UniqueScope_UntilStart(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "unq_start_queue"
+	queueName := UniqueQueue(t, "unq_start")
 	streamKey := keys.KeysFor(queueName).Stream()
 	uniqueLockKey := keys.KeysFor(queueName).Unique("start-key")
 
 	startedChan := make(chan bool, 1)
 	handlerSleepChan := make(chan bool, 1)
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -39,7 +39,7 @@ func TestTaskMQ_UniqueScope_UntilStart(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("start-group"),
 					mqworker.WithConsumer("start-consumer"),
@@ -99,7 +99,7 @@ func TestTaskMQ_UniqueScope_UntilSuccess(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "unq_success_queue"
+	queueName := UniqueQueue(t, "unq_success")
 	streamKey := keys.KeysFor(queueName).Stream()
 	dlqKey := keys.KeysFor(queueName).DLQ()
 	dlqIndexKey := keys.KeysFor(queueName).DLQIndex()
@@ -107,7 +107,7 @@ func TestTaskMQ_UniqueScope_UntilSuccess(t *testing.T) {
 
 	runChan := make(chan error, 5)
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -116,7 +116,7 @@ func TestTaskMQ_UniqueScope_UntilSuccess(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("success-group"),
 					mqworker.WithConsumer("success-consumer"),
@@ -190,14 +190,14 @@ func TestTaskMQ_Unique_WatchdogRenewal(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 
-	queueName := "unq_watchdog_queue"
+	queueName := UniqueQueue(t, "unq_watch")
 	streamKey := keys.KeysFor(queueName).Stream()
 	uniqueLockKey := keys.KeysFor(queueName).Unique("watchdog-key")
 
 	startedChan := make(chan bool, 1)
 	handlerSleepChan := make(chan bool, 1)
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 
 	app := fxtest.New(t,
@@ -206,7 +206,7 @@ func TestTaskMQ_Unique_WatchdogRenewal(t *testing.T) {
 			logger.NewLogger,
 			internalredis.NewRedisClient,
 			mqclient.NewClient,
-			func(rdb *goredis.Client, logger *zap.Logger) mqworker.Worker {
+			func(rdb goredis.UniversalClient, logger *zap.Logger) mqworker.Worker {
 				pool := mqworker.NewWorkerPool(rdb, logger, queueName,
 					mqworker.WithGroup("watchdog-group"),
 					mqworker.WithConsumer("watchdog-consumer"),

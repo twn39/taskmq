@@ -1,5 +1,10 @@
 package lifecycle
 
+import (
+	"sort"
+	"strings"
+)
+
 // MetricsSink is an optional observer for lifecycle counters.
 // The built-in LifecycleMetrics always records; a sink can mirror increments
 // into an external system (Prometheus, statsd, etc.) without coupling core code.
@@ -36,22 +41,52 @@ func (f FuncSink) Inc(name string, delta int64) {
 	}
 }
 
-// PrometheusText renders a Snapshot map as Prometheus exposition format (no client dependency).
+// metricHelp maps Snapshot counter names to Prometheus HELP text.
+var metricHelp = map[string]string{
+	"enqueue_rejected_total":       "Tasks rejected by stream enqueue hard limit.",
+	"delayed_rejected_total":       "Delayed tasks rejected by delayed capacity policy.",
+	"payload_rejected_total":       "Tasks rejected for exceeding max payload size.",
+	"safe_trim_deleted_total":      "Stream entries deleted by safe MINID trim janitor.",
+	"dlq_evicted_total":            "DLQ entries evicted by dlq_max_count policy.",
+	"cancelled_delayed_purged":     "Cancelled delayed tasks purged by retention janitor.",
+	"idle_consumers_removed_total": "Idle consumer group members removed by janitor.",
+	"soft_limit_hits_total":        "Soft enqueue limit observations (stream length).",
+}
+
+// PrometheusText renders a Snapshot map as Prometheus exposition format
+// (no client dependency). Includes # HELP / # TYPE and stable name order.
+// Metric names are prefixed with taskmq_lifecycle_.
 func PrometheusText(snapshot map[string]int64) string {
 	if len(snapshot) == 0 {
 		return ""
 	}
-	// Stable-ish order is not required for Prometheus; keep insertion-friendly iteration.
-	var b []byte
-	for k, v := range snapshot {
-		// Prefix with taskmq_lifecycle_ for scrape uniqueness.
-		b = append(b, "taskmq_lifecycle_"...)
-		b = append(b, k...)
-		b = append(b, ' ')
-		b = append(b, []byte(itoa(v))...)
-		b = append(b, '\n')
+	names := make([]string, 0, len(snapshot))
+	for k := range snapshot {
+		names = append(names, k)
 	}
-	return string(b)
+	sort.Strings(names)
+
+	var b strings.Builder
+	for _, name := range names {
+		full := "taskmq_lifecycle_" + name
+		help := metricHelp[name]
+		if help == "" {
+			help = "TaskMQ lifecycle counter " + name + "."
+		}
+		b.WriteString("# HELP ")
+		b.WriteString(full)
+		b.WriteByte(' ')
+		b.WriteString(help)
+		b.WriteByte('\n')
+		b.WriteString("# TYPE ")
+		b.WriteString(full)
+		b.WriteString(" counter\n")
+		b.WriteString(full)
+		b.WriteByte(' ')
+		b.WriteString(itoa(snapshot[name]))
+		b.WriteByte('\n')
+	}
+	return b.String()
 }
 
 func itoa(v int64) string {

@@ -15,6 +15,60 @@ import (
 	"go.uber.org/zap"
 )
 
+func TestProcessMessage_CrashRecoveryMaxRetryGate(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("failed to start miniredis: %v", err)
+	}
+	defer mr.Close()
+
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	mb := &mockBroker{}
+	pool := NewWorkerPool(rdb, zap.NewNop(), "crash-q",
+		WithBroker(mb),
+		WithRetryPolicy(&mockRetryPolicy{should: true}),
+		WithDeadLetterPolicy(policy.NewStandardDeadLetterPolicy("dlq-q", nil)),
+	).(*workerPool)
+
+	var handlerCalled bool
+	pool.Register("task:crash", func(ctx context.Context, task *taskmodel.Task) error {
+		handlerCalled = true
+		return nil
+	})
+
+	task := &taskmodel.Task{
+		ID:       "crash-1",
+		Queue:    "crash-q",
+		Name:     "task:crash",
+		MaxRetry: 1,
+		Retry:    0,
+	}
+	taskBytes, err := task.Serialize()
+	if err != nil {
+		t.Fatal(err)
+	}
+	msg := redis.XMessage{
+		ID: "1-0",
+		Values: map[string]interface{}{
+			"task":             []byte(taskBytes),
+			"__delivery_count": int64(5), // Retry becomes 4 > MaxRetry 1
+		},
+	}
+	pool.ProcessMessage(context.Background(), msg)
+
+	if handlerCalled {
+		t.Fatal("handler must not run when crash-recovery max-retry gate fires")
+	}
+	mb.mu.Lock()
+	defer mb.mu.Unlock()
+	if mb.moveToDLQCnt != 1 {
+		t.Fatalf("expected MoveToDLQ=1, got %d", mb.moveToDLQCnt)
+	}
+	if mb.completedCnt != 0 {
+		t.Fatalf("expected CompleteTask=0, got %d", mb.completedCnt)
+	}
+}
+
 func TestTaskMQ_ProcessMessage_TableDriven(t *testing.T) {
 	mr, err := miniredis.Run()
 	if err != nil {

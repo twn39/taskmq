@@ -25,14 +25,14 @@ func TestTaskMQ_StrictPriorityFlow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	qLow := "low_priority_queue"
-	qCritical := "critical_priority_queue"
+	qLow := UniqueQueue(t, "prio_low")
+	qCritical := UniqueQueue(t, "prio_crit")
 
 	var executionOrder []string
 	var mu sync.Mutex
 	doneChan := make(chan struct{})
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 	var worker mqworker.Worker
 
@@ -135,14 +135,14 @@ func TestTaskMQ_WeightedPriorityFlow(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 
-	qLow := "low_weighted_queue"
-	qCritical := "critical_weighted_queue"
+	qLow := UniqueQueue(t, "wprio_low")
+	qCritical := UniqueQueue(t, "wprio_crit")
 
 	var executionOrder []string
 	var mu sync.Mutex
 	doneChan := make(chan struct{})
 
-	var rdb *goredis.Client
+	var rdb goredis.UniversalClient
 	var client mqclient.Client
 	var worker mqworker.Worker
 
