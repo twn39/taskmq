@@ -58,13 +58,11 @@ func TestTaskMQ_MultiConsumer_ProcessesEachTaskOnce(t *testing.T) {
 	}
 
 	WaitUntil(t, func() bool {
-		return runs.Load() >= int64(n)
-	}, 20*time.Second, 40*time.Millisecond, "all tasks should run")
+		pending, err := rdb.XPending(ctx, keys.KeysFor(queue).Stream(), group).Result()
+		return err == nil && runs.Load() >= int64(n) && pending.Count == 0
+	}, 20*time.Second, 40*time.Millisecond, "all tasks should run and be settled")
 
 	require.Equal(t, int64(n), runs.Load())
-	pending, err := rdb.XPending(ctx, keys.KeysFor(queue).Stream(), group).Result()
-	require.NoError(t, err)
-	require.Equal(t, int64(0), pending.Count)
 }
 
 // Concurrency option must cap simultaneous handler executions for a single pool.
@@ -162,22 +160,12 @@ func TestTaskMQ_DeadlineAlreadyExpired(t *testing.T) {
 		ID: "dl-1", Queue: queue, MaxRetry: taskmodel.Ptr(0), Deadline: past,
 	})))
 
-	// MaxRetry=0 + canceled → DLQ
+	store := meta.NewStore(rdb)
 	WaitUntil(t, func() bool {
 		n, _ := rdb.ZCard(ctx, qk.DLQ()).Result()
-		return n >= 1 || gotCanceled.Load()
-	}, 15*time.Second, 40*time.Millisecond, "deadline should cancel handler and settle")
+		info, _ := store.Get(ctx, queue, "dl-1")
+		return gotCanceled.Load() && n >= 1 && info != nil && info.State == meta.StateDLQ
+	}, 15*time.Second, 40*time.Millisecond, "past deadline failure with MaxRetry=0 goes to DLQ and updates meta state")
 
 	require.True(t, gotCanceled.Load(), "handler should observe canceled context from past deadline")
-	// Eventually DLQ for MaxRetry=0
-	WaitUntil(t, func() bool {
-		n, _ := rdb.ZCard(ctx, qk.DLQ()).Result()
-		return n >= 1
-	}, 10*time.Second, 40*time.Millisecond, "past deadline failure with MaxRetry=0 goes to DLQ")
-
-	info, err := meta.NewStore(rdb).Get(ctx, queue, "dl-1")
-	require.NoError(t, err)
-	if info != nil {
-		require.Equal(t, meta.StateDLQ, info.State)
-	}
 }

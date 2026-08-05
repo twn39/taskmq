@@ -201,15 +201,12 @@ func TestSettlementMatrix_MaxRetryGoesToDLQ(t *testing.T) {
 		ID: "max-1", Queue: queue, MaxRetry: taskmodel.Ptr(0),
 	})))
 
+	store := meta.NewStore(rdb)
 	require.Eventually(t, func() bool {
 		n, _ := rdb.ZCard(ctx, qk.DLQ()).Result()
-		return n >= 1
+		info, _ := store.Get(ctx, queue, "max-1")
+		return n >= 1 && info != nil && info.State == meta.StateDLQ
 	}, 15*time.Second, 50*time.Millisecond)
-
-	info, err := meta.NewStore(rdb).Get(ctx, queue, "max-1")
-	require.NoError(t, err)
-	require.NotNil(t, info)
-	require.Equal(t, meta.StateDLQ, info.State)
 
 	delayed, _ := rdb.ZCard(ctx, qk.Delayed()).Result()
 	require.Equal(t, int64(0), delayed)
@@ -398,14 +395,12 @@ func TestSettlementMatrix_UnrecoverableAlias(t *testing.T) {
 		ID: "unrec-1", Queue: queue, MaxRetry: taskmodel.Ptr(10),
 	})))
 
+	store := meta.NewStore(rdb)
 	require.Eventually(t, func() bool {
 		n, _ := rdb.ZCard(ctx, qk.DLQ()).Result()
-		return n >= 1
+		info, _ := store.Get(ctx, queue, "unrec-1")
+		return n >= 1 && info != nil && info.State == meta.StateDLQ
 	}, 15*time.Second, 50*time.Millisecond)
-	info, err := meta.NewStore(rdb).Get(ctx, queue, "unrec-1")
-	require.NoError(t, err)
-	require.NotNil(t, info)
-	require.Equal(t, meta.StateDLQ, info.State)
 }
 
 // TestSettlementMatrix_SettlementBrokerFailureLeavesPEL verifies that when ScheduleRetry
@@ -494,20 +489,17 @@ func TestSettlementMatrix_CrashRecoveryMaxRetryGoesToDLQ(t *testing.T) {
 	require.NoError(t, pool.Start(ctx))
 	defer pool.Stop(ctx)
 
+	store := meta.NewStore(rdb)
 	require.Eventually(t, func() bool {
 		n, _ := rdb.ZCard(ctx, qk.DLQ()).Result()
-		return n >= 1
+		info, _ := store.Get(ctx, queue, taskID)
+		return n >= 1 && info != nil && info.State == meta.StateDLQ
 	}, 15*time.Second, 50*time.Millisecond)
 
 	require.Equal(t, int64(0), handlerHits.Load(), "handler must not run when crash max-retry gate fires")
 	pending, err := rdb.XPending(ctx, qk.Stream(), group).Result()
 	require.NoError(t, err)
 	require.Equal(t, int64(0), pending.Count)
-
-	info, err := meta.NewStore(rdb).Get(ctx, queue, taskID)
-	require.NoError(t, err)
-	require.NotNil(t, info)
-	require.Equal(t, meta.StateDLQ, info.State)
 }
 
 // TestSettlementMatrix_MoveToDLQBrokerFailureLeavesPEL covers permanent-failure path when
