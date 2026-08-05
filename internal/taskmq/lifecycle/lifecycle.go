@@ -147,6 +147,7 @@ func (m *LifecycleMetrics) Snapshot() map[string]int64 {
 type Lifecycle struct {
 	cfg     LifecycleConfig
 	metrics *LifecycleMetrics
+	sink    MetricsSink // optional external mirror (Prometheus adapter, etc.)
 }
 
 // NewLifecycle creates a Lifecycle with normalized config.
@@ -156,6 +157,59 @@ func NewLifecycle(cfg LifecycleConfig) *Lifecycle {
 		cfg:     cfg,
 		metrics: &LifecycleMetrics{},
 	}
+}
+
+// WithMetricsSink attaches an optional external metrics mirror.
+// Safe to call once after NewLifecycle; nil clears the sink.
+func (l *Lifecycle) WithMetricsSink(s MetricsSink) *Lifecycle {
+	if l == nil {
+		return l
+	}
+	l.sink = s
+	return l
+}
+
+// observe increments the named process-local counter and optional sink.
+func (l *Lifecycle) observe(name string, counter *atomic.Int64, delta int64) {
+	if counter != nil {
+		counter.Add(delta)
+	}
+	if l != nil && l.sink != nil {
+		l.sink.Inc(name, delta)
+	}
+}
+
+// IncMetric increments a known lifecycle counter by name (and optional sink).
+// Unknown names only go to the external sink when present.
+func (l *Lifecycle) IncMetric(name string, delta int64) {
+	if l == nil || delta == 0 {
+		return
+	}
+	var c *atomic.Int64
+	switch name {
+	case "enqueue_rejected_total":
+		c = &l.metrics.EnqueueRejectedTotal
+	case "delayed_rejected_total":
+		c = &l.metrics.DelayedRejectedTotal
+	case "payload_rejected_total":
+		c = &l.metrics.PayloadRejectedTotal
+	case "safe_trim_deleted_total":
+		c = &l.metrics.SafeTrimDeletedTotal
+	case "dlq_evicted_total":
+		c = &l.metrics.DLQEvictedTotal
+	case "cancelled_delayed_purged":
+		c = &l.metrics.CancelledDelayedPurged
+	case "idle_consumers_removed_total":
+		c = &l.metrics.IdleConsumersRemovedTotal
+	case "soft_limit_hits_total":
+		c = &l.metrics.SoftLimitHitsTotal
+	default:
+		if l.sink != nil {
+			l.sink.Inc(name, delta)
+		}
+		return
+	}
+	l.observe(name, c, delta)
 }
 
 // Config returns a copy of the normalized config.
@@ -184,7 +238,7 @@ func (l *Lifecycle) CheckPayloadSize(payload []byte) error {
 		return nil
 	}
 	if len(payload) > max {
-		l.metrics.PayloadRejectedTotal.Add(1)
+		l.observe("payload_rejected_total", &l.metrics.PayloadRejectedTotal, 1)
 		return fmt.Errorf("%w: size=%d max=%d", ErrPayloadTooLarge, len(payload), max)
 	}
 	return nil
@@ -200,7 +254,7 @@ func (l *Lifecycle) CheckDelayedMaxDelay(runAt time.Time) error {
 		return nil
 	}
 	if runAt.After(time.Now().Add(cfg.DelayedMaxDelay)) {
-		l.metrics.DelayedRejectedTotal.Add(1)
+		l.observe("delayed_rejected_total", &l.metrics.DelayedRejectedTotal, 1)
 		return fmt.Errorf("%w: run_at=%s max_delay=%s", ErrDelayTooFar, runAt.UTC().Format(time.RFC3339), cfg.DelayedMaxDelay)
 	}
 	return nil
@@ -216,7 +270,7 @@ func (l *Lifecycle) NoteSoftLimitIfNeeded(ctx context.Context, rdb *redis.Client
 		return
 	}
 	if n >= l.cfg.EnqueueSoftLimit {
-		l.metrics.SoftLimitHitsTotal.Add(1)
+		l.observe("soft_limit_hits_total", &l.metrics.SoftLimitHitsTotal, 1)
 	}
 }
 
@@ -237,7 +291,8 @@ func (l *Lifecycle) OverflowArg() int {
 }
 
 // MapEnqueueScriptResult interprets capacity-aware enqueue script return values.
-func MapEnqueueScriptResult(res interface{}, metrics *LifecycleMetrics, delayed bool) error {
+// lc may be nil (metrics skipped). delayed selects which counter name on capacity full.
+func MapEnqueueScriptResult(res interface{}, lc *Lifecycle, delayed bool) error {
 	val, ok := res.(int64)
 	if !ok {
 		// XADD returns stream ID string on success for plain enqueue script when not using our return codes
@@ -250,13 +305,13 @@ func MapEnqueueScriptResult(res interface{}, metrics *LifecycleMetrics, delayed 
 	case enqueueDuplicate:
 		return ErrDuplicateTask
 	case enqueueQueueFull:
-		if metrics != nil {
-			metrics.EnqueueRejectedTotal.Add(1)
+		if lc != nil {
+			lc.observe("enqueue_rejected_total", &lc.metrics.EnqueueRejectedTotal, 1)
 		}
 		return ErrQueueFull
 	case enqueueDelayedFull:
-		if metrics != nil {
-			metrics.DelayedRejectedTotal.Add(1)
+		if lc != nil {
+			lc.observe("delayed_rejected_total", &lc.metrics.DelayedRejectedTotal, 1)
 		}
 		return ErrDelayedFull
 	default:

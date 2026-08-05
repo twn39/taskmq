@@ -11,17 +11,15 @@ import (
 // When l is nil, limits are treated as disabled (unbounded XADD via script with hard=0,maxlen=0).
 func (l *Lifecycle) XAddTask(ctx context.Context, rdb *redis.Client, stream string, payload []byte) error {
 	hard, maxlen := int64(0), int64(0)
-	var metrics *LifecycleMetrics
 	if l != nil {
 		hard = l.cfg.EnqueueHardLimit
 		maxlen = l.cfg.StreamMaxLen
-		metrics = l.metrics
 	}
 	res, err := EnqueueStreamCmd.Run(ctx, rdb, []string{stream}, hard, maxlen, payload).Result()
 	if err != nil {
 		return err
 	}
-	return MapEnqueueScriptResult(res, metrics, false)
+	return MapEnqueueScriptResult(res, l, false)
 }
 
 // ZAddDelayed inserts into the delayed ZSET applying DelayedMaxCount + overflow policy.
@@ -40,10 +38,8 @@ func (l *Lifecycle) ZAddDelayedSystem(ctx context.Context, rdb *redis.Client, de
 func (l *Lifecycle) zAddDelayed(ctx context.Context, rdb *redis.Client, delayedKey string, score int64, payload []byte, system bool) error {
 	maxCount := int64(0)
 	overflow := 0
-	var metrics *LifecycleMetrics
 	if l != nil {
 		maxCount = l.cfg.DelayedMaxCount
-		metrics = l.metrics
 		if system && maxCount > 0 {
 			// System requeues must not reject: force drop_farthest under capacity pressure.
 			overflow = 1
@@ -55,7 +51,7 @@ func (l *Lifecycle) zAddDelayed(ctx context.Context, rdb *redis.Client, delayedK
 	if err != nil {
 		return err
 	}
-	return MapEnqueueScriptResult(res, metrics, true)
+	return MapEnqueueScriptResult(res, l, true)
 }
 
 // ForcePromoteMember moves one delayed member to the stream under hard/MAXLEN admission.
@@ -63,11 +59,9 @@ func (l *Lifecycle) zAddDelayed(ctx context.Context, rdb *redis.Client, delayedK
 // Returns a not-found style error when the member is already gone.
 func (l *Lifecycle) ForcePromoteMember(ctx context.Context, rdb *redis.Client, delayedKey, streamKey, member string) error {
 	hard, maxlen := int64(0), int64(0)
-	var metrics *LifecycleMetrics
 	if l != nil {
 		hard = l.cfg.EnqueueHardLimit
 		maxlen = l.cfg.StreamMaxLen
-		metrics = l.metrics
 	}
 	res, err := ForcePromoteMemberCmd.Run(ctx, rdb, []string{delayedKey, streamKey}, member, hard, maxlen).Result()
 	if err != nil {
@@ -83,8 +77,8 @@ func (l *Lifecycle) ForcePromoteMember(ctx context.Context, rdb *redis.Client, d
 	case 0:
 		return ErrMemberGone
 	case enqueueQueueFull:
-		if metrics != nil {
-			metrics.EnqueueRejectedTotal.Add(1)
+		if l != nil {
+			l.observe("enqueue_rejected_total", &l.metrics.EnqueueRejectedTotal, 1)
 		}
 		return ErrQueueFull
 	default:

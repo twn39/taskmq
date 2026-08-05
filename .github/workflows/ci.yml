@@ -1,0 +1,99 @@
+# TaskMQ continuous integration
+name: CI
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+# Allow setup-go / the module toolchain to fetch the Go version from go.mod.
+env:
+  GOTOOLCHAIN: auto
+
+jobs:
+  # Fast path: compile, key-schema guard, unit tests (miniredis / no Redis service).
+  unit:
+    name: Build & unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - name: Verify modules
+        run: |
+          go mod verify
+          go mod tidy
+          git diff --exit-code -- go.mod go.sum
+
+      - name: Build
+        run: go build ./...
+
+      - name: Install ripgrep
+        run: sudo apt-get update && sudo apt-get install -y ripgrep
+
+      - name: Check Redis key schema
+        run: ./scripts/check_keys_schema.sh
+
+      - name: Unit tests
+        run: go test ./internal/... ./tests/unit/... ./cmd/... -count=1 -timeout 10m
+
+      - name: Unit tests with race detector
+        run: go test ./internal/... ./tests/unit/... -race -count=1 -timeout 10m
+
+  # Full Redis Streams / worker / admin integration suite.
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      # Service container healthcheck already gates job start; this is a host-side belt-and-braces check.
+      - name: Wait for Redis
+        run: |
+          for i in $(seq 1 30); do
+            if (echo > /dev/tcp/127.0.0.1/6379) >/dev/null 2>&1; then
+              echo "Redis port is open"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Redis did not become ready on 127.0.0.1:6379" >&2
+          exit 1
+
+      - name: Integration tests
+        env:
+          REDIS_ADDR: 127.0.0.1:6379
+        run: go test ./tests/integration/... -count=1 -timeout 20m -v

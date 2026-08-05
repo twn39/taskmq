@@ -10,6 +10,7 @@ redis:
 
 taskmq:
   codec: "binary"
+  shutdown_timeout: 30s
   queues:
     - name: "default"
       concurrency: 5

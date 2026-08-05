@@ -209,7 +209,7 @@ func (b *redisBroker) MoveToDLQ(ctx context.Context, t *task.Task, streamKey, ms
 	}
 	if b.lifecycle != nil {
 		if n, ok := res.(int64); ok && n > 0 {
-			b.lifecycle.Metrics().DLQEvictedTotal.Add(n)
+			b.lifecycle.IncMetric("dlq_evicted_total", n)
 		}
 	}
 	return nil

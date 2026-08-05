@@ -67,7 +67,7 @@ func (s *cronService) RegisterCron(ctx context.Context, jobName string, spec str
 	if err != nil {
 		return err
 	}
-	if err := lifecycle.MapEnqueueScriptResult(res, s.d.metrics(), true); err != nil {
+	if err := lifecycle.MapEnqueueScriptResult(res, s.d.lifecycle, true); err != nil {
 		return err
 	}
 	_ = s.d.rdb.Publish(ctx, qk.DelayedWakeupChannel(), strconv.FormatInt(firstRun.UnixMilli(), 10)).Err()

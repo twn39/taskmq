@@ -108,7 +108,7 @@ func (s *active) DeleteActiveTask(ctx context.Context, queue string, streamID st
 	}
 
 	task := &taskmodel.Task{}
-	if err := s.d.codec.Unmarshal(serialized, task); err == nil {
+	if uerr := s.d.codec.Unmarshal(serialized, task); uerr == nil {
 		if task.ID != "" && s.cancel != nil {
 			_ = s.cancel.CancelTask(ctx, queue, task.ID)
 		}

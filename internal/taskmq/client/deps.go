@@ -40,13 +40,6 @@ func (d deps) delayedMaxCount() int64 {
 	return d.lifecycle.Config().DelayedMaxCount
 }
 
-func (d deps) metrics() *lifecycle.LifecycleMetrics {
-	if d.lifecycle == nil {
-		return nil
-	}
-	return d.lifecycle.Metrics()
-}
-
 func (d deps) uniqueTTL(task *taskmodel.Task) time.Duration {
 	ttl := time.Duration(task.UniqueTTLMs) * time.Millisecond
 	if ttl <= 0 {

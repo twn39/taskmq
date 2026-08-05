@@ -12,7 +12,12 @@ import (
 	"go.uber.org/zap"
 )
 
-// NewRedisClient creates and verifies a Redis client and manages its lifecycle via Fx.
+// NewRedisClient creates and verifies a Redis standalone client and manages its lifecycle via Fx.
+//
+// Cluster note: TaskMQ key layout is Cluster-safe (per-queue hash tags; see keys package).
+// This constructor returns *redis.Client (standalone). For multi-node Cluster with
+// automatic MOVED handling, place a proxy in front or migrate callers to
+// redis.UniversalClient / ClusterClient (see docs/OPERATIONS.md).
 func NewRedisClient(lc fx.Lifecycle, cfg *config.Config, logger *zap.Logger) (*redis.Client, error) {
 	poolSize := cfg.Redis.PoolSize
 	if poolSize <= 0 {
@@ -25,7 +30,7 @@ func NewRedisClient(lc fx.Lifecycle, cfg *config.Config, logger *zap.Logger) (*r
 		}
 	}
 
-	logger.Info("Connecting to Redis",
+	logger.Info("Connecting to Redis (standalone client)",
 		zap.String("addr", cfg.Redis.Addr),
 		zap.Int("pool_size", poolSize),
 	)

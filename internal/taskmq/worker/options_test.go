@@ -39,6 +39,9 @@ func TestDefaultWorkerOptions(t *testing.T) {
 	if opts.janitor.interval != 3*time.Second {
 		t.Errorf("expected default janitorInterval to be 3s, got %v", opts.janitor.interval)
 	}
+	if opts.shutdownTimeout != 30*time.Second {
+		t.Errorf("expected default shutdownTimeout to be 30s, got %v", opts.shutdownTimeout)
+	}
 }
 
 func TestWithOptionFunctions(t *testing.T) {
@@ -128,6 +131,19 @@ func TestWithOptionFunctions(t *testing.T) {
 	err = WithContext(nil).ApplyWorkerPool(&opts)
 	if err == nil {
 		t.Error("expected error for nil context, got nil")
+	}
+
+	// Test WithShutdownTimeout
+	err = WithShutdownTimeout(45 * time.Second).ApplyWorkerPool(&opts)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if opts.shutdownTimeout != 45*time.Second {
+		t.Errorf("expected shutdownTimeout 45s, got %v", opts.shutdownTimeout)
+	}
+	err = WithShutdownTimeout(0).ApplyWorkerPool(&opts)
+	if err == nil {
+		t.Error("expected error for zero shutdown timeout, got nil")
 	}
 
 	// Test WithGroupKeyExtractor

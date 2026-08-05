@@ -62,7 +62,8 @@ func defaultWorkerConfig(codec codec.Codec) WorkerConfig {
 		consumer:        "taskmq-consumer-1",
 		codec:           codec,
 		context:         context.Background(),
-		shutdownTimeout: 1 * time.Second,
+		// Match default task TimeoutMs (30s) so in-flight work can finish on stop.
+		shutdownTimeout: 30 * time.Second,
 		cron: CronOptions{
 			healingInterval: 1 * time.Minute,
 			lockTTL:         50 * time.Second,

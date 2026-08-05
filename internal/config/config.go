@@ -53,10 +53,13 @@ type TaskMQConfig struct {
 	SchedulerPollInterval    time.Duration   `mapstructure:"scheduler_poll_interval"`
 	JanitorInterval          time.Duration   `mapstructure:"janitor_interval"`
 	JanitorMinIdleTime       time.Duration   `mapstructure:"janitor_min_idle_time"`
-	PriorityQueuesEnabled    bool            `mapstructure:"priority_queues_enabled"`
-	PriorityStrategy         string          `mapstructure:"priority_strategy"`
-	Queues                   []QueueConfig   `mapstructure:"queues"`
-	Lifecycle                LifecycleConfig `mapstructure:"lifecycle"`
+	// ShutdownTimeout is how long workers wait for in-flight tasks on Stop.
+	// Default 30s (aligned with default task timeout). Must be > 0.
+	ShutdownTimeout       time.Duration   `mapstructure:"shutdown_timeout"`
+	PriorityQueuesEnabled bool            `mapstructure:"priority_queues_enabled"`
+	PriorityStrategy      string          `mapstructure:"priority_strategy"`
+	Queues                []QueueConfig   `mapstructure:"queues"`
+	Lifecycle             LifecycleConfig `mapstructure:"lifecycle"`
 }
 
 // LifecycleConfig mirrors taskmq.LifecycleConfig for YAML/env loading.
@@ -102,6 +105,7 @@ func NewConfig() (*Config, error) {
 	v.SetDefault("taskmq.scheduler_poll_interval", 500*time.Millisecond)
 	v.SetDefault("taskmq.janitor_interval", 3*time.Second)
 	v.SetDefault("taskmq.janitor_min_idle_time", 5*time.Second)
+	v.SetDefault("taskmq.shutdown_timeout", 30*time.Second)
 	v.SetDefault("taskmq.priority_queues_enabled", false)
 	v.SetDefault("taskmq.priority_strategy", "weighted")
 	v.SetDefault("taskmq.queues", []map[string]interface{}{

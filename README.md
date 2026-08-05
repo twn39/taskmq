@@ -1,5 +1,7 @@
 # TaskMQ
 
+[![CI](https://github.com/twn39/taskmq/actions/workflows/ci.yml/badge.svg)](https://github.com/twn39/taskmq/actions/workflows/ci.yml)
+
 TaskMQ is a high-performance, distributed, Redis-backed asynchronous task queue and worker pool engine built in Go.
 
 It uses **Redis Streams** as the underlying transport layer to provide reliable, distributed queueing with **At-Least-Once** delivery guarantees, automatic retries, and dead letter queueing.
@@ -74,6 +76,29 @@ Start the Echo HTTP and gRPC management server:
 go run cmd/server/main.go
 ```
 The server will start on the port configured in `config.yaml` (default `:8080`).
+
+### Continuous Integration
+
+GitHub Actions (`.github/workflows/ci.yml`) runs on every push and pull request:
+
+| Job | What it does |
+|---|---|
+| **Build & unit tests** | `go mod tidy` check, `go build`, key-schema guard, unit tests (`-race`) |
+| **Integration tests** | Full suite against a Redis 7 service on port `6379` |
+
+CI does **not** run `golangci-lint` (optional locally via `.golangci.yml`).
+
+Locally mirror CI:
+
+```bash
+go build ./...
+./scripts/check_keys_schema.sh   # needs ripgrep (rg)
+go test ./internal/... ./tests/unit/... -race -count=1
+# with Redis running:
+go test ./tests/integration/... -count=1
+```
+
+**Ops notes:** graceful shutdown (`taskmq.shutdown_timeout`, default 30s), lifecycle limits, metrics (`GET /api/lifecycle/metrics`), and Redis Cluster caveats are documented in [docs/OPERATIONS.md](docs/OPERATIONS.md). Lua ownership: [docs/LUA_SCRIPTS.md](docs/LUA_SCRIPTS.md). Production template: [config.prod.yaml](config.prod.yaml).
 
 ### 🖥️ Web Admin Dashboard
 

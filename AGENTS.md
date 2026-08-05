@@ -22,10 +22,13 @@ Run all commands from the workspace root directory:
 | **Build** | `go build ./...` | Compile the entire project. |
 | **Run Server** | `go run cmd/server/main.go` | Start the HTTP & gRPC server (default port `8080`). |
 | **Mod Tidy** | `go mod tidy` | Ensure `go.mod` and `go.sum` are up to date. |
-| **Lint** | `/Users/2342184/go/bin/golangci-lint run` | Run lints. Ensure `golangci-lint` passes before any commit. |
-| **All Tests** | `go test ./...` | Run all test suites. |
-| **Integration Tests** | `go test ./tests/integration/... -v` | Run integration tests with verbose output. |
+| **Lint (local optional)** | `golangci-lint run` | Not enforced in CI; config in `.golangci.yml`. |
+| **Key schema** | `./scripts/check_keys_schema.sh` | Ensure Redis key literals only live in `keys` package. |
+| **Unit Tests** | `go test ./internal/... ./tests/unit/... -count=1` | Unit tests (miniredis where needed). |
+| **Integration Tests** | `go test ./tests/integration/... -v` | Needs Redis on `localhost:6379`. |
+| **All Tests** | `go test ./...` | Unit + integration (Redis required). |
 | **Update Graph** | `codegraph build . -e third_party/` | Rebuild the codebase knowledge graph. |
+| **CI** | `.github/workflows/ci.yml` | GitHub Actions: unit + integration (Redis service). No golangci-lint. |
 
 ---
 

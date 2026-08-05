@@ -50,14 +50,14 @@ func (e *enqueuer) Enqueue(ctx context.Context, task *taskmodel.Task, opts ...Ta
 	if task.UniqueKey != "" {
 		ttl := e.d.uniqueTTL(task)
 		uniqueKey := qk.Unique(task.UniqueKey)
-		res, err := lifecycle.EnqueueUniqueWithLimitCmd.Run(ctx, e.d.rdb,
+		res, uerr := lifecycle.EnqueueUniqueWithLimitCmd.Run(ctx, e.d.rdb,
 			[]string{uniqueKey, streamKey},
 			task.ID, int(ttl.Milliseconds()), serialized, hard, maxlen,
 		).Result()
-		if err != nil {
-			return err
+		if uerr != nil {
+			return uerr
 		}
-		return lifecycle.MapEnqueueScriptResult(res, e.d.metrics(), false)
+		return lifecycle.MapEnqueueScriptResult(res, e.d.lifecycle, false)
 	}
 
 	res, err := lifecycle.EnqueueStreamCmd.Run(ctx, e.d.rdb,
@@ -67,7 +67,7 @@ func (e *enqueuer) Enqueue(ctx context.Context, task *taskmodel.Task, opts ...Ta
 	if err != nil {
 		return err
 	}
-	return lifecycle.MapEnqueueScriptResult(res, e.d.metrics(), false)
+	return lifecycle.MapEnqueueScriptResult(res, e.d.lifecycle, false)
 }
 
 // EnqueueIn adds a task to the delayed queue with a delay duration.
@@ -112,15 +112,15 @@ func (e *enqueuer) EnqueueAt(ctx context.Context, task *taskmodel.Task, at time.
 	if task.UniqueKey != "" {
 		ttl := e.d.uniqueTTL(task)
 		uniqueKey := qk.Unique(task.UniqueKey)
-		res, err := lifecycle.EnqueueUniqueDelayedLimitCmd.Run(ctx, e.d.rdb,
+		res, uerr := lifecycle.EnqueueUniqueDelayedLimitCmd.Run(ctx, e.d.rdb,
 			[]string{uniqueKey, delayedKey},
 			task.ID, int(ttl.Milliseconds()), serialized, at.UnixMilli(), maxCount, overflow,
 		).Result()
-		if err != nil {
-			return err
+		if uerr != nil {
+			return uerr
 		}
-		if err := lifecycle.MapEnqueueScriptResult(res, e.d.metrics(), true); err != nil {
-			return err
+		if merr := lifecycle.MapEnqueueScriptResult(res, e.d.lifecycle, true); merr != nil {
+			return merr
 		}
 		_ = e.d.rdb.Publish(ctx, qk.DelayedWakeupChannel(), strconv.FormatInt(at.UnixMilli(), 10)).Err()
 		return nil
@@ -133,7 +133,7 @@ func (e *enqueuer) EnqueueAt(ctx context.Context, task *taskmodel.Task, at time.
 	if err != nil {
 		return err
 	}
-	if err := lifecycle.MapEnqueueScriptResult(res, e.d.metrics(), true); err != nil {
+	if err := lifecycle.MapEnqueueScriptResult(res, e.d.lifecycle, true); err != nil {
 		return err
 	}
 	_ = e.d.rdb.Publish(ctx, qk.DelayedWakeupChannel(), strconv.FormatInt(at.UnixMilli(), 10)).Err()

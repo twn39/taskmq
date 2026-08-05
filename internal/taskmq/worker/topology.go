@@ -84,36 +84,42 @@ func BuildWorkerTopologyWithLifecycle(rdb *redis.Client, logger *zap.Logger, cfg
 
 	// 2. Instantiate normal queues independently
 	for _, qCfg := range normalQueues {
-		concurrency := 5
-		if qCfg.Concurrency > 0 {
-			concurrency = qCfg.Concurrency
-		}
-		group := "taskmq-group-" + qCfg.Name
-		if qCfg.Group != "" {
-			group = qCfg.Group
-		}
-		consumer := "taskmq-consumer-" + qCfg.Name + "-1"
-		if qCfg.Consumer != "" {
-			consumer = qCfg.Consumer
-		}
-
 		commonOpts := buildCommonOptionsWithLifecycle(cfg, c, rootCtx, lc)
 		opts := toPoolOptions(commonOpts)
-		opts = append(opts, WithGroup(group))
-		opts = append(opts, WithConsumer(consumer))
-		opts = append(opts, WithConcurrency(concurrency))
-		if qCfg.RateLimitMax > 0 && qCfg.RateLimitDuration > 0 {
-			opts = append(opts, WithRateLimit(qCfg.RateLimitMax, qCfg.RateLimitDuration))
-		}
-		if qCfg.RateLimitKeyField != "" {
-			opts = append(opts, WithRateLimitKeyField(qCfg.RateLimitKeyField))
-		}
-
+		opts = append(opts, queueWorkerOptions(qCfg)...)
 		pool := NewWorkerPool(rdb, logger, qCfg.Name, opts...)
 		workers[qCfg.Name] = pool
 	}
 
 	return NewMultiQueueWorker(workers), nil
+}
+
+// queueWorkerOptions builds per-queue pool options (group, consumer, concurrency, rate limit).
+func queueWorkerOptions(qCfg config.QueueConfig) []WorkerPoolOption {
+	concurrency := 5
+	if qCfg.Concurrency > 0 {
+		concurrency = qCfg.Concurrency
+	}
+	group := "taskmq-group-" + qCfg.Name
+	if qCfg.Group != "" {
+		group = qCfg.Group
+	}
+	consumer := "taskmq-consumer-" + qCfg.Name + "-1"
+	if qCfg.Consumer != "" {
+		consumer = qCfg.Consumer
+	}
+	opts := []WorkerPoolOption{
+		WithGroup(group),
+		WithConsumer(consumer),
+		WithConcurrency(concurrency),
+	}
+	if qCfg.RateLimitMax > 0 && qCfg.RateLimitDuration > 0 {
+		opts = append(opts, WithRateLimit(qCfg.RateLimitMax, qCfg.RateLimitDuration))
+	}
+	if qCfg.RateLimitKeyField != "" {
+		opts = append(opts, WithRateLimitKeyField(qCfg.RateLimitKeyField))
+	}
+	return opts
 }
 
 func buildCommonOptionsWithLifecycle(cfg *config.Config, c codec.Codec, rootCtx context.Context, lc *lifecycle.Lifecycle) []SharedOption {
@@ -138,6 +144,9 @@ func buildCommonOptionsWithLifecycle(cfg *config.Config, c codec.Codec, rootCtx 
 	}
 	if cfg.TaskMQ.JanitorMinIdleTime > 0 {
 		opts = append(opts, WithJanitorMinIdleTime(cfg.TaskMQ.JanitorMinIdleTime))
+	}
+	if cfg.TaskMQ.ShutdownTimeout > 0 {
+		opts = append(opts, WithShutdownTimeout(cfg.TaskMQ.ShutdownTimeout))
 	}
 	opts = append(opts, WithCodec(c))
 	if lc != nil {

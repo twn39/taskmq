@@ -35,7 +35,7 @@ func initRedis(cmd *cli.Command) error {
 	defer cancel()
 
 	if err := rdb.Ping(ctx).Err(); err != nil {
-		return fmt.Errorf("Failed to connect to Redis at %s: %w", addr, err)
+		return fmt.Errorf("failed to connect to Redis at %s: %w", addr, err)
 	}
 
 	// NewClient still returns the facade; CLI only keeps narrow ports.

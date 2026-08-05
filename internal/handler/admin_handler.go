@@ -10,28 +10,46 @@ import (
 	"github.com/redis/go-redis/v9"
 	mqclient "github.com/twn39/taskmq/internal/taskmq/client"
 	mqkeys "github.com/twn39/taskmq/internal/taskmq/keys"
+	"github.com/twn39/taskmq/internal/taskmq/lifecycle"
 	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 	"go.uber.org/zap"
 )
 
 // AdminHandler serves HTTP admin APIs using ISP-narrow client ports.
 type AdminHandler struct {
-	rdb    *redis.Client
-	admin  mqclient.AdminClient
-	cron   mqclient.CronClient
-	enq    mqclient.EnqueueClient
-	logger *zap.Logger
+	rdb       *redis.Client
+	admin     mqclient.AdminClient
+	cron      mqclient.CronClient
+	enq       mqclient.EnqueueClient
+	lifecycle *lifecycle.Lifecycle
+	logger    *zap.Logger
 }
 
-// NewAdminHandler wires admin, cron, and enqueue ports (projected from client.Client via Fx).
-func NewAdminHandler(rdb *redis.Client, admin mqclient.AdminClient, cron mqclient.CronClient, enq mqclient.EnqueueClient, logger *zap.Logger) *AdminHandler {
+// NewAdminHandler wires admin, cron, enqueue ports and optional shared lifecycle metrics.
+func NewAdminHandler(rdb *redis.Client, admin mqclient.AdminClient, cron mqclient.CronClient, enq mqclient.EnqueueClient, lc *lifecycle.Lifecycle, logger *zap.Logger) *AdminHandler {
 	return &AdminHandler{
-		rdb:    rdb,
-		admin:  admin,
-		cron:   cron,
-		enq:    enq,
-		logger: logger,
+		rdb:       rdb,
+		admin:     admin,
+		cron:      cron,
+		enq:       enq,
+		lifecycle: lc,
+		logger:    logger,
 	}
+}
+
+// GetLifecycleMetrics returns process-local lifecycle counters.
+// Query format=prometheus for Prometheus exposition text (no client dependency).
+func (h *AdminHandler) GetLifecycleMetrics(c *echo.Context) error {
+	var snap map[string]int64
+	if h.lifecycle != nil {
+		snap = h.lifecycle.Metrics().Snapshot()
+	} else {
+		snap = map[string]int64{}
+	}
+	if c.QueryParam("format") == "prometheus" {
+		return c.String(http.StatusOK, lifecycle.PrometheusText(snap))
+	}
+	return c.JSON(http.StatusOK, snap)
 }
 
 func (h *AdminHandler) GetDashboard(c *echo.Context) error {

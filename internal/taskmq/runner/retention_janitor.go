@@ -86,7 +86,7 @@ func (j *RetentionJanitor) tick(ctx context.Context) {
 				)
 			}
 		} else if n > 0 {
-			j.lifecycle.Metrics().SafeTrimDeletedTotal.Add(n)
+			j.lifecycle.IncMetric("safe_trim_deleted_total", n)
 			j.logger.Debug("RetentionJanitor safe-trimmed stream entries",
 				zap.String("queue", j.queue),
 				zap.Int64("deleted", n),
@@ -102,7 +102,7 @@ func (j *RetentionJanitor) tick(ctx context.Context) {
 				)
 			}
 		} else if n > 0 {
-			j.lifecycle.Metrics().DLQEvictedTotal.Add(n)
+			j.lifecycle.IncMetric("dlq_evicted_total", n)
 		}
 	}
 	if cfg.PurgeCancelledDelayed {
@@ -114,7 +114,7 @@ func (j *RetentionJanitor) tick(ctx context.Context) {
 				)
 			}
 		} else if n > 0 {
-			j.lifecycle.Metrics().CancelledDelayedPurged.Add(n)
+			j.lifecycle.IncMetric("cancelled_delayed_purged", n)
 		}
 	}
 	if cfg.IdleConsumerTimeout > 0 {
@@ -126,7 +126,7 @@ func (j *RetentionJanitor) tick(ctx context.Context) {
 				)
 			}
 		} else if n > 0 {
-			j.lifecycle.Metrics().IdleConsumersRemovedTotal.Add(n)
+			j.lifecycle.IncMetric("idle_consumers_removed_total", n)
 		}
 	}
 }

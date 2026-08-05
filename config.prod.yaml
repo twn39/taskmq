@@ -1,4 +1,5 @@
 # Prod Environment Configuration
+# Copy and tune limits for your Redis capacity and task timeout profile.
 server:
   port: ":3000"
   grpc_port: ":50051"
@@ -7,9 +8,34 @@ logger:
 redis:
   addr: "localhost:6379"
   pool_size: 0
+  # Cluster: TaskMQ Redis keys use hash tags taskmq:{queue}:… for multi-key Lua.
+  # The process client is standalone (*redis.Client) today; point addr at a
+  # proxy/single endpoint, or use a cluster-aware sidecar. See docs/OPERATIONS.md.
 
 taskmq:
   codec: "binary"
+  default_unique_ttl: 1h
+  scheduler_poll_interval: 500ms
+  janitor_interval: 3s
+  janitor_min_idle_time: 5s
+  # Align with longest expected handler timeout (+ margin).
+  shutdown_timeout: 30s
+  lifecycle:
+    # Recommended production admission / retention (tune to traffic).
+    enqueue_soft_limit: 100000
+    enqueue_hard_limit: 200000
+    delayed_max_count: 100000
+    delayed_max_delay: 168h
+    delayed_overflow: reject
+    dlq_max_count: 10000
+    dlq_max_age: 168h
+    cancelled_ttl: 24h
+    max_payload_bytes: 1048576 # 1 MiB
+    safe_trim_enabled: true
+    safe_trim_interval: 30s
+    safe_trim_batch_limit: 1000
+    purge_cancelled_delayed: true
+    # idle_consumer_timeout: 1h
   queues:
     - name: "default"
-      concurrency: 5
+      concurrency: 10

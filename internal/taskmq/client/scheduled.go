@@ -86,7 +86,7 @@ func (s *scheduled) DeleteScheduledTask(ctx context.Context, queue string, taskI
 	var targetTask *taskmodel.Task
 	for _, m := range members {
 		task := &taskmodel.Task{}
-		if err := s.d.codec.Unmarshal([]byte(m), task); err == nil {
+		if uerr := s.d.codec.Unmarshal([]byte(m), task); uerr == nil {
 			if task.ID == taskID {
 				targetMember = m
 				targetTask = task

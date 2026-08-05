@@ -57,6 +57,7 @@ func NewServer(lc fx.Lifecycle, logger *zap.Logger, adminHandler *handler.AdminH
 	// Admin Dashboard Routes
 	e.GET("/admin", adminHandler.GetDashboard)
 	e.GET("/api/stats", adminHandler.GetStats)
+	e.GET("/api/lifecycle/metrics", adminHandler.GetLifecycleMetrics)
 	e.POST("/api/queues/:queue/pause", adminHandler.PauseQueue)
 	e.POST("/api/queues/:queue/resume", adminHandler.ResumeQueue)
 	e.GET("/api/queues/:queue/dlq", adminHandler.ListDLQ)
