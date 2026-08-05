@@ -68,7 +68,10 @@ This project maintains a codebase knowledge graph at `.codegraph/`.
 
 ### 2. Implementation Guidelines (DOs and DON'Ts)
 - **DO** use Uber Fx lifecycle hooks (`fx.Hook`) to register startups/shutdowns of background loops or servers.
-- **DO** decouple third-party/external calls and sub-components (like queue runners) by declaring them as separate Fx providers and injecting them via constructor options.
+- **DO** decouple third-party/external calls and sub-components (like queue runners) by declaring them as separate Fx providers and injecting them via constructor options. Use `client.Producer` (`client.NewProducer`) when sub-components only require enqueue capabilities without administrative controls.
+- **DO** use `settleCtx` (`context.WithoutCancel(parent)` with bounded timeout) for all broker settlement actions (`MoveToDLQ`, `ScheduleRetry`, `CompleteTask`) so Redis outcome transitions always execute cleanly even if the task execution context was cancelled or timed out.
+- **DO** pre-load Lua scripts (`lifecycle.LoadScripts`) before pipeline execution (`rdb.Pipeline()`) to ensure script SHA1 cache hits and prevent `NOSCRIPT` errors in Redis pipelines.
+- **DO** leverage `EnqueueBulk` with micro-batch chunking (1,000 tasks/chunk) for high-throughput batch ingestion of both unique and non-unique tasks.
 - **DO** use the custom `BinaryCodec` for high-performance and zero-allocation serialization in TaskMQ where performance is critical.
 - **DO** keep Redis key literals in the `keys` package only; multi-key Lua must stay hash-tagged under `{queue}` (see `docs/LUA_SCRIPTS.md`, `scripts/check_keys_schema.sh`).
 - **DO** follow terminal-outcome rules in `docs/TERMINAL_OUTCOMES.md`: handlers return `task.SkipRetry`/`error`; middleware returns `worker.Handled`/`Abort`; never XACK from handlers. Extend `tests/integration/settlement_matrix_test.go` for Redis-visible outcomes.
