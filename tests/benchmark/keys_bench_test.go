@@ -20,7 +20,7 @@ func BenchmarkKeys_KeysFor(b *testing.B) {
 }
 
 func BenchmarkKeys_ParseQueueFromStreamKey(b *testing.B) {
-	streamKey := "taskmq:{orders-queue}:queue"
+	streamKey := keys.KeysFor("orders-queue").Stream()
 
 	b.ReportAllocs()
 	b.ResetTimer()
