@@ -110,9 +110,12 @@ func FlushQueue(ctx context.Context, rdb redis.UniversalClient, queue string, ta
 	_ = rdb.Del(ctx, toDel...).Err()
 }
 
-// WaitUntil polls cond until true or timeout (test failure).
+// WaitUntil polls cond until true or timeout (test failure). Default interval is 5ms for fast reaction.
 func WaitUntil(t *testing.T, cond func() bool, timeout, interval time.Duration, msg string) {
 	t.Helper()
+	if interval <= 0 {
+		interval = 5 * time.Millisecond
+	}
 	deadline := time.Now().Add(timeout)
 	for time.Now().Before(deadline) {
 		if cond() {
@@ -144,7 +147,7 @@ func NewTestClient(rdb redis.UniversalClient, lc *lifecycle.Lifecycle) mqclient.
 }
 
 // NewTestWorkerPool builds a single-queue pool with common integration defaults.
-// Callers Register handlers then Start/Stop.
+// Callers Register handlers then Start/Stop. Fast 10ms poll interval is applied by default.
 func NewTestWorkerPool(
 	rdb redis.UniversalClient,
 	queue, group, consumer string,
@@ -170,6 +173,8 @@ func NewTestWorkerPool(
 		mqworker.WithConcurrency(concurrency),
 		mqworker.WithCodec(codec.JSONCodec{}),
 		mqworker.WithLifecycle(lc),
+		mqworker.WithSchedulerPollInterval(10 * time.Millisecond),
+		mqworker.WithJanitorInterval(50 * time.Millisecond),
 	}
 	opts = append(opts, extra...)
 	return mqworker.NewWorkerPool(rdb, zap.NewNop(), queue, opts...)
@@ -182,7 +187,7 @@ func WaitStreamLen(t *testing.T, ctx context.Context, rdb redis.UniversalClient,
 	WaitUntil(t, func() bool {
 		xlen, err := rdb.XLen(ctx, stream).Result()
 		return err == nil && xlen == n
-	}, timeout, 50*time.Millisecond, fmt.Sprintf("stream %s len != %d", queue, n))
+	}, timeout, 5*time.Millisecond, fmt.Sprintf("stream %s len != %d", queue, n))
 }
 
 // WaitKeyGone waits until Redis key is deleted.
@@ -191,5 +196,5 @@ func WaitKeyGone(t *testing.T, ctx context.Context, rdb redis.UniversalClient, k
 	WaitUntil(t, func() bool {
 		n, err := rdb.Exists(ctx, key).Result()
 		return err == nil && n == 0
-	}, timeout, 50*time.Millisecond, "key still exists: "+key)
+	}, timeout, 5*time.Millisecond, "key still exists: "+key)
 }

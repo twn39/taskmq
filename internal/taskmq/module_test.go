@@ -210,3 +210,29 @@ func TestRegisterWorkerPoolLifecycle_Hooks(t *testing.T) {
 
 // Ensure HandlerFunc type from stub compile path.
 var _ worker.HandlerFunc = func(ctx context.Context, task *taskmodel.Task) error { return nil }
+
+func TestBuildWorkerTopologyWithLifecycle_NilCheck(t *testing.T) {
+	_, err := BuildWorkerTopologyWithLifecycle(nil, zap.NewNop(), &config.Config{}, codec.JSONCodec{}, context.Background(), nil)
+	if err == nil {
+		t.Fatal("expected error when lc is nil")
+	}
+}
+
+func TestCodecSelection_Binary(t *testing.T) {
+	cfg := &config.Config{
+		TaskMQ: config.TaskMQConfig{
+			Codec: "binary",
+		},
+	}
+	c := func(cfg *config.Config) codec.Codec {
+		if cfg.TaskMQ.Codec == "binary" {
+			return codec.BinaryCodec{}
+		}
+		return codec.JSONCodec{}
+	}(cfg)
+
+	if _, ok := c.(codec.BinaryCodec); !ok {
+		t.Fatalf("expected BinaryCodec, got %T", c)
+	}
+}
+

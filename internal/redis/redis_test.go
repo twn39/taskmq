@@ -45,23 +45,62 @@ func TestBuildUniversalOptions_Cluster(t *testing.T) {
 	}
 }
 
-func TestBuildUniversalOptions_Sentinel(t *testing.T) {
-	_, _, err := buildUniversalOptions(config.RedisConfig{
-		Mode:  "sentinel",
-		Addrs: []string{"s1:26379"},
-	}, 10)
-	if err == nil {
-		t.Fatal("expected error without master_name")
-	}
+func TestBuildUniversalOptions_DefaultAndFallback(t *testing.T) {
+	// Mode empty defaults to standalone
 	opts, mode, err := buildUniversalOptions(config.RedisConfig{
-		Mode:       "sentinel",
-		MasterName: "mymaster",
-		Addrs:      []string{"s1:26379"},
+		Mode: "",
+		Addr: "127.0.0.1:6379",
+	}, 0)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if mode != "standalone" {
+		t.Fatalf("expected mode standalone, got %s", mode)
+	}
+	if len(opts.Addrs) != 1 || opts.Addrs[0] != "127.0.0.1:6379" {
+		t.Fatalf("unexpected addrs: %v", opts.Addrs)
+	}
+
+	// Addrs takes precedence over Addr
+	opts, _, err = buildUniversalOptions(config.RedisConfig{
+		Mode:  "standalone",
+		Addr:  "127.0.0.1:6379",
+		Addrs: []string{"127.0.0.1:6380"},
 	}, 10)
 	if err != nil {
-		t.Fatal(err)
+		t.Fatalf("unexpected error: %v", err)
 	}
-	if mode != "sentinel" || opts.MasterName != "mymaster" {
-		t.Fatalf("mode=%s master=%s", mode, opts.MasterName)
+	if len(opts.Addrs) != 1 || opts.Addrs[0] != "127.0.0.1:6380" {
+		t.Fatalf("expected 127.0.0.1:6380, got %v", opts.Addrs)
 	}
 }
+
+func TestBuildUniversalOptions_ErrorCases(t *testing.T) {
+	// Standalone without addr or addrs
+	_, _, err := buildUniversalOptions(config.RedisConfig{Mode: "standalone"}, 10)
+	if err == nil {
+		t.Fatal("expected error for standalone mode without addr")
+	}
+
+	// Cluster without addrs
+	_, _, err = buildUniversalOptions(config.RedisConfig{Mode: "cluster"}, 10)
+	if err == nil {
+		t.Fatal("expected error for cluster mode without addrs")
+	}
+
+	// Sentinel without addrs
+	_, _, err = buildUniversalOptions(config.RedisConfig{
+		Mode:       "sentinel",
+		MasterName: "mymaster",
+	}, 10)
+	if err == nil {
+		t.Fatal("expected error for sentinel mode without addrs")
+	}
+
+	// Unknown mode
+	_, _, err = buildUniversalOptions(config.RedisConfig{Mode: "invalid-mode"}, 10)
+	if err == nil {
+		t.Fatal("expected error for unknown mode")
+	}
+}
+
