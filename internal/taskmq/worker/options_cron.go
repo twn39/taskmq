@@ -16,12 +16,21 @@ import (
 type CronManagerFactory func(rdb redis.UniversalClient, logger *zap.Logger, queue string, codec codec.Codec, healingInterval time.Duration, healingLockTTL time.Duration, scanBatchSize int, scanMaxCount int, lc *lifecycle.Lifecycle) runner.CronManager
 
 type CronOptions struct {
+	disabled        bool
 	healingInterval time.Duration
 	lockTTL         time.Duration
 	scanBatchSize   int
 	scanMaxCount    int
 	manager         runner.CronManager
 	factory         CronManagerFactory
+}
+
+// WithDisableCron disables automatic initialization and running of the cron manager.
+func WithDisableCron() SharedOption {
+	return func(o *WorkerConfig) error {
+		o.cron.disabled = true
+		return nil
+	}
 }
 
 func WithCronManager(m runner.CronManager) SharedOption {

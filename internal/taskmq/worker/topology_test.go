@@ -9,6 +9,7 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/assert"
 	"github.com/twn39/taskmq/internal/config"
+	"github.com/twn39/taskmq/internal/taskmq/lifecycle"
 	"go.uber.org/zap"
 )
 
@@ -161,3 +162,80 @@ func TestBuildWorkerTopology_PriorityAndNormalQueues(t *testing.T) {
 	assert.Equal(t, 4, poolNormal.concurrency)
 	assert.Equal(t, "taskmq-group-normal-queue", poolNormal.group)
 }
+
+func TestBuildWorkerTopology_RoleWorker_PureConsumer(t *testing.T) {
+	cfg := &config.Config{
+		TaskMQ: config.TaskMQConfig{
+			Role: "worker",
+			Queues: []config.QueueConfig{
+				{Name: "pure-worker-q", Concurrency: 3},
+			},
+		},
+	}
+	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+	logger := zap.NewNop()
+
+	worker, err := BuildWorkerTopology(rdb, logger, cfg, codec.JSONCodec{}, context.Background())
+	assert.NoError(t, err)
+
+	mw := worker.(MultiQueueWorker)
+	w := mw.Queue("pure-worker-q")
+	pool := w.(*workerPool)
+	assert.Nil(t, pool.scheduler)
+	assert.Nil(t, pool.janitor)
+	assert.Nil(t, pool.cronManager)
+	assert.Nil(t, pool.retentionJanitor)
+}
+
+func TestBuildWorkerTopology_QueueLevelDisable(t *testing.T) {
+	cfg := &config.Config{
+		TaskMQ: config.TaskMQConfig{
+			Queues: []config.QueueConfig{
+				{
+					Name:             "custom-disabled-q",
+					DisableScheduler: true,
+					DisableJanitor:   true,
+				},
+			},
+		},
+	}
+	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+	logger := zap.NewNop()
+
+	worker, err := BuildWorkerTopology(rdb, logger, cfg, codec.JSONCodec{}, context.Background())
+	assert.NoError(t, err)
+
+	mw := worker.(MultiQueueWorker)
+	pool := mw.Queue("custom-disabled-q").(*workerPool)
+	assert.Nil(t, pool.scheduler)
+	assert.Nil(t, pool.janitor)
+	assert.NotNil(t, pool.cronManager)
+}
+
+func TestBuildDaemonTopologyWithLifecycle(t *testing.T) {
+	cfg := &config.Config{
+		TaskMQ: config.TaskMQConfig{
+			Queues: []config.QueueConfig{
+				{Name: "daemon-q1"},
+				{Name: "daemon-q2", DisableJanitor: true},
+			},
+		},
+	}
+	rdb := redis.NewClient(&redis.Options{Addr: "localhost:6379"})
+	logger := zap.NewNop()
+	lc := lifecycle.NewLifecycle(lifecycle.DefaultLifecycleConfig())
+
+	ds, err := BuildDaemonTopologyWithLifecycle(rdb, logger, cfg, codec.JSONCodec{}, lc)
+	assert.NoError(t, err)
+	assert.NotNil(t, ds)
+
+	runners := ds.Runners()
+	assert.Contains(t, runners, "daemon-q1:scheduler")
+	assert.Contains(t, runners, "daemon-q1:janitor")
+	assert.Contains(t, runners, "daemon-q1:cron")
+	assert.Contains(t, runners, "daemon-q1:retention")
+
+	assert.Contains(t, runners, "daemon-q2:scheduler")
+	assert.NotContains(t, runners, "daemon-q2:janitor") // disabled
+}
+

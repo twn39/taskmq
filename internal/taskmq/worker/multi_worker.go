@@ -129,32 +129,38 @@ func NewPriorityWorker(rdb redis.UniversalClient, logger *zap.Logger, opts ...Pr
 	// Multi-queue priority mode components initialization
 	for _, q := range pw.queues {
 		var qCron runner.CronManager
-		if opt.cron.factory != nil {
-			qCron = opt.cron.factory(rdb, logger, q.Name, pw.codec, opt.cron.healingInterval, opt.cron.lockTTL, opt.cron.scanBatchSize, opt.cron.scanMaxCount, opt.lifecycle)
-		} else {
-			qCron = runner.NewCronManager(rdb, logger, q.Name, pw.codec, opt.cron.healingInterval, opt.cron.lockTTL, opt.cron.scanBatchSize, opt.cron.scanMaxCount, opt.lifecycle)
+		if !opt.cron.disabled {
+			if opt.cron.factory != nil {
+				qCron = opt.cron.factory(rdb, logger, q.Name, pw.codec, opt.cron.healingInterval, opt.cron.lockTTL, opt.cron.scanBatchSize, opt.cron.scanMaxCount, opt.lifecycle)
+			} else {
+				qCron = runner.NewCronManager(rdb, logger, q.Name, pw.codec, opt.cron.healingInterval, opt.cron.lockTTL, opt.cron.scanBatchSize, opt.cron.scanMaxCount, opt.lifecycle)
+			}
+			pw.cronManagers[q.Name] = qCron
 		}
 
-		var qSched runner.Runner
-		hard := streamHardLimitFrom(opt.lifecycle)
-		maxlen := streamMaxLenFrom(opt.lifecycle)
-		if opt.scheduler.factory != nil {
-			qSched = opt.scheduler.factory(rdb, logger, q.Name, qCron, pw.codec, opt.scheduler.pollInterval, hard, maxlen)
-		} else {
-			qSched = runner.NewDelayedScheduler(rdb, logger, q.Name, qCron, pw.codec, opt.scheduler.pollInterval, hard, maxlen)
+		if !opt.scheduler.disabled {
+			var qSched runner.Runner
+			hard := streamHardLimitFrom(opt.lifecycle)
+			maxlen := streamMaxLenFrom(opt.lifecycle)
+			if opt.scheduler.factory != nil {
+				qSched = opt.scheduler.factory(rdb, logger, q.Name, qCron, pw.codec, opt.scheduler.pollInterval, hard, maxlen)
+			} else {
+				qSched = runner.NewDelayedScheduler(rdb, logger, q.Name, qCron, pw.codec, opt.scheduler.pollInterval, hard, maxlen)
+			}
+			pw.schedulers[q.Name] = qSched
 		}
 
-		var qJan runner.PELRecoveryJanitor
-		if opt.janitor.factory != nil {
-			qJan = opt.janitor.factory(rdb, logger, q.Name, pw.group, pw.consumer, pw.concurrency, opt.janitor.interval, opt.janitor.minIdleTime)
-		} else {
-			qJan = runner.NewPELRecoveryJanitorWithCodec(rdb, logger, q.Name, pw.group, pw.consumer, pw.concurrency, opt.janitor.interval, opt.janitor.minIdleTime, pw.codec, 0)
+		if !opt.janitor.disabled {
+			var qJan runner.PELRecoveryJanitor
+			if opt.janitor.factory != nil {
+				qJan = opt.janitor.factory(rdb, logger, q.Name, pw.group, pw.consumer, pw.concurrency, opt.janitor.interval, opt.janitor.minIdleTime)
+			} else {
+				qJan = runner.NewPELRecoveryJanitorWithCodec(rdb, logger, q.Name, pw.group, pw.consumer, pw.concurrency, opt.janitor.interval, opt.janitor.minIdleTime, pw.codec, 0)
+			}
+			pw.janitors[q.Name] = qJan
 		}
 
-		pw.cronManagers[q.Name] = qCron
-		pw.schedulers[q.Name] = qSched
-		pw.janitors[q.Name] = qJan
-		if opt.lifecycle != nil {
+		if !opt.disableRetention && opt.lifecycle != nil {
 			pw.retentionJanitors[q.Name] = runner.NewRetentionJanitor(rdb, logger, q.Name, pw.group, pw.codec, opt.lifecycle)
 		}
 	}

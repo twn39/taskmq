@@ -5,9 +5,11 @@ import (
 	"testing"
 	"time"
 
-	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
-
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 	"github.com/twn39/taskmq/internal/taskmq/codec"
+	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
+	"go.uber.org/zap"
 )
 
 func TestAcquireReleaseConsumeContext(t *testing.T) {
@@ -237,3 +239,25 @@ func TestBaseWorker_CustomExecutionPool(t *testing.T) {
 		t.Errorf("expected release count 1, got %d", mockPool.releaseCount)
 	}
 }
+
+func TestWorkerPool_PureConsumerLifecycle(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("failed to start miniredis: %v", err)
+	}
+	defer mr.Close()
+
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	w := NewWorkerPool(rdb, zap.NewNop(), "pure-queue", WithPureConsumer())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := w.Start(ctx); err != nil {
+		t.Fatalf("failed to start pure consumer worker: %v", err)
+	}
+
+	// Verify worker stopped gracefully
+	w.Stop()
+}
+

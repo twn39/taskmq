@@ -318,3 +318,43 @@ func TestCustomFactories(t *testing.T) {
 		t.Error("expected error with nil factory")
 	}
 }
+
+func TestWorkerOptions_DisableAndPureConsumer(t *testing.T) {
+	// 1. Test individual disable options
+	opts, err := applyWorkerPoolOptions(codec.JSONCodec{}, []WorkerPoolOption{
+		WithDisableScheduler(),
+		WithDisableJanitor(),
+		WithDisableCron(),
+		WithDisableRetention(),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	buildDefaultPoolComponents(nil, zap.NewNop(), "test-queue", &opts)
+	if opts.scheduler.scheduler != nil {
+		t.Error("expected scheduler to be nil when disabled")
+	}
+	if opts.janitor.janitor != nil {
+		t.Error("expected janitor to be nil when disabled")
+	}
+	if opts.cron.manager != nil {
+		t.Error("expected cron manager to be nil when disabled")
+	}
+	if opts.retentionJanitor != nil {
+		t.Error("expected retention janitor to be nil when disabled")
+	}
+
+	// 2. Test WithPureConsumer
+	pureOpts, err := applyWorkerPoolOptions(codec.JSONCodec{}, []WorkerPoolOption{
+		WithPureConsumer(),
+	})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	buildDefaultPoolComponents(nil, zap.NewNop(), "test-queue", &pureOpts)
+	if pureOpts.scheduler.scheduler != nil || pureOpts.janitor.janitor != nil || pureOpts.cron.manager != nil || pureOpts.retentionJanitor != nil {
+		t.Error("expected all maintenance runners to be nil with WithPureConsumer")
+	}
+}
+

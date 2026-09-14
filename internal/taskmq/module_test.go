@@ -11,7 +11,9 @@ import (
 	"github.com/twn39/taskmq/internal/config"
 	"github.com/twn39/taskmq/internal/taskmq/client"
 	"github.com/twn39/taskmq/internal/taskmq/codec"
+	"github.com/twn39/taskmq/internal/taskmq/grpcserver"
 	"github.com/twn39/taskmq/internal/taskmq/lifecycle"
+	"github.com/twn39/taskmq/internal/taskmq/runner"
 	taskmodel "github.com/twn39/taskmq/internal/taskmq/task"
 	"github.com/twn39/taskmq/internal/taskmq/worker"
 	"go.uber.org/fx"
@@ -235,4 +237,182 @@ func TestCodecSelection_Binary(t *testing.T) {
 		t.Fatalf("expected BinaryCodec, got %T", c)
 	}
 }
+
+func TestRegisterGRPCServerLifecycle(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mr.Close()
+
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	c := client.NewClient(rdb)
+	grpcSrv := grpcserver.NewGRPCServer(c, zap.NewNop())
+
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			GRPCPort: ":0",
+		},
+	}
+
+	app := fx.New(
+		fx.NopLogger,
+		fx.Provide(
+			func() *grpcserver.GRPCServer { return grpcSrv },
+			func() *config.Config { return cfg },
+			zap.NewNop,
+		),
+		fx.Invoke(RegisterGRPCServerLifecycle),
+	)
+
+	startCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := app.Start(startCtx); err != nil {
+		t.Fatalf("failed to start grpc app: %v", err)
+	}
+
+	stopCtx, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel2()
+	if err := app.Stop(stopCtx); err != nil {
+		t.Fatalf("failed to stop grpc app: %v", err)
+	}
+}
+
+func TestModule_FullAppLifecycle(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mr.Close()
+
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+	cfg := &config.Config{
+		Server: config.ServerConfig{
+			GRPCPort: ":0",
+		},
+		TaskMQ: config.TaskMQConfig{
+			Codec: "json",
+			Queues: []config.QueueConfig{
+				{Name: "test-module-queue", Concurrency: 1},
+			},
+		},
+	}
+
+	app := fx.New(
+		fx.NopLogger,
+		fx.Provide(
+			func() *config.Config { return cfg },
+			func() redis.UniversalClient { return rdb },
+			zap.NewNop,
+		),
+		Module,
+		fx.Invoke(func(c client.Client, w worker.Worker, srv *grpcserver.GRPCServer) {
+			if c == nil || w == nil || srv == nil {
+				t.Fatal("expected non-nil dependencies from Module")
+			}
+		}),
+	)
+
+	startCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := app.Start(startCtx); err != nil {
+		t.Fatalf("failed to start fx app with Module: %v", err)
+	}
+
+	stopCtx, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel2()
+	if err := app.Stop(stopCtx); err != nil {
+		t.Fatalf("failed to stop fx app with Module: %v", err)
+	}
+}
+
+func TestModule_WorkerAndDaemonRoles(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mr.Close()
+
+	rdb := redis.NewClient(&redis.Options{Addr: mr.Addr()})
+
+	t.Run("Role worker runs pure consumer", func(t *testing.T) {
+		cfg := &config.Config{
+			Server: config.ServerConfig{GRPCPort: ":0"},
+			TaskMQ: config.TaskMQConfig{
+				Role: "worker",
+				Queues: []config.QueueConfig{
+					{Name: "q-worker-role", Concurrency: 1},
+				},
+			},
+		}
+		app := fx.New(
+			fx.NopLogger,
+			fx.Provide(
+				func() *config.Config { return cfg },
+				func() redis.UniversalClient { return rdb },
+				zap.NewNop,
+			),
+			Module,
+			fx.Invoke(func(w worker.Worker, ds runner.DaemonSet) {
+				if len(ds.Runners()) != 0 {
+					t.Fatalf("expected 0 daemons in worker role, got %d", len(ds.Runners()))
+				}
+			}),
+		)
+		startCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := app.Start(startCtx); err != nil {
+			t.Fatalf("start worker role: %v", err)
+		}
+		_ = app.Stop(context.Background())
+	})
+
+	t.Run("Role daemon runs DaemonSet", func(t *testing.T) {
+		cfg := &config.Config{
+			Server: config.ServerConfig{GRPCPort: ":0"},
+			TaskMQ: config.TaskMQConfig{
+				Role: "daemon",
+				Queues: []config.QueueConfig{
+					{Name: "q-daemon-role", Concurrency: 1},
+				},
+			},
+		}
+		app := fx.New(
+			fx.NopLogger,
+			fx.Provide(
+				func() *config.Config { return cfg },
+				func() redis.UniversalClient { return rdb },
+				zap.NewNop,
+			),
+			Module,
+			fx.Invoke(func(ds runner.DaemonSet) {
+				if len(ds.Runners()) == 0 {
+					t.Fatal("expected background daemons in daemon role")
+				}
+			}),
+		)
+		startCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := app.Start(startCtx); err != nil {
+			t.Fatalf("start daemon role: %v", err)
+		}
+		_ = app.Stop(context.Background())
+	})
+
+	t.Run("ProvideDaemonSet requires Lifecycle", func(t *testing.T) {
+		cfg := &config.Config{}
+		_, err := ProvideDaemonSet(ProvideDaemonSetParams{
+			Rdb:       rdb,
+			Logger:    zap.NewNop(),
+			Codec:     codec.JSONCodec{},
+			Cfg:       cfg,
+			Lifecycle: nil,
+		})
+		if err == nil {
+			t.Fatal("expected error when lifecycle is nil")
+		}
+	})
+}
+
+
 

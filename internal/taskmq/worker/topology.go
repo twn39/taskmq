@@ -3,11 +3,13 @@ package worker
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	"github.com/redis/go-redis/v9"
 	"github.com/twn39/taskmq/internal/config"
 	"github.com/twn39/taskmq/internal/taskmq/codec"
 	"github.com/twn39/taskmq/internal/taskmq/lifecycle"
+	"github.com/twn39/taskmq/internal/taskmq/runner"
 	"go.uber.org/zap"
 )
 
@@ -119,11 +121,26 @@ func queueWorkerOptions(qCfg config.QueueConfig) []WorkerPoolOption {
 	if qCfg.RateLimitKeyField != "" {
 		opts = append(opts, WithRateLimitKeyField(qCfg.RateLimitKeyField))
 	}
+	if qCfg.DisableScheduler {
+		opts = append(opts, WithDisableScheduler())
+	}
+	if qCfg.DisableJanitor {
+		opts = append(opts, WithDisableJanitor())
+	}
+	if qCfg.DisableRetention {
+		opts = append(opts, WithDisableRetention())
+	}
+	if qCfg.DisableCron {
+		opts = append(opts, WithDisableCron())
+	}
 	return opts
 }
 
 func buildCommonOptionsWithLifecycle(cfg *config.Config, c codec.Codec, rootCtx context.Context, lc *lifecycle.Lifecycle) []SharedOption {
 	var opts []SharedOption
+	if strings.ToLower(strings.TrimSpace(cfg.TaskMQ.Role)) == "worker" {
+		opts = append(opts, WithPureConsumer())
+	}
 	if cfg.TaskMQ.CronHealingInterval > 0 {
 		opts = append(opts, WithCronHealingInterval(cfg.TaskMQ.CronHealingInterval))
 	}
@@ -173,3 +190,42 @@ func toPriorityOptions(shared []SharedOption) []PriorityWorkerOption {
 	}
 	return res
 }
+
+// BuildDaemonTopologyWithLifecycle constructs a DaemonSet running all background maintenance daemons
+// (delayed schedulers, PEL janitors, retention janitors, cron managers) for configured queues.
+func BuildDaemonTopologyWithLifecycle(rdb redis.UniversalClient, logger *zap.Logger, cfg *config.Config, c codec.Codec, lc *lifecycle.Lifecycle) (runner.DaemonSet, error) {
+	if lc == nil {
+		return nil, fmt.Errorf("lifecycle must not be nil")
+	}
+	ds := runner.NewDaemonSet(logger)
+
+	queues := cfg.TaskMQ.Queues
+	if len(queues) == 0 {
+		queues = []config.QueueConfig{
+			{
+				Name:        "default",
+				Concurrency: 5,
+			},
+		}
+	}
+
+	for _, qCfg := range queues {
+		runner.BuildQueueDaemons(ds, rdb, logger, c, lc, runner.QueueDaemonConfig{
+			Queue:             qCfg.Name,
+			Group:             qCfg.Group,
+			Consumer:          qCfg.Consumer,
+			Concurrency:       qCfg.Concurrency,
+			SchedulerInterval: cfg.TaskMQ.SchedulerPollInterval,
+			JanitorInterval:   cfg.TaskMQ.JanitorInterval,
+			JanitorMinIdle:    cfg.TaskMQ.JanitorMinIdleTime,
+			CronInterval:      cfg.TaskMQ.CronHealingInterval,
+			CronLockTTL:       cfg.TaskMQ.CronHealingLockTTL,
+			DisableScheduler:  qCfg.DisableScheduler,
+			DisableJanitor:    qCfg.DisableJanitor,
+			DisableRetention:  qCfg.DisableRetention,
+			DisableCron:       qCfg.DisableCron,
+		})
+	}
+	return ds, nil
+}
+

@@ -1,9 +1,15 @@
 package redis
 
 import (
+	"context"
 	"testing"
+	"time"
 
+	"github.com/alicebob/miniredis/v2"
+	"github.com/redis/go-redis/v9"
 	"github.com/twn39/taskmq/internal/config"
+	"go.uber.org/fx"
+	"go.uber.org/zap"
 )
 
 func TestBuildUniversalOptions_Standalone(t *testing.T) {
@@ -97,10 +103,120 @@ func TestBuildUniversalOptions_ErrorCases(t *testing.T) {
 		t.Fatal("expected error for sentinel mode without addrs")
 	}
 
+	// Sentinel without master name
+	_, _, err = buildUniversalOptions(config.RedisConfig{
+		Mode:  "sentinel",
+		Addrs: []string{"127.0.0.1:26379"},
+	}, 10)
+	if err == nil {
+		t.Fatal("expected error for sentinel mode without master_name")
+	}
+
+	// Sentinel success
+	opts, mode, err := buildUniversalOptions(config.RedisConfig{
+		Mode:       "sentinel",
+		MasterName: "mymaster",
+		Addrs:      []string{"127.0.0.1:26379"},
+		Password:   "secret",
+		DB:         3,
+	}, 10)
+	if err != nil {
+		t.Fatalf("unexpected error for sentinel: %v", err)
+	}
+	if mode != "sentinel" {
+		t.Fatalf("expected mode sentinel, got %s", mode)
+	}
+	if opts.MasterName != "mymaster" || opts.DB != 3 || opts.Password != "secret" {
+		t.Fatalf("unexpected sentinel options: %+v", opts)
+	}
+
 	// Unknown mode
 	_, _, err = buildUniversalOptions(config.RedisConfig{Mode: "invalid-mode"}, 10)
 	if err == nil {
 		t.Fatal("expected error for unknown mode")
+	}
+}
+
+func TestNewRedisClient_Standalone(t *testing.T) {
+	mr, err := miniredis.Run()
+	if err != nil {
+		t.Fatalf("failed to start miniredis: %v", err)
+	}
+	defer mr.Close()
+
+	cfg := &config.Config{
+		Redis: config.RedisConfig{
+			Mode:     "standalone",
+			Addr:     mr.Addr(),
+			PoolSize: 20,
+		},
+	}
+
+	app := fx.New(
+		fx.NopLogger,
+		fx.Provide(
+			func() *config.Config { return cfg },
+			zap.NewNop,
+			NewRedisClient,
+		),
+		fx.Invoke(func(rdb redis.UniversalClient) {
+			if rdb == nil {
+				t.Fatal("expected non-nil redis.UniversalClient")
+			}
+		}),
+	)
+
+	startCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := app.Start(startCtx); err != nil {
+		t.Fatalf("failed to start fx app with NewRedisClient: %v", err)
+	}
+
+	stopCtx, cancel2 := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel2()
+	if err := app.Stop(stopCtx); err != nil {
+		t.Fatalf("failed to stop fx app: %v", err)
+	}
+}
+
+func TestNewRedisClient_Errors(t *testing.T) {
+	// Invalid config (empty address in standalone)
+	cfg := &config.Config{
+		Redis: config.RedisConfig{
+			Mode: "standalone",
+		},
+	}
+	app := fx.New(
+		fx.NopLogger,
+		fx.Provide(
+			func() *config.Config { return cfg },
+			zap.NewNop,
+			NewRedisClient,
+		),
+		fx.Invoke(func(rdb redis.UniversalClient) {}),
+	)
+	if err := app.Start(context.Background()); err == nil {
+		t.Fatal("expected error starting app with empty redis addr")
+	}
+
+	// Ping failure (unreachable port)
+	cfg2 := &config.Config{
+		Redis: config.RedisConfig{
+			Mode: "standalone",
+			Addr: "127.0.0.1:54321",
+		},
+	}
+	app2 := fx.New(
+		fx.NopLogger,
+		fx.Provide(
+			func() *config.Config { return cfg2 },
+			zap.NewNop,
+			NewRedisClient,
+		),
+		fx.Invoke(func(rdb redis.UniversalClient) {}),
+	)
+	if err := app2.Start(context.Background()); err == nil {
+		t.Fatal("expected ping error connecting to closed port")
 	}
 }
 

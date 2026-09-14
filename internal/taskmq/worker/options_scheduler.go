@@ -16,9 +16,18 @@ import (
 type SchedulerFactory func(rdb redis.UniversalClient, logger *zap.Logger, queue string, cronManager runner.CronManager, codec codec.Codec, pollInterval time.Duration, streamHardLimit, streamMaxLen int64) runner.Runner
 
 type SchedulerOptions struct {
+	disabled     bool
 	pollInterval time.Duration
 	scheduler    runner.Runner
 	factory      SchedulerFactory
+}
+
+// WithDisableScheduler disables automatic initialization and running of the delayed scheduler.
+func WithDisableScheduler() SharedOption {
+	return func(o *WorkerConfig) error {
+		o.scheduler.disabled = true
+		return nil
+	}
 }
 
 func WithScheduler(s runner.Runner) SharedOption {

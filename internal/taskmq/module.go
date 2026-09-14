@@ -2,6 +2,7 @@ package taskmq
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -13,6 +14,7 @@ import (
 	"github.com/twn39/taskmq/internal/taskmq/codec"
 	"github.com/twn39/taskmq/internal/taskmq/grpcserver"
 	"github.com/twn39/taskmq/internal/taskmq/lifecycle"
+	"github.com/twn39/taskmq/internal/taskmq/runner"
 	"github.com/twn39/taskmq/internal/taskmq/worker"
 	"go.uber.org/fx"
 	"go.uber.org/zap"
@@ -57,6 +59,8 @@ var Module = fx.Module("taskmq",
 		},
 		// Provide Workers dynamically based on configuration
 		ProvideWorkers,
+		// Provide DaemonSet for background maintenance daemons
+		ProvideDaemonSet,
 		// Provide gRPC Server constructor
 		grpcserver.NewGRPCServer,
 		// Client satisfies grpcserver.API (enqueue + cron + dlq).
@@ -66,9 +70,37 @@ var Module = fx.Module("taskmq",
 	client.ProvideISP,
 	fx.Invoke(
 		RegisterWorkerPoolLifecycle,
+		RegisterDaemonSetLifecycle,
 		RegisterGRPCServerLifecycle,
 	),
 )
+
+// ProvideDaemonSetParams defines injected parameters for ProvideDaemonSet.
+type ProvideDaemonSetParams struct {
+	fx.In
+	Rdb       redis.UniversalClient
+	Logger    *zap.Logger
+	Codec     codec.Codec
+	Cfg       *config.Config
+	Lifecycle *lifecycle.Lifecycle
+}
+
+// ProvideDaemonSet constructs a DaemonSet when role is "all" or "daemon".
+// When role is "worker", returns an empty DaemonSet.
+func ProvideDaemonSet(p ProvideDaemonSetParams) (runner.DaemonSet, error) {
+	if p.Lifecycle == nil {
+		return nil, fmt.Errorf("taskmq: shared Lifecycle is required; use taskmq.Module or inject *lifecycle.Lifecycle")
+	}
+	role := strings.ToLower(strings.TrimSpace(p.Cfg.TaskMQ.Role))
+	if role == "worker" {
+		return runner.NewDaemonSet(p.Logger), nil
+	}
+	if role == "daemon" {
+		return worker.BuildDaemonTopologyWithLifecycle(p.Rdb, p.Logger, p.Cfg, p.Codec, p.Lifecycle)
+	}
+	// Default "all" mode: workers host in-process daemons for full compatibility.
+	return runner.NewDaemonSet(p.Logger), nil
+}
 
 // ProvideWorkers constructs and provides a Worker for all configured queues.
 // The injected Lifecycle must be shared with client.Client (enforced by Module wiring).
@@ -96,14 +128,67 @@ func BuildWorkerTopologyWithLifecycle(rdb redis.UniversalClient, logger *zap.Log
 	return worker.BuildWorkerTopologyWithLifecycle(rdb, logger, cfg, c, rootCtx, lc)
 }
 
+// WorkerPoolLifecycleParams defines injected parameters for RegisterWorkerPoolLifecycle.
+type WorkerPoolLifecycleParams struct {
+	fx.In
+	Lc  fx.Lifecycle
+	W   worker.Worker
+	Cfg *config.Config `optional:"true"`
+}
+
 // RegisterWorkerPoolLifecycle registers worker pool startup and shutdown inside Fx container lifecycle hooks.
-func RegisterWorkerPoolLifecycle(lc fx.Lifecycle, w worker.Worker) {
-	lc.Append(fx.Hook{
+func RegisterWorkerPoolLifecycle(p WorkerPoolLifecycleParams) {
+	if p.Cfg != nil && strings.ToLower(strings.TrimSpace(p.Cfg.TaskMQ.Role)) == "daemon" {
+		// Pure daemon role does not start stream consumer workers.
+		return
+	}
+	p.Lc.Append(fx.Hook{
 		OnStart: func(ctx context.Context) error {
-			return w.Start(ctx)
+			return p.W.Start(ctx)
 		},
 		OnStop: func(ctx context.Context) error {
-			w.Stop(ctx)
+			p.W.Stop(ctx)
+			return nil
+		},
+	})
+}
+
+// DaemonSetLifecycleParams defines injected parameters for RegisterDaemonSetLifecycle.
+type DaemonSetLifecycleParams struct {
+	fx.In
+	Lc     fx.Lifecycle
+	Ds     runner.DaemonSet
+	Cfg    *config.Config `optional:"true"`
+	Logger *zap.Logger    `optional:"true"`
+}
+
+// RegisterDaemonSetLifecycle registers the background daemonset in Fx lifecycle.
+func RegisterDaemonSetLifecycle(p DaemonSetLifecycleParams) {
+	if p.Cfg == nil || strings.ToLower(strings.TrimSpace(p.Cfg.TaskMQ.Role)) != "daemon" {
+		return
+	}
+	logger := p.Logger
+	if logger == nil {
+		logger = zap.NewNop()
+	}
+	var cancel context.CancelFunc
+	p.Lc.Append(fx.Hook{
+		OnStart: func(ctx context.Context) error {
+			runCtx, c := context.WithCancel(context.Background())
+			cancel = c
+			logger.Info("Starting TaskMQ DaemonSet runners", zap.Int("runners_count", len(p.Ds.Runners())))
+			go func() {
+				if err := p.Ds.Run(runCtx); err != nil && !errors.Is(err, context.Canceled) {
+					logger.Error("TaskMQ DaemonSet stopped with error", zap.Error(err))
+				}
+			}()
+			return nil
+		},
+		OnStop: func(ctx context.Context) error {
+			logger.Info("Stopping TaskMQ DaemonSet runners")
+			if cancel != nil {
+				cancel()
+			}
 			return nil
 		},
 	})

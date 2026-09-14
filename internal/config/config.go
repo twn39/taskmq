@@ -55,9 +55,14 @@ type QueueConfig struct {
 	RateLimitMax      int64         `mapstructure:"rate_limit_max"`
 	RateLimitDuration time.Duration `mapstructure:"rate_limit_duration"`
 	RateLimitKeyField string        `mapstructure:"rate_limit_key_field"`
+	DisableScheduler  bool          `mapstructure:"disable_scheduler"`
+	DisableJanitor    bool          `mapstructure:"disable_janitor"`
+	DisableRetention  bool          `mapstructure:"disable_retention"`
+	DisableCron       bool          `mapstructure:"disable_cron"`
 }
 
 type TaskMQConfig struct {
+	Role                     string        `mapstructure:"role"` // all (default) | worker | daemon
 	Codec                    string        `mapstructure:"codec"`
 	DefaultUniqueTTL         time.Duration `mapstructure:"default_unique_ttl"`
 	CronHealingInterval      time.Duration `mapstructure:"cron_healing_interval"`
@@ -123,6 +128,7 @@ func NewConfig() (*Config, error) {
 	v.SetDefault("taskmq.completed_max_count", int64(0))
 	v.SetDefault("taskmq.events_max_len", int64(0)) // 0 → events.DefaultMaxLen
 
+	v.SetDefault("taskmq.role", "all")
 	v.SetDefault("taskmq.codec", "binary")
 	v.SetDefault("taskmq.default_unique_ttl", 1*time.Hour)
 	v.SetDefault("taskmq.cron_healing_interval", 1*time.Minute)

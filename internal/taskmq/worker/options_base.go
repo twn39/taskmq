@@ -42,6 +42,27 @@ type WorkerConfig struct {
 	// lifecycle bounds Redis memory (admission, DLQ, SafeTrim).
 	lifecycle        *lifecycle.Lifecycle
 	retentionJanitor runner.Runner // optional override; built from lifecycle when nil
+	disableRetention bool
+}
+
+// WithDisableRetention disables automatic initialization and running of the retention janitor.
+func WithDisableRetention() SharedOption {
+	return func(o *WorkerConfig) error {
+		o.disableRetention = true
+		return nil
+	}
+}
+
+// WithPureConsumer disables all background maintenance daemons (delayed scheduler, PEL recovery janitor,
+// retention janitor, and cron manager). The worker functions strictly as a stream consumer pool.
+func WithPureConsumer() SharedOption {
+	return func(o *WorkerConfig) error {
+		o.scheduler.disabled = true
+		o.janitor.disabled = true
+		o.cron.disabled = true
+		o.disableRetention = true
+		return nil
+	}
 }
 
 // SharedOption applies base worker configuration and is valid for both pool and priority workers.

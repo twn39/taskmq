@@ -13,10 +13,19 @@ import (
 type JanitorFactory func(rdb redis.UniversalClient, logger *zap.Logger, queue string, group string, consumer string, concurrency int, checkInterval time.Duration, minIdleTime time.Duration) runner.PELRecoveryJanitor
 
 type JanitorOptions struct {
+	disabled    bool
 	interval    time.Duration
 	minIdleTime time.Duration
 	janitor     runner.Runner
 	factory     JanitorFactory
+}
+
+// WithDisableJanitor disables automatic initialization and running of the PEL recovery janitor.
+func WithDisableJanitor() SharedOption {
+	return func(o *WorkerConfig) error {
+		o.janitor.disabled = true
+		return nil
+	}
 }
 
 func WithJanitor(j runner.Runner) SharedOption {
