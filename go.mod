@@ -12,6 +12,7 @@ require (
 	github.com/stretchr/testify v1.11.1
 	github.com/urfave/cli/v3 v3.10.1
 	go.uber.org/fx v1.24.0
+	go.uber.org/goleak v1.3.0
 	go.uber.org/zap v1.28.0
 	google.golang.org/grpc v1.82.0
 	google.golang.org/protobuf v1.36.11

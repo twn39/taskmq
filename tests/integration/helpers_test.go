@@ -17,6 +17,7 @@ import (
 	"github.com/twn39/taskmq/internal/taskmq/keys"
 	"github.com/twn39/taskmq/internal/taskmq/lifecycle"
 	mqworker "github.com/twn39/taskmq/internal/taskmq/worker"
+	"go.uber.org/goleak"
 	"go.uber.org/zap"
 )
 
@@ -198,3 +199,22 @@ func WaitKeyGone(t *testing.T, ctx context.Context, rdb redis.UniversalClient, k
 		return err == nil && n == 0
 	}, timeout, 5*time.Millisecond, "key still exists: "+key)
 }
+
+// SetupLeakDetector captures an initial snapshot of active goroutines,
+// ignoring standard third-party runtime background threads (e.g. go-redis connection pool),
+// and returns a teardown function that asserts no TaskMQ goroutines leaked.
+// Note: Tests utilizing this must NOT call t.Parallel().
+func SetupLeakDetector(t *testing.T, extraOpts ...goleak.Option) func() {
+	t.Helper()
+	opts := []goleak.Option{
+		goleak.IgnoreCurrent(),
+		goleak.IgnoreTopFunction("github.com/redis/go-redis/v9/internal/pool.(*ConnPool).reaper"),
+		goleak.IgnoreTopFunction("net.(*netFD).connect.func2"),
+	}
+	opts = append(opts, extraOpts...)
+
+	return func() {
+		goleak.VerifyNone(t, opts...)
+	}
+}
+
