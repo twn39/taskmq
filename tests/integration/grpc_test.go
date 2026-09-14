@@ -32,7 +32,6 @@ func TestTaskMQ_GRPCFlow(t *testing.T) {
 	defer cancel()
 
 	queueName := UniqueQueue(t, "grpc")
-	streamKey := keys.KeysFor(queueName).Stream()
 
 	runChan := make(chan string, 1)
 
@@ -67,8 +66,8 @@ func TestTaskMQ_GRPCFlow(t *testing.T) {
 	)
 
 	// Clean up Redis
-	err := rdb.Del(ctx, streamKey).Err()
-	assert.NoError(t, err)
+	FlushQueue(ctx, rdb, queueName)
+	defer FlushQueue(ctx, rdb, queueName)
 
 	app.RequireStart()
 	defer app.RequireStop()
