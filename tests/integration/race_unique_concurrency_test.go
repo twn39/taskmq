@@ -129,6 +129,9 @@ func TestTaskMQ_UniqueKey_ConcurrentStampede(t *testing.T) {
 	// Verify the lock was automatically released after completion
 	WaitKeyGone(t, ctx, rdb, lockKey, 3*time.Second)
 
+	// Stop worker before Round 2 stampede so it does not consume and release the lock mid-stampede
+	w.Stop(ctx)
+
 	// Round 2: 100-goroutine stampede again after lock release
 	var r2SuccessCount int64
 	var r2DuplicateCount int64
