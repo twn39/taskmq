@@ -123,7 +123,7 @@ func (BinaryCodec) Unmarshal(data []byte, t *task.Task) error {
 		}
 		length := int(binary.BigEndian.Uint16(data[offset:]))
 		offset += 2
-		if offset+length > len(data) {
+		if length < 0 || length > len(data)-offset {
 			return "", errors.New("binary codec: readString16 payload out of bounds")
 		}
 		s := string(data[offset : offset+length])
@@ -137,7 +137,7 @@ func (BinaryCodec) Unmarshal(data []byte, t *task.Task) error {
 		}
 		length := int(binary.BigEndian.Uint32(data[offset:]))
 		offset += 4
-		if offset+length > len(data) {
+		if length < 0 || length > len(data)-offset {
 			return "", errors.New("binary codec: readString32 payload out of bounds")
 		}
 		s := string(data[offset : offset+length])
@@ -151,7 +151,7 @@ func (BinaryCodec) Unmarshal(data []byte, t *task.Task) error {
 		}
 		length := int(binary.BigEndian.Uint32(data[offset:]))
 		offset += 4
-		if offset+length > len(data) {
+		if length < 0 || length > len(data)-offset {
 			return nil, errors.New("binary codec: readBytes32 payload out of bounds")
 		}
 		b := make([]byte, length)
@@ -181,19 +181,19 @@ func (BinaryCodec) Unmarshal(data []byte, t *task.Task) error {
 	if offset+4 > len(data) {
 		return errors.New("binary codec: read Retry out of bounds")
 	}
-	t.Retry = int(binary.BigEndian.Uint32(data[offset:]))
+	t.Retry = int(int32(binary.BigEndian.Uint32(data[offset:])))
 	offset += 4
 
 	if offset+4 > len(data) {
 		return errors.New("binary codec: read MaxRetry out of bounds")
 	}
-	t.MaxRetry = int(binary.BigEndian.Uint32(data[offset:]))
+	t.MaxRetry = int(int32(binary.BigEndian.Uint32(data[offset:])))
 	offset += 4
 
 	if offset+8 > len(data) {
 		return errors.New("binary codec: read TimeoutMs out of bounds")
 	}
-	t.TimeoutMs = int(binary.BigEndian.Uint64(data[offset:]))
+	t.TimeoutMs = int(int64(binary.BigEndian.Uint64(data[offset:])))
 	offset += 8
 
 	t.UniqueKey, err = readString16()
@@ -204,7 +204,7 @@ func (BinaryCodec) Unmarshal(data []byte, t *task.Task) error {
 	if offset+8 > len(data) {
 		return errors.New("binary codec: read UniqueTTLMs out of bounds")
 	}
-	t.UniqueTTLMs = int(binary.BigEndian.Uint64(data[offset:]))
+	t.UniqueTTLMs = int(int64(binary.BigEndian.Uint64(data[offset:])))
 	offset += 8
 
 	t.LastError, err = readString32()
@@ -225,7 +225,7 @@ func (BinaryCodec) Unmarshal(data []byte, t *task.Task) error {
 
 	// Optional trailing fields (backward compatible with older payloads).
 	if offset+4 <= len(data) {
-		t.UniqueScope = task.UniqueScope(binary.BigEndian.Uint32(data[offset:]))
+		t.UniqueScope = task.UniqueScope(int32(binary.BigEndian.Uint32(data[offset:])))
 		offset += 4
 	}
 	if offset+2 <= len(data) {

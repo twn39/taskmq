@@ -5,6 +5,7 @@ import (
 	_ "embed"
 	"fmt"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -16,6 +17,22 @@ import (
 
 // cronParser matches CronParser options used by the worker cron manager.
 var cronParser = cron.NewParser(cron.SecondOptional | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
+
+// parseCronSpec parses a crontab schedule spec with panic-recovery protection
+// against upstream slice-bounds panics in robfig/cron/v3 on malformed timezone prefixes.
+func parseCronSpec(spec string) (sched cron.Schedule, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("cron: malformed spec: %v", r)
+		}
+	}()
+	if strings.HasPrefix(spec, "TZ=") || strings.HasPrefix(spec, "CRON_TZ=") {
+		if !strings.Contains(spec, " ") {
+			return nil, fmt.Errorf("cron: missing space after timezone specification")
+		}
+	}
+	return cronParser.Parse(spec)
+}
 
 //go:embed scripts/register_cron.lua
 var registerCronScript string
@@ -34,7 +51,7 @@ func (s *cronService) RegisterCron(ctx context.Context, jobName string, spec str
 		}
 	}
 
-	sched, err := cronParser.Parse(spec)
+	sched, err := parseCronSpec(spec)
 	if err != nil {
 		return fmt.Errorf("taskmq: invalid cron spec: %w", err)
 	}
@@ -91,7 +108,7 @@ func (s *cronService) ListCronJobs(ctx context.Context, queue string) ([]*CronJo
 
 		nextRun := time.Time{}
 		if task.CronSpec != "" {
-			if sched, err := cronParser.Parse(task.CronSpec); err == nil {
+			if sched, err := parseCronSpec(task.CronSpec); err == nil {
 				nextRun = sched.Next(time.Now())
 			}
 		}

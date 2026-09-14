@@ -3,6 +3,7 @@ package runner
 import (
 	"context"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -15,6 +16,22 @@ import (
 )
 
 var CronParser = cron.NewParser(cron.SecondOptional | cron.Minute | cron.Hour | cron.Dom | cron.Month | cron.Dow | cron.Descriptor)
+
+// ParseCronSpec parses a crontab schedule spec with panic-recovery protection
+// against upstream slice-bounds panics in robfig/cron/v3 on malformed timezone prefixes.
+func ParseCronSpec(spec string) (sched cron.Schedule, err error) {
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("cron: malformed spec: %v", r)
+		}
+	}()
+	if strings.HasPrefix(spec, "TZ=") || strings.HasPrefix(spec, "CRON_TZ=") {
+		if !strings.Contains(spec, " ") {
+			return nil, fmt.Errorf("cron: missing space after timezone specification")
+		}
+	}
+	return CronParser.Parse(spec)
+}
 
 type cronManager struct {
 	rdb             redis.UniversalClient
@@ -105,7 +122,7 @@ func (m *cronManager) Run(ctx context.Context) error {
 				}
 				parsedConfigs[jobName] = task
 
-				sched, err := CronParser.Parse(task.CronSpec)
+				sched, err := ParseCronSpec(task.CronSpec)
 				if err != nil {
 					continue
 				}
@@ -179,7 +196,7 @@ func (m *cronManager) Run(ctx context.Context) error {
 					continue
 				}
 
-				sched, err := CronParser.Parse(task.CronSpec)
+				sched, err := ParseCronSpec(task.CronSpec)
 				if err != nil {
 					continue
 				}
@@ -218,7 +235,7 @@ func (m *cronManager) Reschedule(ctx context.Context, task *taskmodel.Task) erro
 		return nil
 	}
 
-	sched, err := CronParser.Parse(task.CronSpec)
+	sched, err := ParseCronSpec(task.CronSpec)
 	if err != nil {
 		m.logger.Error("Cron: invalid spec in task", zap.String("job_name", task.Name), zap.String("spec", task.CronSpec), zap.Error(err))
 		return err
